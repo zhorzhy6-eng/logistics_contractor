@@ -1,0 +1,14 @@
+{
+  "_comment": "Образец настроек. Скопируйте в settings.json и заполните под себя. Ключ GigaChat здесь НЕ хранится — он лежит в системном хранилище, см. set_key.py",
+  "provider": "gigachat",
+
+  "gigachat_model": "GigaChat-2",
+  "gigachat_scope": "GIGACHAT_API_PERS",
+  "gigachat_timeout": 150,
+  "gigachat_verify_ssl": true,
+  "gigachat_ca_bundle": "",
+
+  "ollama_url": "http://127.0.0.1:11434",
+  "ollama_model": "qwen2.5:7b",
+  "ollama_timeout": 150
+}
