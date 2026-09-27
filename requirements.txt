@@ -1,0 +1,31 @@
+# PyQt5 для графического интерфейса
+PyQt5==5.15.11
+
+# HTTP-клиент для GigaChat (core/gigachat_client.py)
+requests==2.34.2
+
+# Работа с DOCX (core/contract_generator.py)
+python-docx==1.2.0
+
+# Хранение ключа GigaChat в системном хранилище (core/secrets_store.py)
+keyring==25.7.0
+
+# Шаблонизатор DOCX — переход генерации на docxtpl (Шаг 6 рефакторинга)
+docxtpl==0.20.2
+
+# Импорт адресов из Excel (ui/address_book_dialog.py)
+openpyxl==3.1.5
+
+# Сборка .exe (build.bat)
+pyinstaller==6.22.2
+
+# Тесты (tests/)
+pytest==9.1.1
+
+# ─────────────────────────────────────────────────────────────
+# Удалено при чистке зависимостей (Шаг 4):
+#   httpx, reportlab, PyPDF2, pdf2image, Pillow —
+#   использовались только удалённой веткой распознавания через lift
+#   (core/lift_client.py) и одноразовым генератором иконок.
+# Если lift понадобится снова: pip install lift-pdf[pdf]
+# ─────────────────────────────────────────────────────────────
