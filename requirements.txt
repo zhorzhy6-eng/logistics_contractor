@@ -7,6 +7,16 @@ requests==2.34.2
 # Работа с DOCX (core/contract_generator.py)
 python-docx==1.2.0
 
+# Document import (legacy DOC: LibreOffice или установленный Microsoft Word —
+# Word используется через COM, если установлен pywin32; дополнительных
+# зависимостей для чтения RTF/ZIP не требуется, для RAR нужен UnRAR/WinRAR)
+Pillow>=10.4,<13
+pypdfium2>=4.30,<6
+
+# Локальный OCR-fallback (Tesseract) для офлайн-режима.
+# Сам движок Tesseract OCR ставится отдельно и должен быть в PATH.
+pytesseract>=0.3.13,<0.4
+
 # Хранение ключа GigaChat в системном хранилище (core/secrets_store.py)
 keyring==25.7.0
 

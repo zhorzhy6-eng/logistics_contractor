@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 Вкладка «Заказчик (плательщик)».
+
+Кнопка «🔎» у поля ИНН заполняет реквизиты из DaData (DadataFillMixin) —
+только по явному нажатию, без автозаполнения при наборе номера.
 """
 
 import logging
@@ -13,18 +16,25 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import pyqtSignal
 
-from ui.tabs.base_tab import TabMixin
+from ui.tabs.base_tab import DadataBankMixin, DadataFillMixin
 from ui.widgets import PasteableLineEdit, PasteableTextEdit, RecognitionPanel
 
 logger = logging.getLogger("ui.tabs.customer_tab")
 
 
-class CustomerTab(TabMixin, QWidget):
+class CustomerTab(DadataFillMixin, DadataBankMixin, QWidget):
     """
     Вкладка с данными заказчика.
+
+    Кнопки «🔎» из DaData: у поля ИНН — реквизиты организации
+    (DadataFillMixin), у поля БИК — банк и корр. счёт (DadataBankMixin).
+    Обе срабатывают только по явному нажатию, без автозаполнения при вводе.
     """
 
     recognize_requested = pyqtSignal(str)
+
+    #: Название вкладки для сообщений и логов DaData
+    DADATA_TAB_TITLE = "Заказчик"
 
     def __init__(self):
         super().__init__()
@@ -55,7 +65,9 @@ class CustomerTab(TabMixin, QWidget):
 
         self.inn = PasteableLineEdit("7701234567")
         self.inn.setMaxLength(12)
-        general_layout.addRow("ИНН *", self.inn)
+        # Кнопка «🔎» — заполнение реквизитов по ИНН из DaData.
+        # Запрос уходит только по нажатию: у поля ИНН нет обработчиков ввода.
+        general_layout.addRow("ИНН *", self._setup_dadata_fill(self.inn))
 
         self.kpp = PasteableLineEdit("770101001")
         self.kpp.setMaxLength(9)
@@ -83,7 +95,9 @@ class CustomerTab(TabMixin, QWidget):
 
         self.bik = PasteableLineEdit("044525225")
         self.bik.setMaxLength(9)
-        bank_layout.addRow("БИК *", self.bik)
+        # Кнопка «🔎» — банк и корр. счёт по БИК (DaData).
+        # Запрос уходит только по нажатию: у поля БИК нет обработчиков ввода.
+        bank_layout.addRow("БИК *", self._setup_dadata_bank_fill(self.bik))
 
         self.correspondent_account = PasteableLineEdit("30101810400000000225")
         self.correspondent_account.setMaxLength(20)

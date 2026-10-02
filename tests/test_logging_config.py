@@ -319,7 +319,7 @@ def test_recognition_steps_logged_without_pii(logs_dir):
     assert "пусто:" in debug_text
 
 
-def test_ui_actions_logged_to_debug(logs_dir):
+def test_ui_actions_logged_to_app_and_debug(logs_dir):
     logging_config.setup_logging(str(logs_dir), debug=True)
 
     from ui.main_window import MainWindow
@@ -337,9 +337,10 @@ def test_ui_actions_logged_to_debug(logs_dir):
     assert "UI: нажата кнопка «Создать договор»" in debug_text
     assert "UI: переключение вкладки | index=2 | tab=Договор" in debug_text
 
-    # Действия UI — подробность: в app.log их нет
+    # Действия пользователя видны и при обычном запуске без --debug.
     app_text = _read(logs_dir / logging_config.APP_LOG_FILENAME)
-    assert "UI: нажата кнопка" not in app_text
+    assert "UI: нажата кнопка «Создать договор»" in app_text
+    assert "UI: переключение вкладки | index=2 | tab=Договор" in app_text
 
 
 # ─────────────────────────────────────────────────────────────

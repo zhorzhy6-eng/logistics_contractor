@@ -683,7 +683,7 @@ class DbManagerDialog(QDialog):
             status = "удалён" if org.get("is_deleted") else ""
             item_status = QTableWidgetItem(status)
             if status:
-                item_status.setForeground(Qt.red)
+                item_status.setForeground(theme.deleted_row_color())
             table.setItem(row, 5, item_status)
 
         # Включаем сортировку и сортируем по «Наименование» (колонка 1)
@@ -724,7 +724,7 @@ class DbManagerDialog(QDialog):
             status = "удалён" if driver.get("is_deleted") else ""
             item_status = QTableWidgetItem(status)
             if status:
-                item_status.setForeground(Qt.red)
+                item_status.setForeground(theme.deleted_row_color())
             table.setItem(row, 5, item_status)
 
         # Включаем сортировку и сортируем по «ФИО» (колонка 1)

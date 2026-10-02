@@ -15,13 +15,17 @@ if %errorlevel% neq 0 (
 REM Устанавливаем зависимости
 echo [1/4] Установка зависимостей...
 pip install -r requirements.txt
+if %errorlevel% neq 0 exit /b 1
+REM Cloud OCR is remote (GigaChat Vision); legacy DOC still needs LibreOffice.
+echo OCR uses GigaChat Vision (or local Tesseract fallback); DOC requires LibreOffice.
 
 REM Собираем приложение
 echo [2/4] Сборка приложения...
 pyinstaller --noconfirm --clean ^
     --name "LogisticsContractor" ^
     --windowed ^
-    --icon "resources\icons\app.ico" ^
+    --collect-all pypdfium2 ^
+    --collect-all pypdfium2_raw ^
     --add-data "templates;templates" ^
     --add-data "config;config" ^
     --add-data "resources;resources" ^

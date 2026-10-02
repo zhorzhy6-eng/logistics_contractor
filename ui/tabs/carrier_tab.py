@@ -11,7 +11,7 @@
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLineEdit,
@@ -21,13 +21,13 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QDate, pyqtSignal
 
 from ui import theme
-from ui.tabs.base_tab import TabMixin
+from ui.tabs.base_tab import DadataBankMixin, DadataFillMixin
 from ui.widgets import PasteableLineEdit, PasteableTextEdit, PasteableDateEdit, RecognitionPanel
 
 logger = logging.getLogger("ui.tabs.carrier_tab")
 
 
-class CarrierTab(TabMixin, QWidget):
+class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
     """
     Вкладка с данными перевозчика (исполнителя).
 
@@ -35,9 +35,16 @@ class CarrierTab(TabMixin, QWidget):
     тип, общие сведения, адреса, банк, руководитель, лицензия. Порядок и
     состав полей не менялись, адреса вынесены из «Общих сведений» отдельным
     блоком — так видно, что заполнять в первую очередь.
+
+    Кнопки «🔎» из DaData: у поля ИНН — реквизиты организации
+    (DadataFillMixin), у поля БИК — банк и корр. счёт (DadataBankMixin).
+    Обе срабатывают только по явному нажатию, без автозаполнения при вводе.
     """
 
     recognize_requested = pyqtSignal(str)
+
+    #: Название вкладки для сообщений и логов DaData
+    DADATA_TAB_TITLE = "Перевозчик"
 
     #: Типы, для которых КПП обязателен (у ИП его не существует — см. валидатор)
     TYPES_WITH_KPP = ("ООО",)
@@ -108,7 +115,11 @@ class CarrierTab(TabMixin, QWidget):
         self.inn = PasteableLineEdit("7707654321")
         self.inn.setMaxLength(12)
         self.inn.set_required(True)
-        general_layout.addRow(theme.required_label("ИНН"), self.inn)
+        # Кнопка «🔎» — заполнение реквизитов по ИНН из DaData.
+        # Запрос уходит только по нажатию: у поля ИНН нет обработчиков ввода.
+        general_layout.addRow(
+            theme.required_label("ИНН"), self._setup_dadata_fill(self.inn)
+        )
 
         self.kpp = PasteableLineEdit("770701001")
         self.kpp.setMaxLength(9)
@@ -148,7 +159,11 @@ class CarrierTab(TabMixin, QWidget):
         self.bik = PasteableLineEdit("044525225")
         self.bik.setMaxLength(9)
         self.bik.set_required(True)
-        bank_layout.addRow(theme.required_label("БИК"), self.bik)
+        # Кнопка «🔎» — банк и корр. счёт по БИК (DaData).
+        # Запрос уходит только по нажатию: у поля БИК нет обработчиков ввода.
+        bank_layout.addRow(
+            theme.required_label("БИК"), self._setup_dadata_bank_fill(self.bik)
+        )
 
         self.correspondent_account = PasteableLineEdit("30101810400000000225")
         self.correspondent_account.setMaxLength(20)
@@ -227,6 +242,28 @@ class CarrierTab(TabMixin, QWidget):
         logger.debug(
             f"Тип перевозчика: {carrier_type!r}, КПП обязателен: {needs_kpp}"
         )
+
+    def _apply_dadata_extra(self, data: Dict[str, Any]) -> List[str]:
+        """
+        Тип перевозчика по данным DaData (только эта вкладка).
+
+        DaData не знает про НДС, поэтому у ИП ставится «ИП с НДС», у остальных
+        «ООО (с НДС)» — ставку налога пользователь уточняет сам.
+
+        :return: список изменённых полей (для итогового диалога)
+        """
+        entity_type = str(data.get("entity_type") or "").strip().upper()
+        if not entity_type:
+            return []
+
+        target = "ИП с НДС" if entity_type == "INDIVIDUAL" else "ООО (с НДС)"
+        index = self.carrier_type.findText(target)
+        if index < 0 or index == self.carrier_type.currentIndex():
+            return []
+
+        self.carrier_type.setCurrentIndex(index)
+        logger.info("DaData: тип перевозчика установлен по данным организации")
+        return ["carrier_type"]
 
     def get_data(self) -> Dict[str, Any]:
         """Собирает данные."""

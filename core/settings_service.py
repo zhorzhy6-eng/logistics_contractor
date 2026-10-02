@@ -44,6 +44,8 @@ class SettingsService:
     """Чтение, изменение и перечитывание настроек приложения."""
 
     DEFAULTS: Dict[str, Any] = {
+        "document_cloud_enabled": False,
+        "document_soffice": "",
         "provider": "gigachat",
 
         # GigaChat (ключа здесь НЕТ: он хранится в системном хранилище,
@@ -56,6 +58,11 @@ class SettingsService:
         # Путь к корневому сертификату; пусто — ищем в resources/certs/
         "gigachat_ca_bundle": "",
 
+        # DaData (ключа здесь тоже нет: он живёт в системном хранилище,
+        # см. core/secrets_store.py и set_dadata_key.py). Настройка пока
+        # не используется клиентом — задел на будущее (п. 2.3 задания).
+        "dadata_timeout": 10,
+
         # Ollama (резервный провайдер)
         "ollama_url": "http://127.0.0.1:11434",
         "ollama_model": "qwen2.5:7b",
@@ -65,6 +72,15 @@ class SettingsService:
     # Поля-секреты: их нельзя ни читать из файла, ни записывать в него.
     # Ключ GigaChat живёт только в системном хранилище (Шаг 2 задания).
     SECRET_KEYS = ("gigachat_credentials", "gigachat_api_key", "api_key")
+    # Любые унаследованные ключи вида *_api_key / *_credentials вычищаются
+    # из файла, даже если их имя больше не упоминается в коде.
+    SECRET_SUFFIXES = ("_api_key", "_credentials")
+
+    @classmethod
+    def is_secret_key(cls, key: Any) -> bool:
+        """Имя настройки похоже на секрет (точное совпадение или суффикс)."""
+        name = str(key or "").strip().casefold()
+        return name in cls.SECRET_KEYS or name.endswith(cls.SECRET_SUFFIXES)
 
     def __init__(self, path: Optional[str] = None):
         self._path = path or default_settings_path()
@@ -134,11 +150,15 @@ class SettingsService:
 
         merged = dict(self.DEFAULTS)
         merged.update(data)
+        # Retire obsolete local OCR configuration without touching other user settings.
+        for obsolete in ("document_tesseract", "document_ocr_languages"):
+            merged.pop(obsolete, None)
 
         # Защита от унаследованных файлов, где ключ лежал открытым текстом:
         # такой секрет не используется и немедленно вычищается из файла.
         leaked = [
-            key for key in self.SECRET_KEYS
+            key for key in merged
+            if self.is_secret_key(key)
             if str(merged.get(key) or "").strip()
         ]
         if leaked:
@@ -175,11 +195,13 @@ class SettingsService:
 
         safe_values = {}
         for key, value in values.items():
-            if key in self.SECRET_KEYS:
+            if self.is_secret_key(key):
                 logger.warning(
                     f"Настройка {key!r} похожа на секрет — в файл не записывается. "
                     f"Используйте set_key.py (системное хранилище)."
                 )
+                continue
+            if key in {"document_tesseract", "document_ocr_languages"}:
                 continue
             safe_values[key] = value
 

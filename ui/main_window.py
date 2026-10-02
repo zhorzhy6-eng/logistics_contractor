@@ -4,12 +4,12 @@ import sys
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal, QSize, QObject, QRunnable, QThreadPool, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QRunnable, QThreadPool, QTimer, QSize
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
-    QPushButton, QMessageBox, QDialog, QLabel,
-    QTextEdit, QDialogButtonBox, QApplication, QProgressBar
+    QPushButton, QMessageBox, QDialog, QLabel, QFrame,
+    QTextEdit, QDialogButtonBox, QApplication, QProgressBar,
 )
 
 from db.database import (
@@ -17,8 +17,7 @@ from db.database import (
     save_driver,
     save_driver_vehicle,
     save_organization,
-    save_vehicles,
-    save_contract,
+    save_contract_with_details,
     load_driver_vehicle,
 )
 
@@ -33,6 +32,8 @@ from core.trace import filled_fields_summary
 from core.validator import ValidationReport, Validator
 
 from ui import theme
+from ui import system_theme
+from ui.system_theme import SystemThemeWatcher
 from ui.tabs.driver_tab import DriverTab
 from ui.tabs.customer_tab import CustomerTab
 from ui.tabs.carrier_tab import CarrierTab
@@ -41,35 +42,50 @@ from ui.tabs.trailer_tab import TrailerTab
 from ui.tabs.contract_tab import ContractTab
 from ui.db_manager_dialog import DbManagerDialog
 from ui.settings_dialog import SettingsDialog
+from ui.navigation import SideNav
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================
-# ПУТИ
-# ============================================================
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMPLATES_DIR = os.path.join(_PROJECT_ROOT, "templates")
+
+
 def _resource_path(relative: str) -> str:
-    if hasattr(sys, "_MEIPASS"):
-        base = sys._MEIPASS
-    else:
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    """Путь к ресурсу в исходном проекте или сборке PyInstaller."""
+    base = getattr(sys, "_MEIPASS", _PROJECT_ROOT)
     return os.path.join(base, relative)
 
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEMPLATES_DIR = os.path.join(_PROJECT_ROOT, "templates")
-ICONS_DIR = os.path.join(_PROJECT_ROOT, "resources", "icons", "tabs")
+def _themed_icon(folder: str, name: str) -> QIcon:
+    """
+    Иконка с учётом активной темы.
+
+    Для тёмных тем сначала ищется вариант в подпапке ``dark/``: светлые
+    значки на тёмном фоне читаются плохо. Если варианта нет, берётся обычный
+    файл — отсутствие картинки не должно ломать интерфейс.
+    """
+    if theme.is_dark():
+        dark_path = _resource_path(
+            os.path.join("resources", "icons", folder, "dark", name)
+        )
+        dark_icon = QIcon(dark_path)
+        if not dark_icon.isNull():
+            return dark_icon
+
+    path = _resource_path(os.path.join("resources", "icons", folder, name))
+    icon = QIcon(path)
+    if icon.isNull():
+        logger.warning("Иконка не загружена: %s", path)
+    return icon
 
 
-def _tab_icon(filename: str) -> QIcon:
-    path = _resource_path(os.path.join("resources", "icons", "tabs", filename))
-    if os.path.exists(path):
-        logger.debug(f"Иконка загружена: {path}")
-        return QIcon(path)
-    logger.warning(f"Иконка не найдена: {path}")
-    return QIcon()
+def _tab_icon(name: str) -> QIcon:
+    return _themed_icon("tabs", name)
 
 
+def _action_icon(name: str) -> QIcon:
+    return _themed_icon("actions", name)
 def _validate_gigachat_key(key: str) -> Optional[str]:
     if not key:
         return (
@@ -174,6 +190,13 @@ class MainWindow(QMainWindow):
         ("contract", "договор"),
     )
 
+    #: Имена иконок вкладок в порядке добавления (см. _init_ui). Нужны, чтобы
+    #: пересобрать иконки сайдбара при переключении на тёмную тему.
+    _TAB_ICON_NAMES = (
+        "carrier.svg", "driver.svg", "trailer.svg",
+        "vehicles.svg", "contract.svg", "customer.svg",
+    )
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Генератор договоров перевозки")
@@ -200,6 +223,12 @@ class MainWindow(QMainWindow):
         self.recognition_task: Optional[RecognitionTask] = None
 
         self._init_ui()
+
+        # ── Тема Windows: следим, пока пользователь не выбрал тему сам ──
+        self.system_theme_watcher = SystemThemeWatcher(self)
+        self.system_theme_watcher.theme_changed.connect(self._on_system_theme_changed)
+        self._sync_system_theme_watcher()
+
         logger.info("MainWindow инициализировано")
 
     # --------------------------------------------------------
@@ -273,67 +302,196 @@ class MainWindow(QMainWindow):
         # Применяем сразу: клиент пересоздаётся с новыми параметрами
         self._init_gigachat_client(show_dialog=False)
 
+        # Тема могла измениться в диалоге — применяем без перезапуска.
+        # Настройки уже записаны выше, поэтому повторно их не сохраняем.
+        self._apply_theme_choice(
+            new_settings.get("ui_theme", theme.active_theme()), save=False
+        )
+        # Пользователь мог включить или выключить следование за Windows
+        self._sync_system_theme_watcher()
+
         logger.info(f"Настройки применены: провайдер={new_settings.get('provider')}")
         self.statusBar().showMessage("Настройки применены", 5000)
         QMessageBox.information(self, "Настройки", "Настройки применены.")
+
+    # --------------------------------------------------------
+    # ТЕМА ОФОРМЛЕНИЯ
+    # --------------------------------------------------------
+    def _apply_theme_choice(self, theme_key: str, save: bool = True) -> None:
+        """
+        Применяет тему оформления к приложению.
+
+        Меняется только визуальный слой (QSS и палитра Qt): состав полей,
+        данные формы и логика не затрагиваются. По умолчанию выбор сразу
+        сохраняется в настройках — это ручной выбор пользователя, который
+        приоритетнее системной темы Windows.
+        """
+        key = theme.normalize(theme_key)
+        theme.apply_theme(QApplication.instance(), key)
+        self._refresh_nav_icons()
+
+        if save:
+            self.settings_service.update({"ui_theme": key})
+
+        self._log_ui_action("смена темы оформления", theme=key)
+        self.statusBar().showMessage(
+            f"Тема оформления: {theme.theme_label(key)}", 5000
+        )
+
+    # --------------------------------------------------------
+    # СЛЕДОВАНИЕ ЗА ТЕМОЙ WINDOWS
+    # --------------------------------------------------------
+    def _sync_system_theme_watcher(self) -> None:
+        """
+        Включает или выключает слежение за темой Windows по настройке.
+
+        Слежение работает, пока пользователь не выбрал тему сам (флажок
+        «Следовать за темой Windows» в настройках): ручной выбор
+        приоритетнее системного режима.
+        """
+        watcher = getattr(self, "system_theme_watcher", None)
+        if watcher is None:
+            return
+
+        follow = self.settings_service.get_bool("ui_theme_follow_system", True)
+        if follow and not watcher.is_running():
+            watcher.start()
+        elif not follow and watcher.is_running():
+            watcher.stop()
+
+    def _on_system_theme_changed(self, theme_key: str) -> None:
+        """
+        Windows сменил режим — переключаем оформление.
+
+        В настройки тема не записывается: это не выбор пользователя, а
+        следование за системой. При выключенном следовании ничего не делаем.
+        """
+        if not self.settings_service.get_bool("ui_theme_follow_system", True):
+            return
+
+        self._apply_theme_choice(theme_key, save=False)
+        self._log_ui_action("тема Windows изменилась", theme=theme_key)
+        self.statusBar().showMessage(
+            f"Тема Windows: {theme.theme_label(theme_key)}", 5000
+        )
+
+    def _refresh_nav_icons(self) -> None:
+        """
+        Пересобирает иконки под активную тему.
+
+        У тёмных тем свой набор значков (resources/icons/**/dark/), поэтому
+        после смены оформления их нужно заменить, иначе светлые иконки
+        останутся на тёмном фоне.
+        """
+        side_nav = getattr(self, "side_nav", None)
+        if side_nav is not None:
+            for index, name in enumerate(self._TAB_ICON_NAMES):
+                side_nav.set_item_icon(index, _tab_icon(name))
+
+        for button, name in (
+            (getattr(self, "btn_create_contract", None), "contract.svg"),
+            (getattr(self, "btn_recognize", None), "recognize.svg"),
+            (getattr(self, "btn_save_db", None), "save.svg"),
+            (getattr(self, "btn_open_db", None), "database.svg"),
+            (getattr(self, "btn_settings", None), "settings.svg"),
+            (getattr(self, "btn_clear", None), "clear.svg"),
+        ):
+            if button is not None:
+                button.setIcon(_action_icon(name))
 
     def _init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(14, 12, 14, 8)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(20, 16, 20, 8)
+        main_layout.setSpacing(12)
 
-        top_bar = QHBoxLayout()
+        # ── Шапка окна: название слева, финальное действие справа ──
+        header_frame = QFrame()
+        header_frame.setObjectName("appHeader")
+        header = QHBoxLayout(header_frame)
+        header.setContentsMargins(16, 10, 16, 10)
+        header.setSpacing(16)
+        heading = QVBoxLayout()
+        heading.setSpacing(2)
+        title = QLabel("Договоры перевозки")
+        title.setObjectName("appHeading")
+        subtitle = QLabel("Подготовка данных и оформление документов")
+        subtitle.setObjectName("appSubheading")
+        heading.addWidget(title)
+        heading.addWidget(subtitle)
+        header.addLayout(heading)
+        header.addStretch()
+
+        self.btn_create_contract = theme.accent_button(
+            "Создать договор",
+            tooltip="Проверить данные и сформировать договор DOCX",
+        )
+        self.btn_create_contract.setIcon(_action_icon("contract.svg"))
+        self.btn_create_contract.setIconSize(QSize(18, 18))
+        self.btn_create_contract.clicked.connect(self._on_create_contract)
+        header.addWidget(self.btn_create_contract)
+        main_layout.addWidget(header_frame)
+
+        action_frame = QFrame()
+        action_frame.setObjectName("actionBar")
+        top_bar = QHBoxLayout(action_frame)
+        top_bar.setContentsMargins(12, 8, 12, 8)
         top_bar.setSpacing(8)
 
         # Вспомогательные действия — приглушённые кнопки с рамкой.
         # Главная кнопка живёт на вкладке («Распознать вкладку»), а финальное
         # действие — «Создать договор» (accent): так видно, что за чем.
         self.btn_recognize = theme.secondary_button(
-            "🔍 Распознать данные",
+            "Распознать данные",
             tooltip="Вставить текст целиком и распознать все данные",
         )
+        self.btn_recognize.setIcon(_action_icon("recognize.svg"))
+        self.btn_recognize.setIconSize(QSize(18, 18))
         self.btn_recognize.clicked.connect(self._on_recognize_clicked)
         top_bar.addWidget(self.btn_recognize)
 
-        self.btn_cancel = theme.secondary_button("✕ Отменить распознавание")
+        self.btn_import_documents = theme.secondary_button("Загрузить документы")
+        self.btn_import_documents.clicked.connect(self._on_import_documents)
+        top_bar.addWidget(self.btn_import_documents)
+
+        self.btn_cancel = theme.secondary_button("Отменить распознавание")
         self.btn_cancel.clicked.connect(self._cancel_recognition)
         self.btn_cancel.setVisible(False)
         top_bar.addWidget(self.btn_cancel)
 
         self.btn_save_db = theme.secondary_button(
-            "💾 Сохранить в базу",
+            "Сохранить в базу",
             tooltip="Сохранить заполненные данные в справочник",
         )
+        self.btn_save_db.setIcon(_action_icon("save.svg"))
+        self.btn_save_db.setIconSize(QSize(18, 18))
         self.btn_save_db.clicked.connect(self._on_save_to_db)
         top_bar.addWidget(self.btn_save_db)
 
-        self.btn_open_db = theme.secondary_button("📂 База данных")
+        self.btn_open_db = theme.secondary_button("База данных")
+        self.btn_open_db.setIcon(_action_icon("database.svg"))
+        self.btn_open_db.setIconSize(QSize(18, 18))
         self.btn_open_db.clicked.connect(self._on_open_db_manager)
         top_bar.addWidget(self.btn_open_db)
 
-        self.btn_settings = theme.secondary_button("⚙ Настройки")
+        self.btn_settings = theme.secondary_button("Настройки")
+        self.btn_settings.setIcon(_action_icon("settings.svg"))
+        self.btn_settings.setIconSize(QSize(18, 18))
         self.btn_settings.clicked.connect(self._on_open_settings)
         top_bar.addWidget(self.btn_settings)
 
-        self.btn_clear = theme.secondary_button("🧹 Очистить форму")
+        self.btn_clear = theme.secondary_button("Очистить форму")
+        self.btn_clear.setIcon(_action_icon("clear.svg"))
+        self.btn_clear.setIconSize(QSize(18, 18))
         self.btn_clear.clicked.connect(self._on_clear_form)
         top_bar.addWidget(self.btn_clear)
 
         top_bar.addStretch()
 
-        self.btn_create_contract = theme.accent_button(
-            "📄 Создать договор",
-            tooltip="Проверить данные и сформировать договор DOCX",
-        )
-        self.btn_create_contract.clicked.connect(self._on_create_contract)
-        top_bar.addWidget(self.btn_create_contract)
-
-        main_layout.addLayout(top_bar)
+        main_layout.addWidget(action_frame)
 
         self.tabs = QTabWidget()
-        # Иконки вкладок чуть крупнее — их стало легче различать
         self.tabs.setIconSize(QSize(24, 24))
 
         self.driver_tab = DriverTab()
@@ -353,17 +511,39 @@ class MainWindow(QMainWindow):
         self.contract_tab.loadings_changed.connect(self._sync_loadings_to_vehicles)
         self.contract_tab.unloadings_changed.connect(self._sync_unloadings_to_vehicles)
 
-        self.tabs.addTab(self.carrier_tab,  _tab_icon("carrier.png"),  "Перевозчик")
-        self.tabs.addTab(self.driver_tab,   _tab_icon("driver.png"),   "Водитель")
-        self.tabs.addTab(self.trailer_tab,  _tab_icon("trailer.png"),  "Тягач и полуприцеп")
-        self.tabs.addTab(self.vehicles_tab, _tab_icon("vehicles.png"), "Перевозимые авто")
-        self.tabs.addTab(self.contract_tab, _tab_icon("contract.png"), "Договор")
-        self.tabs.addTab(self.customer_tab, _tab_icon("customer.png"), "Заказчик")
+        self.tabs.addTab(self.carrier_tab, _tab_icon("carrier.svg"), "Перевозчик")
+        self.tabs.addTab(self.driver_tab, _tab_icon("driver.svg"), "Водитель")
+        self.tabs.addTab(self.trailer_tab, _tab_icon("trailer.svg"), "Тягач и полуприцеп")
+        self.tabs.addTab(self.vehicles_tab, _tab_icon("vehicles.svg"), "Перевозимые авто")
+        self.tabs.addTab(self.contract_tab, _tab_icon("contract.svg"), "Договор")
+        self.tabs.addTab(self.customer_tab, _tab_icon("customer.svg"), "Заказчик")
 
         # Углублённое логирование: переключения вкладок пользователем
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
-        main_layout.addWidget(self.tabs)
+        # ── Навигация: сайдбар слева (как в макетах) ──
+        # Верхние ярлыки вкладок скрыты, но сам QTabWidget остаётся: страницы,
+        # их порядок, сигналы и программные переходы (setCurrentWidget) не
+        # меняются. Сайдбар — только переключатель этих же страниц.
+        self.tabs.tabBar().setVisible(False)
+
+        self.side_nav = SideNav("Разделы")
+        for index in range(self.tabs.count()):
+            self.side_nav.add_item(
+                self.tabs.tabText(index),
+                self.tabs.tabIcon(index),
+                tooltip=self.tabs.tabToolTip(index) or self.tabs.tabText(index),
+            )
+        self.side_nav.navigate.connect(self.tabs.setCurrentIndex)
+        self.tabs.currentChanged.connect(self._sync_side_nav)
+
+        body = QHBoxLayout()
+        body.setSpacing(12)
+        body.addWidget(self.side_nav)
+        body.addWidget(self.tabs, 1)
+        main_layout.addLayout(body)
+
+        self._sync_side_nav(self.tabs.currentIndex())
 
         self._sync_loadings_to_vehicles()
         self._sync_unloadings_to_vehicles()
@@ -404,7 +584,7 @@ class MainWindow(QMainWindow):
 
     def _log_ui_action(self, action: str, **details):
         """
-        Единая точка логирования действий пользователя (DEBUG).
+        Единая точка логирования действий пользователя (INFO).
 
         Пишем только служебные сведения: имена полей, количества, индексы
         вкладок. Значения данных (ФИО, адреса, номера) сюда не попадают —
@@ -414,7 +594,7 @@ class MainWindow(QMainWindow):
             tail = " | " + " | ".join(f"{k}={v}" for k, v in details.items())
         else:
             tail = ""
-        logger.debug(f"UI: {action}{tail}")
+        logger.info("UI: %s%s", action, tail)
 
     def _on_tab_changed(self, index: int):
         try:
@@ -423,6 +603,18 @@ class MainWindow(QMainWindow):
             title = f"#{index}"
         self._log_ui_action("переключение вкладки", index=index, tab=title)
         self._refresh_status_indicators()
+
+    def _sync_side_nav(self, index: int) -> None:
+        """
+        Сайдбар показывает текущую страницу.
+
+        Смена вкладки может быть программной (загрузка записи из справочника
+        вызывает setCurrentWidget), поэтому подсветку пункта синхронизируем по
+        сигналу QTabWidget, а не только по клику в сайдбаре.
+        """
+        side_nav = getattr(self, "side_nav", None)
+        if side_nav is not None:
+            side_nav.set_current_index(index)
 
     # --------------------------------------------------------
     # СТАТУС-БАР: активная вкладка, заполненность, время сохранения
@@ -477,6 +669,12 @@ class MainWindow(QMainWindow):
             self.vehicles_tab.update_unloadings_list(unloadings)
         except Exception as e:
             logger.exception(f"Ошибка синхронизации выгрузок: {e}")
+
+    def _on_import_documents(self):
+        from ui.document_import_dialog import DocumentImportDialog
+        logger.info("Открыт диалог загрузки документов")
+        result = DocumentImportDialog(self).exec_()
+        logger.info("Диалог загрузки документов закрыт: результат=%s", result)
 
     def _on_recognize_clicked(self):
         self._log_ui_action("нажата кнопка «Распознать данные»")
@@ -607,6 +805,7 @@ class MainWindow(QMainWindow):
         if not self._is_current_task(task):
             return
         self.progress_bar.setValue(max(0, min(100, int(percent))))
+        logger.info("Распознавание: прогресс=%s%%", percent)
         if message:
             self.statusBar().showMessage(message)
 
@@ -861,8 +1060,10 @@ class MainWindow(QMainWindow):
         logger.info("Нажата кнопка «Создать договор»")
         self._log_ui_action("нажата кнопка «Создать договор»")
         try:
+            logger.info("Создание договора: сбор данных")
             data = self._collect_data()
 
+            logger.info("Создание договора: проверка данных")
             report = Validator().check(data)
             if not self._confirm_validation(report):
                 logger.info("Генерация договора отменена пользователем после проверки")
@@ -870,6 +1071,7 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Договор не создан — исправьте данные", 5000)
                 return
 
+            logger.info("Создание договора: генерация файла")
             path = self.contract_generator.generate(data)
             logger.info(f"Договор создан: {path}")
             audit.log_event(
@@ -881,6 +1083,7 @@ class MainWindow(QMainWindow):
             self._show_contract_created(path)
         except Exception as e:
             logger.exception("Ошибка при создании договора")
+            audit.log_event("contract_creation_failed", result="error")
             QMessageBox.critical(
                 self, "Ошибка", f"Не удалось создать договор:\n{e}"
             )
@@ -944,6 +1147,7 @@ class MainWindow(QMainWindow):
         logger.info("Нажата кнопка «Сохранить в базу»")
         self._log_ui_action("нажата кнопка «Сохранить в базу»")
         try:
+            logger.info("Сохранение в базу: сбор данных")
             data = self._collect_data()
 
             driver = data.driver
@@ -1038,13 +1242,13 @@ class MainWindow(QMainWindow):
             # ── Перевозимые ТС + тягач/прицеп (для общей таблицы) ──
             all_vehicles = data.to_vehicle_rows()
 
-            if all_vehicles:
-                save_vehicles(all_vehicles)
-                logger.info(f"Сохранено ТС: {len(all_vehicles)}")
-
             # ── Договор ──
             contract = data.to_db_dict()
-            contract_id = save_contract(contract)
+            contract_id = save_contract_with_details(
+                contract, data.loadings, data.unloadings, all_vehicles
+            )
+            if all_vehicles:
+                logger.info(f"Сохранено ТС: {len(all_vehicles)}")
             logger.info(
                 f"Договор сохранён: ID={contract_id}, №={contract.get('number')}"
             )
@@ -1067,6 +1271,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Успех", "Данные сохранены в базу!")
         except Exception as e:
             logger.exception("Ошибка при сохранении в базу")
+            audit.log_event("database_save_failed", result="error")
             QMessageBox.critical(
                 self, "Ошибка", f"Не удалось сохранить данные:\n{e}"
             )
@@ -1227,7 +1432,7 @@ class BulkPasteDialog(QDialog):
         self.text_edit.setStyleSheet("font-size: 12px;")
         layout.addWidget(self.text_edit)
 
-        btn_paste = QPushButton("📋 Вставить из буфера")
+        btn_paste = theme.clipboard_button()
         btn_paste.clicked.connect(self._paste_from_clipboard)
         layout.addWidget(btn_paste)
 
@@ -1265,7 +1470,9 @@ if __name__ == "__main__":
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    theme.apply_theme(app)
+    # Тема как при обычном запуске через main.py: системная, если включено
+    # следование за Windows, иначе — сохранённый выбор пользователя
+    theme.apply_theme(app, system_theme.preferred_theme(get_settings_service()))
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

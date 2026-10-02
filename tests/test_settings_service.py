@@ -162,6 +162,19 @@ def test_legacy_secret_is_removed_from_file(settings_path):
     assert service.get_str("provider") == "gigachat"
 
 
+def test_legacy_suffixed_secret_is_removed_from_file(settings_path):
+    """Унаследованные ключи вида *_api_key тоже вычищаются при загрузке."""
+    settings_path.write_text(json.dumps({
+        "legacy_cloud_api_key": "СТАРЫЙ-КЛЮЧ",
+        "provider": "gigachat",
+    }), encoding="utf-8")
+
+    SettingsService(str(settings_path))
+    written = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "legacy_cloud_api_key" not in written
+    assert "СТАРЫЙ-КЛЮЧ" not in settings_path.read_text(encoding="utf-8")
+
+
 def test_defaults_have_no_secret_fields():
     assert "gigachat_credentials" not in SettingsService.DEFAULTS
     assert "gigachat_credentials" in SettingsService.SECRET_KEYS
