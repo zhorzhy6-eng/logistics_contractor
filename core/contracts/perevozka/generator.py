@@ -24,8 +24,17 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from core.contract_data import ContractData
-from core.contracts.base_generator import BaseContractGenerator
+from core.contracts.base_generator import (
+    BaseContractGenerator,
+    ConvertNewlinesStep,
+    PostprocessStep,
+)
 from core.contracts.contract_types import ContractType
+from core.contracts.perevozka.postprocess import (
+    RemoveEmptyVehicleRowsStep,
+    RouteTablesStep,
+)
+from core.contracts.perevozka.validator import PerevozkaValidator
 from core.num_to_words import amount_to_words
 
 logger = logging.getLogger("core.contract_generator")
@@ -53,6 +62,12 @@ class PerevozkaGenerator(BaseContractGenerator):
         "ИП с НДС": "shablon_ip_with_vat.docx",
         "ИП без НДС": "shablon_ip_without_vat.docx",
     }
+
+    #: Префикс имени файла (хук get_filename в базе).
+    FILE_PREFIX = "Договор-заявка"
+
+    #: Валидатор типа (хук validate в базе).
+    VALIDATOR_CLASS = PerevozkaValidator
 
     # Папка по умолчанию для готовых договоров (Шаг 6 оптимизации).
     # Раньше файлы по 2,7 МБ падали в корень проекта и мешались с кодом.
@@ -100,6 +115,25 @@ class PerevozkaGenerator(BaseContractGenerator):
             return self.templates["ИП с НДС"]
         else:
             return self.templates["ООО"]
+
+    # ─────────────────────────────────────────────────────────
+    # КОНВЕЙЕР ПОСТОБРАБОТКИ
+    # ─────────────────────────────────────────────────────────
+
+    def postprocess_steps(self, data) -> List[PostprocessStep]:
+        """
+        Шаги постобработки заявки.
+
+        Порядок и состав повторяют прежний код _postprocess_document:
+        переносы строк → таблицы маршрута (только с данными) → удаление
+        пустых строк таблицы ТС. Без данных (data=None) таблицы маршрута
+        не строятся — историческое поведение сохранено.
+        """
+        steps: List[PostprocessStep] = [ConvertNewlinesStep(self)]
+        if data is not None:
+            steps.append(RouteTablesStep(self))
+        steps.append(RemoveEmptyVehicleRowsStep(self))
+        return steps
 
     # ─────────────────────────────────────────────────────────
     # ТАБЛИЦЫ ПОГРУЗОК / ВЫГРУЗОК В БЛОКАХ 3.2 И 3.3

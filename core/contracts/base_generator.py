@@ -27,7 +27,7 @@ caplog по этому имени, и переезд кода не должен 
 import logging
 import os
 import re
-from abc import ABC
+from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Mapping, Optional
@@ -35,8 +35,39 @@ from typing import Any, ClassVar, Dict, List, Mapping, Optional
 from core.contract_data import ContractData
 from core.num_to_words import amount_to_words
 from core.trace import trace
+from core.validator import ValidationReport
 
 logger = logging.getLogger("core.contract_generator")
+
+
+class PostprocessStep(ABC):
+    """
+    Шаг постобработки документа (Шаг 5 рефакторинга).
+
+    Конвейер шагов — точка расширения постобработки: тип договора
+    объявляет свой список в postprocess_steps(), не дописывая чужой код.
+    Каждый шаг получает генератор (для его документных утилит) и
+    тестируется отдельно на пустом Document() — без тяжёлого шаблона.
+    """
+
+    #: Короткое имя шага (для логов и диагностики).
+    name: ClassVar[str] = ""
+
+    def __init__(self, generator: "BaseContractGenerator"):
+        self.generator = generator
+
+    @abstractmethod
+    def apply(self, doc, data) -> None:
+        """Применяет шаг к открытому документу."""
+
+
+class ConvertNewlinesStep(PostprocessStep):
+    """«\\n» внутри runs → разрывы строк Word."""
+
+    name = "convert_newlines"
+
+    def apply(self, doc, data) -> None:
+        self.generator._convert_newlines_to_breaks(doc)
 
 
 class BaseContractGenerator(ABC):
@@ -49,6 +80,12 @@ class BaseContractGenerator(ABC):
     #: Имена файлов шаблонов: {ключ: имя файла в templates_dir}.
     #: Подкласс перевозки задаёт {"ООО": "shablon_ooo.docx", ...}.
     TEMPLATE_NAMES: ClassVar[Mapping[str, str]] = {}
+
+    #: Префикс имени генерируемого файла («Договор-заявка» у перевозки).
+    FILE_PREFIX: ClassVar[str] = ""
+
+    #: Класс валидатора типа (хук validate()); None — валидации нет.
+    VALIDATOR_CLASS: ClassVar[Optional[type]] = None
 
     # Папка по умолчанию для готовых договоров (Шаг 6 оптимизации).
     # Раньше файлы по 2,7 МБ падали в корень проекта и мешались с кодом.
@@ -86,7 +123,83 @@ class BaseContractGenerator(ABC):
         return str(Path(__file__).resolve().parents[2] / cls.DEFAULT_OUTPUT_DIRNAME)
 
     # ─────────────────────────────────────────────────────────
-    # Точки расширения, которые обязан реализовать подкласс
+    # ХУКИ (точки расширения, переопределяемые подклассом)
+    # ─────────────────────────────────────────────────────────
+
+    def preprocess(self, data: ContractData) -> ContractData:
+        """
+        Подготовка данных перед генерацией.
+
+        По умолчанию — identity: данные уже приведены через
+        ContractData.coerce. Подкласс может дополнять/чинить данные.
+        """
+        return data
+
+    @staticmethod
+    def _carrier_type_of(data: ContractData) -> str:
+        """Тип перевозчика из условий договора (историческая логика)."""
+        contract = data.contract
+        carrier = data.carrier
+        return (
+            contract.get("carrier_type")
+            or carrier.get("carrier_type")
+            or "ООО (с НДС)"
+        )
+
+    def get_template_path(self, data: ContractData) -> str:
+        """
+        Путь шаблона для данных договора.
+
+        Дефолт — адаптер к старому приватному имени подкласса
+        _get_template_path(carrier_type): перевозка его уже реализует,
+        новые типы могут переопределить хук целиком.
+        """
+        return self._get_template_path(self._carrier_type_of(data))
+
+    def build_replacements(self, data: ContractData) -> Dict[str, str]:
+        """
+        Карта замен плейсхолдеров шаблона.
+
+        Дефолт — адаптер к старому приватному имени _build_replacements_map:
+        перевозка его уже реализует, новые типы могут переопределить хук.
+        """
+        return self._build_replacements_map(data)
+
+    def get_filename(self, data: ContractData) -> str:
+        """Имя файла: <FILE_PREFIX>_<номер>_<ГГГГММДД>.docx (санитайзинг номера)."""
+        contract = data.contract
+        number = (contract.get("number") or "без-номера").strip()
+
+        safe_number = re.sub(r'[^\w\-]+', '-', number)
+        if not safe_number:
+            safe_number = "без-номера"
+
+        date_str = datetime.now().strftime("%Y%m%d")
+        prefix = f"{self.FILE_PREFIX}_" if self.FILE_PREFIX else ""
+        return f"{prefix}{safe_number}_{date_str}.docx"
+
+    def validate(self, data: Any) -> ValidationReport:
+        """
+        Проверка данных типа своим валидатором.
+
+        VALIDATOR_CLASS не задан → пустой отчёт (проверок нет, не ошибка).
+        """
+        validator_class = self.VALIDATOR_CLASS
+        if validator_class is None:
+            return ValidationReport()
+        return validator_class().check(data)
+
+    def postprocess_steps(self, data: Optional[ContractData]) -> List[PostprocessStep]:
+        """
+        Конвейер постобработки для типа.
+
+        Дефолт — только переносы строк. Подкласс добавляет свои шаги
+        (перевозка: таблицы маршрута + удаление пустых строк таблицы ТС).
+        """
+        return [ConvertNewlinesStep(self)]
+
+    # ─────────────────────────────────────────────────────────
+    # Старые приватные имена специфики (реализует подкласс)
     # ─────────────────────────────────────────────────────────
 
     def _get_template_path(self, carrier_type: str) -> str:
@@ -124,16 +237,8 @@ class BaseContractGenerator(ABC):
 
         Принимает ContractData или совместимый dict (см. ContractData.coerce).
         """
-        contract_data = ContractData.coerce(data)
-        contract = contract_data.contract
-        number = (contract.get("number") or "без-номера").strip()
-
-        safe_number = re.sub(r'[^\w\-]+', '-', number)
-        if not safe_number:
-            safe_number = "без-номера"
-
-        date_str = datetime.now().strftime("%Y%m%d")
-        filename = f"Договор-заявка_{safe_number}_{date_str}.docx"
+        contract_data = self.preprocess(ContractData.coerce(data))
+        filename = self.get_filename(contract_data)
 
         if output_dir is None:
             # Шаг 6 оптимизации: готовые договоры складываются в output/,
@@ -154,22 +259,16 @@ class BaseContractGenerator(ABC):
     @trace
     def generate_docx(self, data: Dict[str, Any], output_path: str) -> str:
         try:
-            contract_data = ContractData.coerce(data)
-            carrier = contract_data.carrier
-            contract = contract_data.contract
-            carrier_type = (
-                contract.get("carrier_type")
-                or carrier.get("carrier_type")
-                or "ООО (с НДС)"
-            )
-            template_path = self._get_template_path(carrier_type)
+            contract_data = self.preprocess(ContractData.coerce(data))
+            carrier_type = self._carrier_type_of(contract_data)
+            template_path = self.get_template_path(contract_data)
 
             if not os.path.exists(template_path):
                 raise FileNotFoundError(f"Шаблон не найден: {template_path}")
 
             logger.info(f"Используем шаблон [{carrier_type}]: {template_path}")
 
-            replacements = self._build_replacements_map(contract_data)
+            replacements = self.build_replacements(contract_data)
             engine = self._render_template(template_path, replacements, output_path)
             # contract_data нужен постобработке: она собирает таблицы
             # погрузок/выгрузок из точек маршрута и списка машин.
@@ -282,13 +381,14 @@ class BaseContractGenerator(ABC):
             from docx import Document
 
             doc = Document(path)
-            self._convert_newlines_to_breaks(doc)
+            data = ContractData.coerce(contract_data) if contract_data is not None else None
 
-            if contract_data is not None:
-                data = ContractData.coerce(contract_data)
-                self._insert_route_tables(doc, data)
+            # Шаги выполняются в одном try, как раньше: падение первого
+            # шага отменяет остальные, а ошибка гасится в warning.
+            for step in self.postprocess_steps(data):
+                logger.debug(f"Постобработка: шаг {step.name}")
+                step.apply(doc, data)
 
-            self._remove_empty_vehicle_rows(doc)
             doc.save(path)
         except Exception as e:
             logger.warning(f"Не удалось выполнить постобработку документа: {e}")
