@@ -236,3 +236,66 @@ def test_factory_spec_with_templates_subdir(registry_state, tmp_path):
     assert generator.templates_dir == str(
         PROJECT_ROOT / "templates" / "test_subdir"
     )
+
+
+# ─────────────────────────────────────────────────────────────
+# Заглушки типов (Шаг 8)
+# ─────────────────────────────────────────────────────────────
+
+def _ensure_registered(package: str, key: str) -> None:
+    """
+    Гарантирует, что тип зарегистрирован.
+
+    Регистрация выполняется при ПЕРВОМ импорте пакета. Если пакет уже
+    импортирован (кэш sys.modules), load_builtin не повторит регистрацию —
+    тогда перезагружаем пакет: его __init__ снова вызывает register.
+    """
+    import importlib
+
+    ContractTypeRegistry.load_builtin()
+    if key not in ContractTypeRegistry.known_types():
+        importlib.reload(importlib.import_module(package))
+    assert key in ContractTypeRegistry.known_types()
+
+
+def test_all_builtin_types_registered():
+    _ensure_registered("core.contracts.arenda_ts", "arenda_ts")
+    _ensure_registered("core.contracts.expediciya", "expediciya")
+    _ensure_registered("core.contracts.zayavka", "zayavka_excel")
+    known = ContractTypeRegistry.known_types()
+    for key in ("perevozka", "arenda_ts", "expediciya", "zayavka_excel"):
+        assert key in known
+
+
+def test_stub_generators_raise_not_implemented():
+    _ensure_registered("core.contracts.arenda_ts", "arenda_ts")
+    _ensure_registered("core.contracts.expediciya", "expediciya")
+    _ensure_registered("core.contracts.zayavka", "zayavka_excel")
+    for contract_type, fragment in (
+        ("arenda_ts", "аренды ТС"),
+        ("expediciya", "Экспедиторская заявка"),
+        ("zayavka_excel", "Excel"),
+    ):
+        generator = GeneratorFactory.get_generator(contract_type)
+        with pytest.raises(NotImplementedError, match=fragment):
+            generator.generate({"contract": {}})
+
+
+def test_stub_types_do_not_affect_perevozka():
+    """Заглушки зарегистрированы и падают сами — перевозка работает как раньше."""
+    _ensure_registered("core.contracts.arenda_ts", "arenda_ts")
+    _ensure_registered("core.contracts.expediciya", "expediciya")
+    _ensure_registered("core.contracts.zayavka", "zayavka_excel")
+    generator = GeneratorFactory.get_generator("perevozka")
+    replacements = generator._build_replacements_map({"contract": {}})
+    assert "contract_number" in replacements
+
+
+def test_zayavka_generator_is_not_docx_based():
+    """Excel-заявка не наследуется от DOCX-базы (решение по аудиту, п. 4)."""
+    _ensure_registered("core.contracts.zayavka", "zayavka_excel")
+    from core.contracts.zayavka.generator import ZayavkaExcelGenerator
+
+    assert not issubclass(ZayavkaExcelGenerator, BaseContractGenerator)
+    generator = GeneratorFactory.get_generator("zayavka_excel")
+    assert isinstance(generator, ZayavkaExcelGenerator)
