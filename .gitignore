@@ -39,6 +39,13 @@ output/
 templates/*.xlsx
 
 # ─────────────────────────────────────────────────────────────
+# Золотые эталоны договоров (Шаг 0 рефакторинга контрактов)
+# ─────────────────────────────────────────────────────────────
+!tests/data/golden/
+!tests/data/golden/*.docx
+!tests/_tmp/baseline.txt
+
+# ─────────────────────────────────────────────────────────────
 # Python
 # ─────────────────────────────────────────────────────────────
 __pycache__/
@@ -46,7 +53,8 @@ __pycache__/
 *$py.class
 *.egg-info/
 .pytest_cache/
-tests/_tmp/
+tests/_tmp/*
+!tests/_tmp/baseline.txt
 _pytest_tmp/
 .mypy_cache/
 .ruff_cache/
