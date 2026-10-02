@@ -236,6 +236,9 @@ def fingerprint(docx_path: Path) -> dict:
         "tables": tables,
         "body": body,
         "placeholders_left": placeholders,
+        # Справочное значение: docx-контейнер НЕ детерминирован между
+        # прогонами (проверено эмпирически, отличается даже у старого
+        # кода), поэтому в golden-тесте sha256_docx не сравнивается.
         "sha256_docx": hashlib.sha256(raw).hexdigest(),
         "sha256_text": hashlib.sha256(text.encode("utf-8")).hexdigest(),
     }
