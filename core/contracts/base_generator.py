@@ -681,6 +681,12 @@ class BaseContractGenerator(ABC):
         """
         return re.sub(r"\s+", " ", str(value if value is not None else "")).strip()
 
+    @staticmethod
+    def _normalized_point_address(point: Dict[str, Any]) -> str:
+        """Адрес точки одной строкой: переносы строк в заголовке не нужны."""
+        address = str(point.get("address", "") or "")
+        return re.sub(r"\s+", " ", address).strip()
+
     @classmethod
     def _flatten_replacements(cls, replacements: Dict[str, str]) -> None:
         """
