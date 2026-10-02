@@ -90,7 +90,7 @@ def register_contract_type(
 #: Встроенные типы, которые реестр подгружает при старте. Наполняется по
 #: мере появления типов: шаг 2 — perevozka, шаг 8 — заглушки остальных.
 BUILTIN_TYPE_MODULES: Tuple[str, ...] = (
-    # "core.contracts.perevozka",
+    "core.contracts.perevozka",
     # "core.contracts.arenda_ts",
     # "core.contracts.expediciya",
     # "core.contracts.zayavka",
