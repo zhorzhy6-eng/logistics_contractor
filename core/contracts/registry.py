@@ -91,9 +91,9 @@ def register_contract_type(
 #: мере появления типов: шаг 2 — perevozka, шаг 8 — заглушки остальных.
 BUILTIN_TYPE_MODULES: Tuple[str, ...] = (
     "core.contracts.perevozka",
-    # "core.contracts.client_type_d",
-    # "core.contracts.expediciya",
-    # "core.contracts.zayavka",
+    "core.contracts.client_type_d",
+    "core.contracts.expediciya",
+    "core.contracts.zayavka",
 )
 
 

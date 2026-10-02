@@ -1,0 +1,18 @@
+# -*- coding: utf-8 -*-
+"""Валидатор экспедиторской заявки (заглушка, Шаг 8)."""
+
+from core.contract_data import ContractData
+from core.contracts.base_validator import BaseValidator
+from core.contracts.contract_types import ContractType
+from core.validator import ValidationReport
+
+
+class ExpediciyaValidator(BaseValidator):
+    """Минимальный валидатор: правила появятся вместе с реализацией типа."""
+
+    CONTRACT_TYPE = ContractType.EXPEDICIYA.value
+
+    def check_specific(self, cd: ContractData, report: ValidationReport) -> None:
+        # Поручение экспедитору и вознаграждение будут проверяться здесь
+        # при реализации типа.
+        return None
