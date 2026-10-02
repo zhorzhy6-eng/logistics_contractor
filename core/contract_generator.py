@@ -13,6 +13,36 @@
     через поля vehicle["loading_index"], vehicle["unloading_index"]
     (0 = «— (все)» → машина попадает во все точки)
 
+Блоки 3.2 «Погрузка» и 3.3 «Выгрузка»
+-------------------------------------
+docxtpl не умеет вставлять таблицу в середину документа, поэтому работает
+гибридная схема: в шаблон ставится метка {{LOADING_TABLE_HERE}} (парная —
+{{UNLOADING_TABLE_HERE}}), docxtpl подставляет вместо неё текстовый маркер
+LOADING_TABLE_HERE, а постобработка (_postprocess_document) находит абзац
+с этим маркером и заменяет его последовательностью «жирный заголовок +
+таблица № / Марка-Модель / VIN-номер» — своя таблица на каждую непустую
+погрузку/выгрузку.
+
+Шаблоны без метки продолжают работать как раньше: плоский текст
+{{loading_block}} / {{unloading_block}} (обратная совместимость, fallback).
+
+Нумерация блоков и привязка машин
+---------------------------------
+Номер в заголовке («Погрузка 3») — порядковый номер ВЫВЕДЕННОГО блока:
+пустые точки не оставляют «дырок» (1, 2, 3… без пропусков).
+loading_index / unloading_index при этом остаются исходными номерами точек
+в массиве UI, поэтому пропуск пустой точки не переносит машины в чужую
+таблицу. Машины, привязанные к пропущенной точке, не выводятся и
+попадают в лог только количеством.
+
+Старые таблицы машин ({{car_1..12}})
+------------------------------------
+В шаблоне таблица машин стоит дважды: в 3.1 «Груз» (перечень груза —
+остаётся) и сразу после метки в 3.2. Вторая после перехода на таблицы по
+погрузкам стала дублем: одни и те же VIN печатались и в ней, и в таблицах
+погрузок. При генерации она удаляется (_remove_legacy_vehicle_tables);
+в шаблоне без меток ничего не удаляется — там перечень машин нужен.
+
 Тип перевозчика и ставка НДС берутся ИЗ УСЛОВИЙ ДОГОВОРА (contract),
 а не из карточки перевозчика.
 """
@@ -36,6 +66,37 @@ class ContractGenerator:
     # Папка по умолчанию для готовых договоров (Шаг 6 оптимизации).
     # Раньше файлы по 2,7 МБ падали в корень проекта и мешались с кодом.
     DEFAULT_OUTPUT_DIRNAME = "output"
+
+    # ── Метки таблиц погрузок/выгрузок (блоки 3.2 / 3.3) ──
+    # Имена совпадают с {{...}} в шаблоне, значения — текстовые маркеры,
+    # которые docxtpl оставляет в документе как есть. По ним постобработка
+    # и находит место вставки таблиц (docxtpl сам таблицы в середину
+    # документа вставлять не умеет).
+    LOADING_TABLE_PLACEHOLDER = "LOADING_TABLE_HERE"
+    UNLOADING_TABLE_PLACEHOLDER = "UNLOADING_TABLE_HERE"
+    LOADING_TABLE_MARKER = "LOADING_TABLE_HERE"
+    UNLOADING_TABLE_MARKER = "UNLOADING_TABLE_HERE"
+
+    #: Плейсхолдеры, у которых перенос строки несёт смысл (старые шаблоны
+    #: с плоским блоком). Все остальные значения приводятся к одной строке.
+    MULTILINE_PLACEHOLDERS = ("loading_block", "unloading_block")
+
+    #: Типы ТС, которые в таблицы погрузок/выгрузок не попадают:
+    #: тягач и прицеп/полуприцеп описаны в блоке 3.1 (карточка ТС).
+    NON_CARGO_VEHICLE_TYPES = ("Тягач", "Полуприцеп", "Прицеп")
+
+    #: Строка-заглушка, если ни одна погрузка/выгрузка не получила машин.
+    NO_VEHICLES_TEXT = "(машины не указаны)"
+
+    #: Заголовки колонок таблиц погрузок/выгрузок.
+    VEHICLE_TABLE_HEADERS = ("№", "Марка/Модель", "VIN-номер")
+
+    #: Ширина колонок таблиц погрузок/выгрузок: № ≈ 1 см,
+    #: Марка/Модель ≈ 9 см, VIN-номер ≈ 5 см.
+    VEHICLE_TABLE_COLUMN_WIDTHS_CM = (1.0, 9.0, 5.0)
+
+    #: Стиль таблиц погрузок/выгрузок (границы — как у таблицы ТС в шаблоне).
+    VEHICLE_TABLE_STYLE = "Table Grid"
 
     def __init__(self, templates_dir: str):
         self.templates_dir = templates_dir
@@ -129,7 +190,9 @@ class ContractGenerator:
 
             replacements = self._build_replacements_map(contract_data)
             engine = self._render_template(template_path, replacements, output_path)
-            self._postprocess_document(output_path)
+            # contract_data нужен постобработке: она собирает таблицы
+            # погрузок/выгрузок из точек маршрута и списка машин.
+            self._postprocess_document(output_path, contract_data)
 
             logger.info(f"DOCX сохранён ({engine}): {output_path}")
             return output_path
@@ -217,25 +280,683 @@ class ContractGenerator:
     # ПОСТОБРАБОТКА ДОКУМЕНТА
     # ─────────────────────────────────────────────────────────
 
-    def _postprocess_document(self, path: str) -> None:
+    def _postprocess_document(self, path: str, contract_data: Any = None) -> None:
         """
         Дополняет готовый документ тем, что не умеет движок шаблонов:
 
           * переносы строк внутри значения («\\n» в loading_block) →
             разрывы строк Word: docxtpl вставляет «\\n» как обычный текст,
             и без этого многострочные блоки склеились бы в одну строку;
+          * подстановка таблиц погрузок/выгрузок вместо меток
+            {{LOADING_TABLE_HERE}} / {{UNLOADING_TABLE_HERE}} (если они есть
+            в шаблоне) — см. _replace_marker;
           * удаление пустых строк таблицы ТС (в шаблоне их 12, заполняются
             только нужные).
+
+        contract_data — ContractData (или совместимый dict) с точками маршрута
+        и списком машин. Необязателен: без него таблицы по погрузкам не
+        строятся, остальная постобработка работает как раньше.
         """
         try:
             from docx import Document
 
             doc = Document(path)
             self._convert_newlines_to_breaks(doc)
+
+            if contract_data is not None:
+                data = ContractData.coerce(contract_data)
+                self._insert_route_tables(doc, data)
+
             self._remove_empty_vehicle_rows(doc)
             doc.save(path)
         except Exception as e:
             logger.warning(f"Не удалось выполнить постобработку документа: {e}")
+
+    # ─────────────────────────────────────────────────────────
+    # ТАБЛИЦЫ ПОГРУЗОК / ВЫГРУЗОК В БЛОКАХ 3.2 И 3.3
+    # ─────────────────────────────────────────────────────────
+
+    def _insert_route_tables(self, doc, contract_data: ContractData) -> None:
+        """
+        Подставляет таблицы машин вместо меток в блоках 3.2 и 3.3.
+
+        Точки маршрута берутся ровно в том же виде, что и для старого
+        плоского блока: сначала loadings/unloadings из данных, затем
+        исторические поля contract["loading_address"] /
+        contract["unloading_address_1..2"].
+
+        Если метки в шаблоне нет, _replace_marker ничего не делает —
+        работает старый путь ({{loading_block}} / {{unloading_block}}).
+
+        Важно про нумерацию и привязку (исправление бага «Выгрузка 1, 2, 4»):
+          * номер блока в заголовке — порядковый номер ВЫВЕДЕННОГО блока
+            (1, 2, 3… без пропусков);
+          * loading_index / unloading_index машины — исходный индекс точки
+            в массиве UI (1-based) и с нумерацией блоков не связан.
+
+        Перед вставкой убираются старые таблицы машин из блоков 3.2 и 3.3
+        ({{car_1..12_*}}): их роль теперь выполняют таблицы по погрузкам,
+        и без удаления одни и те же VIN печатались дважды.
+        """
+        loadings, unloadings = self._resolve_route_points(contract_data)
+        vehicles = contract_data.vehicles
+
+        # В шаблоне нового образца таблица машин стоит сразу после метки —
+        # это дубль таблиц по погрузкам. В старом шаблоне меток нет, поэтому
+        # ничего не удаляется и fallback работает как раньше.
+        removed = self._remove_legacy_vehicle_tables(doc)
+        if removed:
+            logger.info(
+                f"Удалено старых таблиц машин (дубли в блоках 3.2/3.3): {removed}"
+            )
+
+        if loadings:
+            inserted = self._replace_marker(
+                doc,
+                self.LOADING_TABLE_MARKER,
+                loadings,
+                vehicles,
+                index_field="loading_index",
+                title_prefix="Погрузка",
+                no_point_title="Машины без привязки к конкретной погрузке",
+            )
+            logger.info(
+                f"Блок 3.2: точек {len(loadings)}, выведено блоков {inserted}"
+            )
+        if unloadings:
+            inserted = self._replace_marker(
+                doc,
+                self.UNLOADING_TABLE_MARKER,
+                unloadings,
+                vehicles,
+                index_field="unloading_index",
+                title_prefix="Выгрузка",
+                no_point_title="Машины без привязки к конкретной выгрузке",
+            )
+            logger.info(
+                f"Блок 3.3: точек {len(unloadings)}, выведено блоков {inserted}"
+            )
+
+    def _remove_legacy_vehicle_tables(self, doc) -> int:
+        """
+        Убирает старые таблицы машин из блоков 3.2 «Погрузка» и 3.3 «Выгрузка».
+
+        В шаблоне таблиц машин две: в 3.1 «Груз» (перечень груза) и сразу
+        после метки {{LOADING_TABLE_HERE}} в 3.2. После перехода на таблицы
+        по погрузкам/выгрузкам вторая стала дублем: одни и те же VIN
+        печатались и в ней, и в таблицах погрузок. Таблицу в 3.1 не трогаем.
+
+        Возвращает число удалённых таблиц. Если меток в шаблоне нет
+        (старый шаблон) — возвращает 0 и ничего не меняет.
+        """
+        removed = 0
+        for marker in (self.LOADING_TABLE_MARKER, self.UNLOADING_TABLE_MARKER):
+            paragraph = self._find_marker_paragraph(doc, marker)
+            if paragraph is None:
+                continue
+            removed += self._remove_vehicle_tables_after(doc, paragraph)
+
+        return removed
+
+    def _remove_vehicle_tables_after(self, doc, paragraph) -> int:
+        """
+        Удаляет таблицы машин, идущие сразу после абзаца-метки.
+
+        Пустые абзацы между меткой и таблицей пропускаются. Просмотр
+        прекращается на первом непустом абзаце или на таблице другого вида
+        (реквизиты, шапка договора) — чужие таблицы не затрагиваются.
+        """
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+
+        removed = 0
+        node = paragraph._p.getnext()
+
+        while node is not None:
+            next_node = node.getnext()
+            tag = node.tag.split("}")[1]
+
+            if tag == "tbl":
+                if not self._is_vehicle_table(Table(node, doc)):
+                    break
+                node.getparent().remove(node)
+                removed += 1
+            elif tag == "p":
+                if Paragraph(node, doc).text.strip():
+                    break
+            else:
+                break
+
+            node = next_node
+
+        return removed
+
+    def _resolve_route_points(self, contract_data: ContractData):
+        """
+        Возвращает (loadings, unloadings) — точки маршрута с учётом
+        исторических полей в contract (как в _build_replacements_map).
+        """
+        contract = contract_data.contract
+        loadings = list(contract_data.loadings)
+        unloadings = list(contract_data.unloadings)
+
+        if not loadings and contract.get("loading_address"):
+            loadings = [{
+                "address": contract.get("loading_address", ""),
+                "date": contract.get("loading_date", ""),
+                "time_window": contract.get("loading_time_window", ""),
+            }]
+
+        if not unloadings:
+            legacy = []
+            if contract.get("unloading_address_1"):
+                legacy.append({
+                    "address": contract.get("unloading_address_1", ""),
+                    "date": contract.get("unloading_date", ""),
+                    "time_window": contract.get("unloading_time_window", ""),
+                })
+            if contract.get("unloading_address_2"):
+                legacy.append({
+                    "address": contract.get("unloading_address_2", ""),
+                    "date": contract.get("unloading_date", ""),
+                    "time_window": contract.get("unloading_time_window", ""),
+                })
+            unloadings = legacy
+
+        return loadings, unloadings
+
+    def _replace_marker(
+        self,
+        doc,
+        marker_text: str,
+        points: List[Dict[str, Any]],
+        vehicles: List[Dict[str, Any]],
+        index_field: str,
+        title_prefix: str,
+        no_point_title: str,
+    ) -> int:
+        """
+        Заменяет абзац-метку на последовательность «абзац-заголовок +
+        таблица + пустой абзац» для каждой непустой точки маршрута.
+
+        Возвращает число выведенных блоков. Если метки в документе нет —
+        возвращает 0, ничего не меняя: это шаблон старого образца, где
+        работает плоский {{loading_block}}.
+
+        Два разных номера, которые нельзя путать:
+          * ``index`` — исходный номер точки в массиве UI (1-based). Именно
+            он лежит в vehicle[index_field] и только по нему машина
+            привязывается к точке;
+          * ``shown`` — порядковый номер выведенного блока (1, 2, 3… без
+            пропусков), он и попадает в заголовок «Погрузка N: адрес».
+        Пропуск точки с пустым адресом больше не сдвигает нумерацию и не
+        переносит машины в чужую таблицу.
+
+        Порядок работ:
+          1. Находим абзац с текстом-меткой (с точностью до пробелов).
+          2. Собираем элементы в конце документа (doc.add_paragraph /
+             doc.add_table — другого способа python-docx не даёт).
+          3. Переносим их на место метки через lxml addnext.
+          4. Удаляем абзац с меткой.
+        """
+        paragraph = self._find_marker_paragraph(doc, marker_text)
+        if paragraph is None:
+            return 0
+
+        # Шаблон абзаца-заголовка: метка стоит там, где должен быть
+        # заголовок, поэтому берём её же (до переноса элементов).
+        head_template = self._outline_paragraph(paragraph)
+
+        elements = []
+        cargo = self._cargo_vehicles(vehicles)
+        shown = 0          # порядковый номер выведенного блока
+        hidden_ids = set()  # машины, чья точка пропущена из-за пустого адреса
+
+        for index, point in enumerate(points, 1):
+            # Привязка — строго по исходному индексу точки в UI.
+            assigned = [
+                v for v in cargo
+                if self._matches_index(v, index_field, index)
+            ]
+            if not assigned:
+                # Пустая погрузка/выгрузка: ни заголовка, ни таблицы.
+                logger.debug(f"{title_prefix} {index}: машин нет — блок пропущен")
+                continue
+
+            address = self._normalized_point_address(point)
+            if not address:
+                # Машины привязаны, но адреса нет — выводить нечего.
+                hidden_ids.update(id(v) for v in assigned)
+                logger.warning(
+                    f"Машины привязаны к точке «{title_prefix} {index}», "
+                    f"но адрес точки пуст — строк не выведено: {len(assigned)}"
+                )
+                continue
+
+            shown += 1
+            elements.append(self._make_point_heading(
+                doc, head_template,
+                f"{title_prefix} {shown}: {address}".strip(),
+            ))
+            elements.append(self._make_vehicle_table(doc, assigned))
+            elements.append(self._make_spacer(doc))
+
+        # Машины без привязки к конкретной точке («— (все)» в интерфейсе) и
+        # машины с несуществующей точкой. Машины пропущенных по адресу точек
+        # исключены: про них уже сказано в предупреждении выше — в чужую
+        # таблицу они попасть не должны.
+        unassigned = [
+            v for v in cargo
+            if not self._has_point(v, index_field, points)
+            and id(v) not in hidden_ids
+        ]
+        if unassigned:
+            elements.append(self._make_point_heading(
+                doc, head_template, no_point_title
+            ))
+            elements.append(self._make_vehicle_table(doc, unassigned))
+            elements.append(self._make_spacer(doc))
+
+        if not elements:
+            # Ни одной непустой точки и ни одной машины без привязки —
+            # оставляем явную пометку вместо пустого места.
+            elements.append(self._make_point_heading(
+                doc, head_template, self.NO_VEHICLES_TEXT
+            ))
+
+        # addnext вставляет каждый следующий элемент после предыдущего,
+        # поэтому порядок elements сохраняется.
+        anchor = paragraph._p
+        for element in elements:
+            anchor.addnext(element)
+            anchor = element
+
+        paragraph._p.getparent().remove(paragraph._p)
+
+        # В лог — только счётчики: адреса, VIN и марки в логах не место.
+        logger.info(
+            f"Метка {marker_text}: точек {len(points)}, выведено блоков {shown}, "
+            f"без привязки {len(unassigned)}, "
+            f"скрыто из-за пустых точек {len(hidden_ids)}"
+        )
+        return shown
+
+    def _find_marker_paragraph(self, doc, marker_text: str):
+        """
+        Абзац, текст которого равен метке (с точностью до пробелов).
+
+        Абзацы внутри таблиц и колонтитулов тоже просматриваются: метку
+        можно поставить в любом месте документа.
+        """
+        for paragraph in self._iter_paragraphs(doc):
+            if paragraph.text.strip() == marker_text:
+                return paragraph
+        return None
+
+    def _outline_paragraph(self, paragraph):
+        """
+        «Образец» форматирования абзаца-заголовка — сам абзац с меткой.
+
+        Копируем pPr (отступы, выравнивание, стиль, интервалы) и один run
+        как образец шрифта: заголовки погрузок должны выглядеть как
+        остальной текст документа.
+        """
+        from copy import deepcopy
+
+        props = paragraph._p.find(self._qname("pPr"))
+        sample_run = paragraph.runs[0]._r if paragraph.runs else None
+
+        return (
+            deepcopy(props) if props is not None else None,
+            deepcopy(sample_run) if sample_run is not None else None,
+        )
+
+    def _make_point_heading(self, doc, head_template: Any, text: str):
+        """Абзац-заголовок «Погрузка N: адрес» — жирный, вне таблицы."""
+        props, sample_run = head_template
+
+        paragraph = doc.add_paragraph()
+        if props is not None:
+            paragraph._p.insert(0, props)
+
+        run = paragraph.add_run(text)
+        self._copy_run_format(sample_run, run)
+
+        # Заголовок всегда жирный, даже если образец был обычным.
+        run.bold = True
+        if run.font.size is None and sample_run is None:
+            run.font.name = "Times New Roman"
+
+        return paragraph._p
+
+    def _make_spacer(self, doc):
+        """Пустой абзац-отступ после таблицы."""
+        paragraph = doc.add_paragraph()
+        return paragraph._p
+
+    def _make_vehicle_table(self, doc, vehicles: List[Dict[str, Any]]):
+        """
+        Таблица «№ | Марка/Модель | VIN-номер» по списку машин.
+
+        Порядок строк — порядок машин в исходном массиве, без сортировки.
+        Оформление повторяет таблицу машин из шаблона (блок 3.1): и шрифт,
+        и заливку ячейки, и границы. Копировать один шрифт нельзя — в
+        шаблоне шапка оформлена белым текстом на тёмной заливке, и без
+        заливки белый текст становится невидимым (белое на белом).
+        """
+        sample = self._sample_vehicle_table(doc)
+
+        table = doc.add_table(rows=1, cols=3)
+        table.style = self.VEHICLE_TABLE_STYLE
+        table.autofit = False
+
+        header_samples = list(sample.rows[0].cells) if sample is not None else []
+        data_samples = (
+            list(sample.rows[1].cells)
+            if (sample is not None and len(sample.rows) > 1)
+            else []
+        )
+
+        for index, (cell, title) in enumerate(
+            zip(table.rows[0].cells, self.VEHICLE_TABLE_HEADERS)
+        ):
+            self._fill_table_cell(
+                cell, title,
+                self._sample_cell(header_samples, index),
+                bold=True,
+            )
+
+        for number, vehicle in enumerate(vehicles, 1):
+            row = table.add_row()
+            values = (
+                str(number),
+                self._get_vehicle_brand(vehicle),
+                self._get_vehicle_vin(vehicle),
+            )
+            for index, (cell, value) in enumerate(zip(row.cells, values)):
+                self._fill_table_cell(
+                    cell, value,
+                    self._sample_cell(data_samples, index)
+                    or self._sample_cell(header_samples, index),
+                    bold=False,
+                )
+
+        self._set_grid_widths(table, self.VEHICLE_TABLE_COLUMN_WIDTHS_CM)
+
+        return table._tbl
+
+    @staticmethod
+    def _sample_cell(sample_cells, index: int):
+        """Ячейка-образец с нужным номером колонки (или None)."""
+        if sample_cells and index < len(sample_cells):
+            return sample_cells[index]
+        return None
+
+    def _sample_vehicle_table(self, doc):
+        """
+        Таблица машин из шаблона — образец оформления.
+
+        Это таблица блока 3.1 «Груз»: она остаётся в документе, в отличие
+        от таблицы в 3.2, которую генератор удаляет как дубль.
+        """
+        for existing in doc.tables:
+            if self._is_vehicle_table(existing):
+                return existing
+        return None
+
+    def _fill_table_cell(self, cell, text: str, sample_cell, bold: bool) -> None:
+        """
+        Пишет текст в ячейку, повторяя оформление ячейки-образца.
+
+        Из образца переносятся границы, заливка и отступы (tcPr без ширины)
+        плюс формат абзаца и шрифта. Ширину колонки задаёт генератор.
+        """
+        from copy import deepcopy
+
+        if sample_cell is not None:
+            self._apply_sample_cell_format(cell, sample_cell)
+
+        paragraph = cell.paragraphs[0]
+        sample_paragraph = (
+            sample_cell.paragraphs[0]
+            if (sample_cell is not None and sample_cell.paragraphs)
+            else None
+        )
+        # Сначала формат абзаца из образца (интервалы, отступы), потом своё
+        # выравнивание: иначе копия pPr перетёрла бы центр.
+        self._copy_paragraph_format(sample_paragraph, paragraph)
+        paragraph.alignment = 1  # WD_ALIGN_PARAGRAPH.CENTER
+
+        sample_run = (
+            sample_paragraph.runs[0]._r
+            if (sample_paragraph is not None and sample_paragraph.runs)
+            else None
+        )
+        self._set_cell_text(paragraph, text, sample_run, bold=bold)
+
+    @classmethod
+    def _apply_sample_cell_format(cls, cell, sample_cell) -> None:
+        """
+        Копирует tcPr образца (заливка, границы, отступы) в нашу ячейку.
+
+        Ширина и объединения не переносятся: у наших колонок свои размеры,
+        а gridSpan/vMerge из образца сломали бы сетку таблицы.
+        """
+        from copy import deepcopy
+
+        sample_props = sample_cell._tc.find(cls._qname("tcPr"))
+        if sample_props is None:
+            return
+
+        copied = deepcopy(sample_props)
+        for tag in ("tcW", "gridSpan", "vMerge", "hMerge"):
+            node = copied.find(cls._qname(tag))
+            if node is not None:
+                copied.remove(node)
+
+        existing = cell._tc.find(cls._qname("tcPr"))
+        if existing is not None:
+            cell._tc.remove(existing)
+        cell._tc.insert(0, copied)
+
+    @classmethod
+    def _set_grid_widths(cls, table, widths_cm) -> None:
+        """
+        Фиксирует ширину колонок таблицы: tblGrid + tblW + tblLayout.
+
+        Одного cell.width мало: Word считает колонки по tblGrid, а его
+        python-docx при создании таблицы делает равномерным.
+        """
+        from docx.shared import Cm, Emu
+
+        emu_widths = [Cm(width) for width in widths_cm]
+        # Cm() возвращает Length (подкласс int), а sum() даёт обычный int —
+        # приводим обратно, чтобы пользоваться .twips.
+        total = Emu(sum(emu_widths))
+
+        props = table._tbl.tblPr
+        layout = props.get_or_add_tblLayout()
+        layout.type = "fixed"
+
+        tbl_width = props.find(cls._qname("tblW"))
+        if tbl_width is None:
+            tbl_width = props.makeelement(cls._qname("tblW"), {})
+            props.insert(0, tbl_width)
+        tbl_width.set(cls._qname("type"), "dxa")
+        tbl_width.set(cls._qname("w"), str(int(total.twips)))
+
+        for grid_col, width in zip(table._tbl.tblGrid, emu_widths):
+            grid_col.set(cls._qname("w"), str(int(Emu(width).twips)))
+
+        for row in table.rows:
+            for cell, width in zip(row.cells, emu_widths):
+                cell.width = width
+
+    @classmethod
+    def _set_cell_text(cls, paragraph, text: str, sample_run, bold: bool = False) -> None:
+        """Пишет текст в абзац ячейки, копируя шрифт образца."""
+        run = paragraph.add_run(text)
+        cls._copy_run_format(sample_run, run)
+        run.bold = bold
+        if run.font.size is None and sample_run is None:
+            run.font.name = "Times New Roman"
+
+    # ─────────────────────────────────────────────────────────
+    # Форматирование и данные строк таблиц
+    # ─────────────────────────────────────────────────────────
+
+    def _cargo_vehicles(self, vehicles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Машины, которые попадают в таблицы погрузок/выгрузок.
+
+        Тягач, полуприцеп и прицеп исключаются: они описаны в блоке 3.1.
+        Строки без VIN и без марки (пустые) тоже не выводятся.
+        """
+        result = []
+        for vehicle in vehicles:
+            if vehicle.get("vehicle_type") in self.NON_CARGO_VEHICLE_TYPES:
+                continue
+            if not (self._get_vehicle_vin(vehicle) or self._get_vehicle_brand(vehicle)):
+                continue
+            result.append(vehicle)
+        return result
+
+    @staticmethod
+    def _is_route_vehicle(vehicle: Dict[str, Any]) -> bool:
+        """
+        True, если машину вообще можно выводить в таблицах блоков 3.2 / 3.3.
+
+        Тягач, полуприцеп и прицеп описываются в блоке 3.1, а строка без
+        VIN и без марки — это пустая строка таблицы UI.
+        """
+        if vehicle.get("vehicle_type") in ContractGenerator.NON_CARGO_VEHICLE_TYPES:
+            return False
+        return bool(
+            ContractGenerator._get_vehicle_vin(vehicle)
+            or ContractGenerator._get_vehicle_brand(vehicle)
+        )
+
+    @staticmethod
+    def _raw_point_index(vehicle: Dict[str, Any], index_field: str) -> int:
+        """
+        Исходный индекс точки из vehicle[index_field]: 1-based, 0 — нет привязки.
+
+        Никаких фильтров по типу ТС и заполненности здесь нет: это чистый
+        разбор значения, одинаково нужный и привязке (``_matches_index``),
+        и проверке «есть ли вообще привязка» (``_has_point``).
+        """
+        raw = vehicle.get(index_field, 0)
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            return 0
+
+        try:
+            value = int(raw)
+        except (ValueError, TypeError):
+            return 0
+
+        return value if value > 0 else 0
+
+    def _matches_index(self, vehicle: Dict[str, Any], index_field: str, index: int) -> bool:
+        """
+        True, если машина привязана именно к точке с ИСХОДНЫМ номером index.
+
+        index — номер точки в массиве UI (1-based), а не порядковый номер
+        выведенного блока: пропуск пустой точки его не меняет.
+        """
+        if not self._is_route_vehicle(vehicle):
+            return False
+        return self._raw_point_index(vehicle, index_field) == index
+
+    def _has_point(self, vehicle: Dict[str, Any], index_field: str,
+                   points: Optional[List[Dict[str, Any]]] = None) -> bool:
+        """
+        True, если машина привязана к реально выводимой точке маршрута.
+
+        0 / None / пустая строка («— (все)» в интерфейсе) означают, что
+        привязки нет.
+
+        Если передан массив points, дополнительно проверяется, что точка
+        с таким номером существует и её адрес не пуст. Машина, привязанная
+        к несуществующей точке, попадёт в блок «Машины без привязки…»;
+        машина, чья точка пропущена из-за пустого адреса, не выводится
+        вовсе — про неё пишется предупреждение, а не строка в чужой
+        таблице.
+
+        Вызывается для строк, уже отфильтрованных через _cargo_vehicles,
+        поэтому повторно тип ТС и наличие VIN здесь не проверяются.
+        """
+        index = self._raw_point_index(vehicle, index_field)
+        if index <= 0:
+            return False
+
+        if points is not None:
+            if index > len(points):
+                return False
+            point = points[index - 1]
+            if not self._normalized_point_address(point):
+                return False
+
+        return True
+
+    @staticmethod
+    def _get_vehicle_brand(vehicle: Dict[str, Any]) -> str:
+        return ContractGenerator._single_line(vehicle.get("brand_model") or "")
+
+    @staticmethod
+    def _get_vehicle_vin(vehicle: Dict[str, Any]) -> str:
+        return ContractGenerator._single_line(vehicle.get("vin") or "")
+
+    @staticmethod
+    def _normalized_point_address(point: Dict[str, Any]) -> str:
+        """Адрес точки одной строкой: переносы строк в заголовке не нужны."""
+        address = str(point.get("address", "") or "")
+        return re.sub(r"\s+", " ", address).strip()
+
+    # ─────────────────────────────────────────────────────────
+    # Копирование форматирования (без новых зависимостей)
+    # ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _qname(tag: str) -> str:
+        """Имя элемента WordprocessingML с пространством имён."""
+        return "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}" + tag
+
+    @classmethod
+    def _copy_paragraph_format(cls, sample, paragraph) -> None:
+        """
+        Копирует форматирование абзаца-образца (если образец найден).
+
+        Существующий pPr заменяется: двух pPr в одном абзаце быть не должно,
+        иначе Word берёт первый и наш выравнивание/отступы теряются.
+        """
+        if sample is None:
+            return
+
+        from copy import deepcopy
+
+        props = sample._p.find(cls._qname("pPr"))
+        if props is None:
+            return
+
+        existing = paragraph._p.find(cls._qname("pPr"))
+        if existing is not None:
+            paragraph._p.remove(existing)
+
+        paragraph._p.insert(0, deepcopy(props))
+
+    @classmethod
+    def _copy_run_format(cls, sample_run, run) -> None:
+        """Копирует шрифт (имя, размер, начертание) из образца."""
+        if sample_run is None:
+            return
+
+        from copy import deepcopy
+
+        props = sample_run.find(cls._qname("rPr"))
+        if props is None:
+            return
+
+        run._r.insert(0, deepcopy(props))
 
     def _convert_newlines_to_breaks(self, doc) -> None:
         """Превращает «\\n» внутри runs в разрывы строк Word."""
@@ -688,12 +1409,25 @@ class ContractGenerator:
                 })
             unloadings = legacy
 
+        # legacy: используется старыми шаблонами без метки
+        # LOADING_TABLE_HERE / UNLOADING_TABLE_HERE — плоский текст с
+        # погрузками/выгрузками и VIN-ами. Оставлен как fallback, пока в
+        # шаблоне стоит {{loading_block}} вместо {{LOADING_TABLE_HERE}}.
         replacements["loading_block"] = self._build_points_block_with_vehicles(
             loadings, "Погрузка", all_vehicles, "loading_index"
         )
         replacements["unloading_block"] = self._build_points_block_with_vehicles(
             unloadings, "Выгрузка", all_vehicles, "unloading_index"
         )
+
+        # Метки под таблицы погрузок/выгрузок (блоки 3.2 и 3.3).
+        # docxtpl не умеет вставлять таблицы, поэтому {{LOADING_TABLE_HERE}}
+        # превращается в текстовый маркер LOADING_TABLE_HERE, который
+        # постобработка (_postprocess_document) находит и заменяет на
+        # последовательность «жирный заголовок + таблица». В шаблонах без
+        # метки эти ключи просто не используются.
+        replacements[self.LOADING_TABLE_PLACEHOLDER] = self.LOADING_TABLE_MARKER
+        replacements[self.UNLOADING_TABLE_PLACEHOLDER] = self.UNLOADING_TABLE_MARKER
 
         # В лог пишем только размеры блоков: содержимое содержит адреса
         # погрузки/выгрузки, которым в логах не место (Шаг 4 задания).
@@ -785,8 +1519,43 @@ class ContractGenerator:
         replacements["payment_days_words"] = self._days_to_words(payment_days)
         replacements["penalty_rate"] = "5000"
 
+        # Данные из справочников и импорта приходят с переносами строк и
+        # задвоенными пробелами: «Общество с ограниченной ответственностью\n
+        # "ТЕХНОЛОГИСТИКА"». В договоре такой перенос превращался в <w:br/>,
+        # и Word при выравнивании по ширине растягивал строку перед разрывом:
+        # «Общество      с      ограниченной      ответственностью».
+        self._flatten_replacements(replacements)
+
         logger.debug(f"Сформировано {len(replacements)} плейсхолдеров")
         return replacements
+
+    # ─────────────────────────────────────────────────────────
+    # Нормализация значений
+    # ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _single_line(value: Any) -> str:
+        """
+        Значение одной строкой: переносы строк, табуляции и лишние пробелы —
+        в один обычный пробел.
+        """
+        return re.sub(r"\s+", " ", str(value if value is not None else "")).strip()
+
+    @classmethod
+    def _flatten_replacements(cls, replacements: Dict[str, str]) -> None:
+        """
+        Убирает переносы строк из значений, которые должны быть однострочными.
+
+        Многострочные блоки ({{loading_block}} / {{unloading_block}}, legacy
+        для старых шаблонов) не трогаем: там переносы строк несут смысл.
+        """
+        for name, value in replacements.items():
+            if name in cls.MULTILINE_PLACEHOLDERS:
+                continue
+            if not isinstance(value, str) or not value:
+                continue
+            if re.search(r"[\r\n\t]|\s{2,}", value):
+                replacements[name] = cls._single_line(value)
 
     # ─────────────────────────────────────────────────────────
     # Краткая метка точки для таблицы ТС

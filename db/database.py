@@ -44,6 +44,7 @@ INDEXES = (
     ("idx_contracts_carrier",         "contracts(carrier_id)"),
     ("idx_contract_points_contract",  "contract_points(contract_id)"),
     ("idx_vehicles_carrier",          "vehicles(carrier_id)"),
+    ("idx_vehicles_contract",         "vehicles(contract_id)"),
     ("idx_vehicles_vin",              "vehicles(vin)"),
     ("idx_drivers_full_name",         "drivers(full_name)"),
     ("idx_address_book_point_address", "address_book(point_type, address)"),
@@ -123,6 +124,7 @@ def _needs_migration(cursor: sqlite3.Cursor) -> bool:
         ("drivers", "passport_issuer"),
         ("drivers", "phone"),
         ("address_book", "city"),
+        ("vehicles", "contract_id"),
     )
     for table, column in required_columns:
         if not _column_exists(cursor, table, column):
@@ -235,13 +237,15 @@ def init_database() -> None:
         CREATE TABLE IF NOT EXISTS vehicles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             carrier_id INTEGER,
+            contract_id INTEGER,
             vin TEXT,
             brand_model TEXT,
             plate_number TEXT,
             year INTEGER,
             color TEXT,
             vehicle_type TEXT,
-            FOREIGN KEY (carrier_id) REFERENCES carriers(id) ON DELETE SET NULL
+            FOREIGN KEY (carrier_id) REFERENCES carriers(id) ON DELETE SET NULL,
+            FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE
         )
     """)
 
@@ -343,6 +347,13 @@ def init_database() -> None:
                 logger.info(f"Добавлена колонка drivers.{col_name}")
             except Exception as e:
                 logger.warning(f"Не удалось добавить колонку {col_name}: {e}")
+
+    if not _column_exists(cursor, "vehicles", "contract_id"):
+        cursor.execute(
+            "ALTER TABLE vehicles ADD COLUMN contract_id INTEGER "
+            "REFERENCES contracts(id) ON DELETE CASCADE"
+        )
+        logger.info("Добавлена колонка vehicles.contract_id")
 
     # ── Миграция: address_book.city ──
     if not _column_exists(cursor, "address_book", "city"):
@@ -1105,16 +1116,24 @@ def delete_organization(org_id: int, is_carrier: bool = False) -> bool:
 # CRUD: ТС
 # ─────────────────────────────────────────────────────────────
 
-def save_vehicles(vehicles: List[Dict[str, Any]], carrier_id: Optional[int] = None) -> List[int]:
-    conn = get_connection()
+def save_vehicles(
+    vehicles: List[Dict[str, Any]],
+    carrier_id: Optional[int] = None,
+    contract_id: Optional[int] = None,
+    conn: Optional[sqlite3.Connection] = None,
+) -> List[int]:
+    own_connection = conn is None
+    if conn is None:
+        conn = get_connection()
     cursor = conn.cursor()
     ids = []
     for vehicle in vehicles:
         cursor.execute("""
-            INSERT INTO vehicles (carrier_id, vin, brand_model, plate_number, year, color, vehicle_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO vehicles (carrier_id, contract_id, vin, brand_model, plate_number, year, color, vehicle_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             carrier_id,
+            contract_id,
             vehicle.get("vin", ""),
             vehicle.get("brand_model", ""),
             vehicle.get("plate_number", ""),
@@ -1123,8 +1142,9 @@ def save_vehicles(vehicles: List[Dict[str, Any]], carrier_id: Optional[int] = No
             vehicle.get("vehicle_type", "Тягач"),
         ))
         ids.append(cursor.lastrowid)
-    conn.commit()
-    conn.close()
+    if own_connection:
+        conn.commit()
+        conn.close()
     logger.info(f"Сохранено ТС: {len(ids)}")
     return ids
 
@@ -1133,8 +1153,10 @@ def save_vehicles(vehicles: List[Dict[str, Any]], carrier_id: Optional[int] = No
 # Сохранение договора + точек
 # ─────────────────────────────────────────────────────────────
 
-def save_contract(contract_data: Dict[str, Any]) -> int:
-    conn = get_connection()
+def save_contract(contract_data: Dict[str, Any], conn: Optional[sqlite3.Connection] = None) -> int:
+    own_connection = conn is None
+    if conn is None:
+        conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO contracts (
@@ -1158,14 +1180,20 @@ def save_contract(contract_data: Dict[str, Any]) -> int:
         contract_data.get("carrier_id", None),
     ))
     contract_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    if own_connection:
+        conn.commit()
+        conn.close()
     logger.info(f"Договор сохранён: ID={contract_id}")
     return contract_id
 
 
-def save_contract_points(contract_id: int, loadings: List[Dict], unloadings: List[Dict]) -> None:
-    conn = get_connection()
+def save_contract_points(
+    contract_id: int, loadings: List[Dict], unloadings: List[Dict],
+    conn: Optional[sqlite3.Connection] = None,
+) -> None:
+    own_connection = conn is None
+    if conn is None:
+        conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM contract_points WHERE contract_id = ?", (contract_id,))
     for i, l in enumerate(loadings):
@@ -1180,8 +1208,29 @@ def save_contract_points(contract_id: int, loadings: List[Dict], unloadings: Lis
             "VALUES (?, 'unloading', ?, ?, ?, ?)",
             (contract_id, i, u.get("address", ""), u.get("date", ""), u.get("time_window", ""))
         )
-    conn.commit()
-    conn.close()
+    if own_connection:
+        conn.commit()
+        conn.close()
+
+
+def save_contract_with_details(
+    contract_data: Dict[str, Any], loadings: List[Dict],
+    unloadings: List[Dict], vehicles: List[Dict[str, Any]],
+) -> int:
+    """Сохраняет договор, маршрут и транспорт одной транзакцией."""
+    conn = get_connection()
+    try:
+        contract_id = save_contract(contract_data, conn=conn)
+        save_contract_points(contract_id, loadings, unloadings, conn=conn)
+        if vehicles:
+            save_vehicles(vehicles, contract_id=contract_id, conn=conn)
+        conn.commit()
+        return contract_id
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def load_contract_points(contract_id: int) -> Dict[str, List[Dict]]:

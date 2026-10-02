@@ -24,17 +24,46 @@ from PyQt5.QtWidgets import (
     QDateEdit, QTimeEdit, QDoubleSpinBox, QComboBox, QTextEdit,
     QLabel, QGroupBox, QHBoxLayout, QScrollArea, QRadioButton,
     QMessageBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QPushButton, QAbstractItemView,
+    QHeaderView, QAbstractItemView,
 )
 from PyQt5.QtCore import QDate, QTime, pyqtSignal, Qt
 
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
+from ui import theme
 from ui.address_book_dialog import AddressBookDialog
 
 logger = logging.getLogger("ui.tabs.contract_tab")
 
 MAX_POINTS = 10
+
+
+class PlanDateEdit(QDateEdit):
+    """Дата с календарём без случайного изменения колёсиком мыши."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class PlanTimeEdit(QTimeEdit):
+    """Время, которое меняется только при явном редактировании."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoWheelComboBox(QComboBox):
+    """Не переключает пункт при прокрутке формы."""
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """Не меняет стоимость при прокрутке формы."""
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 class ContractTab(TabMixin, QWidget):
@@ -95,23 +124,15 @@ class ContractTab(TabMixin, QWidget):
         route_layout.addWidget(loading_label)
 
         load_btns = QHBoxLayout()
-        self.btn_add_loading = QPushButton("➕ Добавить погрузку")
+        self.btn_add_loading = theme.secondary_button("Добавить погрузку")
         self.btn_add_loading.clicked.connect(self._on_add_loading)
         load_btns.addWidget(self.btn_add_loading)
 
-        self.btn_remove_loading = QPushButton("✕ Удалить погрузку")
+        self.btn_remove_loading = theme.danger_button("Удалить погрузку")
         self.btn_remove_loading.clicked.connect(self._on_remove_loading)
         load_btns.addWidget(self.btn_remove_loading)
 
-        self.btn_book_loading = QPushButton("📋 Из справочника")
-        self.btn_book_loading.setStyleSheet("""
-            QPushButton {
-                background-color: #FFC107; color: #212121;
-                font-weight: bold; padding: 6px 14px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #FFB300; }
-        """)
+        self.btn_book_loading = theme.secondary_button("Из справочника")
         self.btn_book_loading.clicked.connect(lambda: self._on_open_book("loading"))
         load_btns.addWidget(self.btn_book_loading)
 
@@ -134,23 +155,15 @@ class ContractTab(TabMixin, QWidget):
         route_layout.addWidget(unloading_label)
 
         unload_btns = QHBoxLayout()
-        self.btn_add_unloading = QPushButton("➕ Добавить выгрузку")
+        self.btn_add_unloading = theme.secondary_button("Добавить выгрузку")
         self.btn_add_unloading.clicked.connect(self._on_add_unloading)
         unload_btns.addWidget(self.btn_add_unloading)
 
-        self.btn_remove_unloading = QPushButton("✕ Удалить выгрузку")
+        self.btn_remove_unloading = theme.danger_button("Удалить выгрузку")
         self.btn_remove_unloading.clicked.connect(self._on_remove_unloading)
         unload_btns.addWidget(self.btn_remove_unloading)
 
-        self.btn_book_unloading = QPushButton("📋 Из справочника")
-        self.btn_book_unloading.setStyleSheet("""
-            QPushButton {
-                background-color: #FFC107; color: #212121;
-                font-weight: bold; padding: 6px 14px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #FFB300; }
-        """)
+        self.btn_book_unloading = theme.secondary_button("Из справочника")
         self.btn_book_unloading.clicked.connect(lambda: self._on_open_book("unloading"))
         unload_btns.addWidget(self.btn_book_unloading)
 
@@ -172,88 +185,42 @@ class ContractTab(TabMixin, QWidget):
         # ═══════════════════════════════════════════════════════════
         # ── ПЛАНОВЫЕ ДАТЫ (для шаблона договора) ──
         # ═══════════════════════════════════════════════════════════
-        plan_group = QGroupBox("📅 Плановые даты (для шаблона договора)")
-        plan_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                background-color: #E3F2FD;
-                border: 2px solid #2196F3;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-                color: #0D47A1;
-            }
-        """)
+        plan_group = QGroupBox("Плановые даты (для шаблона договора)")
         plan_layout = QFormLayout(plan_group)
 
-        self.loading_plan_date = QDateEdit()
+        self.loading_plan_date = PlanDateEdit()
         self.loading_plan_date.setDisplayFormat("dd.MM.yyyy")
         self.loading_plan_date.setCalendarPopup(True)
         self.loading_plan_date.setDate(QDate.currentDate())
-        self.loading_plan_date.setStyleSheet("""
-            QDateEdit {
-                font-weight: bold;
-                background-color: #FFF9C4;
-                padding: 4px;
-                border: 1px solid #FBC02D;
-                border-radius: 3px;
-            }
-        """)
+        self.loading_plan_date.setFixedWidth(150)
+        self.loading_plan_date.setToolTip("Выберите дату через стрелку календаря или введите вручную")
         plan_layout.addRow("Плановая дата подачи ТС под погрузку:", self.loading_plan_date)
 
         time_layout = QHBoxLayout()
 
-        self.loading_plan_time_from = QTimeEdit()
+        self.loading_plan_time_from = PlanTimeEdit()
         self.loading_plan_time_from.setDisplayFormat("HH:mm")
         self.loading_plan_time_from.setTime(QTime(8, 0))
-        self.loading_plan_time_from.setStyleSheet("""
-            QTimeEdit {
-                font-weight: bold;
-                background-color: #FFF9C4;
-                padding: 4px;
-                border: 1px solid #FBC02D;
-                border-radius: 3px;
-            }
-        """)
+        self.loading_plan_time_from.setFixedWidth(90)
         time_layout.addWidget(QLabel("с"))
         time_layout.addWidget(self.loading_plan_time_from)
 
-        self.loading_plan_time_to = QTimeEdit()
+        self.loading_plan_time_to = PlanTimeEdit()
         self.loading_plan_time_to.setDisplayFormat("HH:mm")
         self.loading_plan_time_to.setTime(QTime(20, 0))
-        self.loading_plan_time_to.setStyleSheet("""
-            QTimeEdit {
-                font-weight: bold;
-                background-color: #FFF9C4;
-                padding: 4px;
-                border: 1px solid #FBC02D;
-                border-radius: 3px;
-            }
-        """)
+        self.loading_plan_time_to.setFixedWidth(90)
         time_layout.addWidget(QLabel("по"))
         time_layout.addWidget(self.loading_plan_time_to)
         time_layout.addStretch()
 
         plan_layout.addRow("Время подачи:", time_layout)
 
-        self.unloading_plan_date = QDateEdit()
+        self.unloading_plan_date = PlanDateEdit()
         self.unloading_plan_date.setDisplayFormat("dd.MM.yyyy")
         self.unloading_plan_date.setCalendarPopup(True)
         self.unloading_plan_date.setDate(QDate.currentDate().addDays(3))
-        self.unloading_plan_date.setStyleSheet("""
-            QDateEdit {
-                font-weight: bold;
-                background-color: #FFF9C4;
-                padding: 4px;
-                border: 1px solid #FBC02D;
-                border-radius: 3px;
-            }
-        """)
+        self.unloading_plan_date.setFixedWidth(150)
+        self.unloading_plan_date.setToolTip("Выберите дату через стрелку календаря или введите вручную")
         plan_layout.addRow("Плановая дата завершения выгрузки:", self.unloading_plan_date)
 
         layout.addWidget(plan_group)
@@ -264,27 +231,14 @@ class ContractTab(TabMixin, QWidget):
         price_group = QGroupBox("Стоимость услуг")
         price_layout = QFormLayout(price_group)
 
-        self.carrier_type = QComboBox()
+        self.carrier_type = NoWheelComboBox()
         self.carrier_type.addItems([
             "ООО (с НДС)",
             "ИП с НДС",
             "ИП без НДС",
         ])
         self.carrier_type.setCurrentIndex(0)
-        self.carrier_type.setStyleSheet("""
-            QComboBox {
-                font-weight: bold;
-                font-size: 13px;
-                padding: 6px;
-                background-color: #FFF9C4;
-                border: 2px solid #FBC02D;
-                border-radius: 3px;
-                color: #BF360C;
-            }
-            QComboBox:hover { background-color: #FFF59D; }
-            QComboBox::drop-down { border: none; }
-        """)
-        price_layout.addRow("🏢 Тип перевозчика *", self.carrier_type)
+        price_layout.addRow("Тип перевозчика *", self.carrier_type)
 
         self.vat_type_label = QLabel("Тип стоимости:")
         self.vat_type_layout = QHBoxLayout()
@@ -296,7 +250,7 @@ class ContractTab(TabMixin, QWidget):
         self.vat_type_layout.addStretch()
         price_layout.addRow(self.vat_type_label, self.vat_type_layout)
 
-        self.price_input = QDoubleSpinBox()
+        self.price_input = NoWheelDoubleSpinBox()
         self.price_input.setRange(0, 100000000)
         self.price_input.setDecimals(2)
         self.price_input.setSuffix(" ₽")
@@ -307,25 +261,21 @@ class ContractTab(TabMixin, QWidget):
         self.vat_rate.setPlaceholderText("22")
         self.vat_rate.setMaxLength(2)
         self.vat_rate.setText("22")
-        self.vat_rate.setStyleSheet("""
-            QLineEdit {
-                font-weight: bold;
-                background-color: #FFF9C4;
-                border: 1px solid #FBC02D;
-                border-radius: 3px;
-                padding: 3px;
-            }
-        """)
         price_layout.addRow("Ставка НДС (%)", self.vat_rate)
 
         self.price_with_vat = QLineEdit()
         self.price_with_vat.setReadOnly(True)
-        self.price_with_vat.setStyleSheet("background-color: #f0f0f0; font-weight: bold;")
+        # Оформление «только для чтения» берётся из темы (ui/theme.py):
+        # локальный стиль нужен потому, что Qt не пересчитывает QSS при
+        # изменении свойства readOnly у уже отрисованного поля.
+        self.price_with_vat.setProperty("readonlyField", True)
+        self.price_with_vat.setStyleSheet(theme.readonly_field_qss())
         price_layout.addRow("Стоимость (с НДС)", self.price_with_vat)
 
         self.price_without_vat = QLineEdit()
         self.price_without_vat.setReadOnly(True)
-        self.price_without_vat.setStyleSheet("background-color: #f0f0f0; font-weight: bold;")
+        self.price_without_vat.setProperty("readonlyField", True)
+        self.price_without_vat.setStyleSheet(theme.readonly_field_qss())
         price_layout.addRow("Стоимость (без НДС)", self.price_without_vat)
 
         self.payment_days = QLineEdit()
@@ -342,7 +292,7 @@ class ContractTab(TabMixin, QWidget):
 
         self.special_conditions = QTextEdit()
         self.special_conditions.setPlaceholderText("Дополнительные условия договора...")
-        self.special_conditions.setMaximumHeight(100)
+        self.special_conditions.setFixedHeight(200)
         special_layout.addWidget(self.special_conditions)
 
         layout.addWidget(special_group)
@@ -421,28 +371,14 @@ class ContractTab(TabMixin, QWidget):
         if "без НДС" in carrier_type:
             self.vat_rate.setText("0")
             self.vat_rate.setReadOnly(True)
-            self.vat_rate.setStyleSheet("""
-                QLineEdit {
-                    font-weight: bold;
-                    background-color: #E0E0E0;
-                    color: #666;
-                    border: 1px solid #BDBDBD;
-                    border-radius: 3px;
-                    padding: 3px;
-                }
-            """)
+            # Заблокированное поле оформляет тема (цвета — из активной палитры)
+            self.vat_rate.setProperty("readonlyField", True)
+            self.vat_rate.setStyleSheet(theme.readonly_field_qss())
             self.radio_without_vat.setChecked(True)
         else:
             self.vat_rate.setReadOnly(False)
-            self.vat_rate.setStyleSheet("""
-                QLineEdit {
-                    font-weight: bold;
-                    background-color: #FFF9C4;
-                    border: 1px solid #FBC02D;
-                    border-radius: 3px;
-                    padding: 3px;
-                }
-            """)
+            self.vat_rate.setProperty("readonlyField", False)
+            self.vat_rate.setStyleSheet("")
             if not self.vat_rate.text().strip() or self.vat_rate.text().strip() == "0":
                 self.vat_rate.setText("22")
 

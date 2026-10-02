@@ -25,6 +25,8 @@ from db.database import (
     import_addresses_from_list, count_addresses,
 )
 
+from ui import theme
+
 logger = logging.getLogger("ui.address_book_dialog")
 
 
@@ -61,15 +63,9 @@ class EditAddressDialog(QDialog):
         btn_cancel.clicked.connect(self.reject)
         buttons.addWidget(btn_cancel)
 
-        btn_save = QPushButton("💾 Сохранить")
-        btn_save.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50; color: white;
-                font-weight: bold; padding: 8px 20px;
-                border-radius: 5px;
-            }
-            QPushButton:hover { background-color: #45a049; }
-        """)
+        # Роли кнопок — из темы (ui/theme.py): цвета меняются вместе с
+        # оформлением, локальных стилей у кнопок нет.
+        btn_save = theme.accent_button("💾 Сохранить")
         btn_save.clicked.connect(self._on_save)
         buttons.addWidget(btn_save)
 
@@ -117,7 +113,7 @@ class AddressBookDialog(QDialog):
 
         # ── Заголовок ──
         title = QLabel(self.windowTitle())
-        title.setStyleSheet("font-size: 14px; font-weight: bold; padding: 5px;")
+        title.setObjectName("pageTitle")
         layout.addWidget(title)
 
         # ── Поиск ──
@@ -158,7 +154,7 @@ class AddressBookDialog(QDialog):
         # часть записей была недоступна. Теперь страницы догружаются.
         pager = QHBoxLayout()
         self.lbl_count = QLabel("")
-        self.lbl_count.setStyleSheet("color: #555;")
+        self.lbl_count.setObjectName("mutedLabel")
         pager.addWidget(self.lbl_count)
         pager.addStretch()
 
@@ -175,15 +171,7 @@ class AddressBookDialog(QDialog):
         btn_add.clicked.connect(self._on_add)
         buttons.addWidget(btn_add)
 
-        btn_import = QPushButton("📥 Импорт из Excel")
-        btn_import.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3; color: white;
-                font-weight: bold; padding: 6px 14px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #1976D2; }
-        """)
+        btn_import = theme.secondary_button("📥 Импорт из Excel")
         btn_import.clicked.connect(self._on_import_excel)
         buttons.addWidget(btn_import)
 
@@ -191,29 +179,13 @@ class AddressBookDialog(QDialog):
         btn_edit.clicked.connect(self._on_edit)
         buttons.addWidget(btn_edit)
 
-        btn_delete = QPushButton("🗑 Удалить")
-        btn_delete.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336; color: white;
-                font-weight: bold; padding: 6px 14px;
-                border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #d32f2f; }
-        """)
+        btn_delete = theme.danger_button("🗑 Удалить")
         btn_delete.clicked.connect(self._on_delete)
         buttons.addWidget(btn_delete)
 
         buttons.addStretch()
 
-        btn_pick = QPushButton("✓ Выбрать")
-        btn_pick.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3; color: white;
-                font-weight: bold; padding: 8px 20px;
-                border-radius: 5px;
-            }
-            QPushButton:hover { background-color: #1976D2; }
-        """)
+        btn_pick = theme.primary_button("✓ Выбрать")
         btn_pick.clicked.connect(self._on_pick)
         buttons.addWidget(btn_pick)
 

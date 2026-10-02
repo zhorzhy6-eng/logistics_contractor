@@ -76,7 +76,16 @@ class PasteableLineEdit(QWidget):
 
     def _refresh_required_style(self) -> None:
         highlighted = self._required and self.is_empty()
-        self.line_edit.setStyleSheet(theme.REQUIRED_EMPTY_QSS if highlighted else "")
+        self.line_edit.setStyleSheet(theme.required_empty_qss() if highlighted else "")
+
+    def refresh_required_style(self) -> None:
+        """
+        Пересобирает подсветку по активной теме.
+
+        Вызывается темой после смены оформления: локальный стиль поля
+        хранит цвета темы, и без обновления подсветка осталась бы старой.
+        """
+        self._refresh_required_style()
 
     def _on_paste_clicked(self) -> None:
         clipboard = QApplication.clipboard()
@@ -137,12 +146,12 @@ class PasteableTextEdit(QWidget):
         button_layout.setContentsMargins(0, 0, 0, 0)
 
         if show_paste_button:
-            self.btn_paste = theme.secondary_button("📋 Вставить из буфера")
+            self.btn_paste = theme.clipboard_button()
             self.btn_paste.clicked.connect(self._on_paste_clicked)
             button_layout.addWidget(self.btn_paste)
 
         if show_recognize_button:
-            self.btn_recognize = theme.secondary_button("🧠 Распознать")
+            self.btn_recognize = theme.secondary_button("Распознать")
             self.btn_recognize.clicked.connect(self._on_recognize_clicked)
             button_layout.addWidget(self.btn_recognize)
 
@@ -165,8 +174,12 @@ class PasteableTextEdit(QWidget):
     def _refresh_required_style(self) -> None:
         highlighted = self._required and self.is_empty()
         self.text_edit.setStyleSheet(
-            theme.REQUIRED_EMPTY_QSS_TEXT if highlighted else ""
+            theme.required_empty_qss_text() if highlighted else ""
         )
+
+    def refresh_required_style(self) -> None:
+        """Пересобирает подсветку по активной теме (см. PasteableLineEdit)."""
+        self._refresh_required_style()
 
     def _on_paste_clicked(self) -> None:
         clipboard = QApplication.clipboard()
@@ -209,13 +222,15 @@ class PasteableDateEdit(QWidget):
         layout.setSpacing(2)
 
         self.date_edit = date_edit
-        layout.addWidget(self.date_edit, 1)
+        self.date_edit.setFixedWidth(150)
+        layout.addWidget(self.date_edit)
 
         self.btn_paste = theme.ghost_button(
             "📋", tooltip="Вставить дату из буфера обмена"
         )
         self.btn_paste.clicked.connect(self._on_paste_clicked)
         layout.addWidget(self.btn_paste)
+        layout.addStretch()
 
     def _on_paste_clicked(self) -> None:
         clipboard = QApplication.clipboard()
@@ -269,7 +284,7 @@ class PasteableDateEdit(QWidget):
         self.date_edit.setDate(QDate(dt.year, dt.month, dt.day))
 
 
-class RecognitionPanel(QWidget):
+class RecognitionPanel(QFrame):
     """
     Панель для вставки текста и распознавания через GigaChat.
     Используется на каждой вкладке отдельно.
@@ -283,33 +298,45 @@ class RecognitionPanel(QWidget):
         placeholder: str = "Вставьте текст для распознавания...",
     ):
         super().__init__(parent)
+        self.setObjectName("recognitionPanel")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(10)
 
         button_layout = QHBoxLayout()
         button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(8)
 
-        self.btn_paste = theme.secondary_button("📋 Вставить из буфера")
+        heading = QVBoxLayout()
+        heading.setSpacing(2)
+        title = QLabel("Распознавание данных")
+        title.setObjectName("sectionHeading")
+        hint = QLabel("Вставьте текст документа, затем заполните поля вкладки")
+        hint.setObjectName("sectionHint")
+        heading.addWidget(title)
+        heading.addWidget(hint)
+        button_layout.addLayout(heading)
+        button_layout.addStretch()
+
+        self.btn_paste = theme.clipboard_button()
         self.btn_paste.clicked.connect(self._on_paste)
         button_layout.addWidget(self.btn_paste)
 
         # Главное действие вкладки: крупная акцентная кнопка (см. ui/theme.py)
         self.btn_recognize = theme.primary_button(
-            "🧠 Распознать вкладку",
+            "Распознать вкладку",
             tooltip="Распознать вставленный текст и заполнить поля вкладки",
         )
         self.btn_recognize.clicked.connect(self._on_recognize)
         button_layout.addWidget(self.btn_recognize)
 
-        button_layout.addStretch()
-
         layout.addLayout(button_layout)
 
         self.text_edit = QTextEdit()
         self.text_edit.setPlaceholderText(placeholder)
-        self.text_edit.setMaximumHeight(80)
+        self.text_edit.setMinimumHeight(160)
+        self.text_edit.setMaximumHeight(240)
         layout.addWidget(self.text_edit)
 
     def _on_paste(self) -> None:
@@ -345,7 +372,7 @@ class BulkPasteDialog(QDialog):
 
         self.on_recognize = on_recognize
 
-        self.setWindowTitle("🧠 Вставить все данные для распознавания")
+        self.setWindowTitle("Распознавание данных")
         self.setMinimumSize(700, 500)
 
         layout = QVBoxLayout(self)
@@ -364,7 +391,7 @@ class BulkPasteDialog(QDialog):
             "— данные водительского удостоверения\n"
             "— данные автомобилей\n"
             "и т.д.\n\n"
-            "Или нажмите «📋 Вставить из буфера», чтобы вставить всё из буфера обмена."
+            "Или нажмите «Вставить из буфера», чтобы вставить всё из буфера обмена."
         )
         self.text_edit.setFont(QFont("Consolas", 10))
         layout.addWidget(self.text_edit)
@@ -372,24 +399,12 @@ class BulkPasteDialog(QDialog):
         # Кнопки
         button_layout = QHBoxLayout()
 
-        self.btn_paste = QPushButton("📋 Вставить из буфера")
+        self.btn_paste = theme.clipboard_button()
         self.btn_paste.clicked.connect(self._on_paste)
         button_layout.addWidget(self.btn_paste)
 
-        self.btn_recognize = QPushButton("🧠 Распознать и заполнить")
+        self.btn_recognize = theme.primary_button("Распознать и заполнить")
         self.btn_recognize.clicked.connect(self._on_recognize)
-        self.btn_recognize.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                font-weight: bold;
-                padding: 8px 20px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
         button_layout.addWidget(self.btn_recognize)
 
         button_layout.addStretch()

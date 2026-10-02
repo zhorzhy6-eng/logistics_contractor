@@ -267,3 +267,34 @@ def test_manual_customer_is_saved_to_db(window, isolated_db):
     assert customers[0]["inn"] == "7712345678"
     assert customers[0]["bank_account"] == "40702810900000012345"
     assert customers[0]["bik"] == "044525999"
+
+
+def test_saving_contract_keeps_route_points(window, isolated_db, monkeypatch):
+    """Маршрут из формы должен быть доступен по ID сохранённого договора."""
+    from core.contract_data import ContractData
+
+    data = ContractData(
+        contract={"number": "ROUTE-1"},
+        vehicles=[{"vin": "XTEST000000000001", "brand_model": "Тестовое ТС"}],
+        loadings=[{"address": "Склад А", "date": "2026-09-27", "time_window": "09:00-12:00"}],
+        unloadings=[{"address": "Склад Б", "date": "2026-09-28", "time_window": "13:00-18:00"}],
+    )
+    monkeypatch.setattr(window, "_collect_data", lambda: data)
+
+    window._on_save_to_db()
+
+    conn = isolated_db.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM contracts WHERE contract_number = ?", ("ROUTE-1",)
+        ).fetchone()
+        vehicles = conn.execute(
+            "SELECT vin FROM vehicles WHERE contract_id = ?", (row[0],)
+        ).fetchall() if row else []
+    finally:
+        conn.close()
+    assert row is not None
+    points = isolated_db.load_contract_points(row[0])
+    assert points["loadings"] == data.loadings
+    assert points["unloadings"] == data.unloadings
+    assert vehicles == [("XTEST000000000001",)]

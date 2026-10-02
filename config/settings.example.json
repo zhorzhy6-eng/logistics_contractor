@@ -1,12 +1,17 @@
 {
-  "_comment": "Образец настроек. Скопируйте в settings.json и заполните под себя. Ключ GigaChat здесь НЕ хранится — он лежит в системном хранилище, см. set_key.py",
+  "_comment": "Ключи хранятся в системном хранилище: GigaChat — set_key.py, ключ DaData — set_dadata_key.py, секретный ключ DaData — set_dadata_secret.py. Здесь только несекретные параметры.",
+  "ui_theme": "classic",
+  "ui_theme_follow_system": true,
+  "document_cloud_enabled": true,
   "provider": "gigachat",
-
-  "gigachat_model": "GigaChat-2",
+  "gigachat_model": "GigaChat-2-Pro",
   "gigachat_scope": "GIGACHAT_API_PERS",
   "gigachat_timeout": 150,
   "gigachat_verify_ssl": true,
   "gigachat_ca_bundle": "",
+  "document_soffice": "",
+
+  "dadata_timeout": 10,
 
   "ollama_url": "http://127.0.0.1:11434",
   "ollama_model": "qwen2.5:7b",

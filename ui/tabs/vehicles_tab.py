@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QMessageBox,
     QHeaderView, QComboBox, QSpinBox,
 )
@@ -29,6 +29,7 @@ from PyQt5.QtCore import pyqtSignal
 
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
+from ui import theme
 
 logger = logging.getLogger("ui.tabs.vehicles_tab")
 
@@ -84,11 +85,11 @@ class VehiclesTab(TabMixin, QWidget):
         # ── Кнопки управления ──
         button_layout = QHBoxLayout()
 
-        self.btn_add = QPushButton("➕ Добавить ТС")
+        self.btn_add = theme.secondary_button("Добавить ТС")
         self.btn_add.clicked.connect(self._on_add_vehicle)
         button_layout.addWidget(self.btn_add)
 
-        self.btn_remove = QPushButton("✕ Удалить ТС")
+        self.btn_remove = theme.danger_button("Удалить ТС")
         self.btn_remove.clicked.connect(self._on_remove_vehicle)
         button_layout.addWidget(self.btn_remove)
 
@@ -220,15 +221,6 @@ class VehiclesTab(TabMixin, QWidget):
 
         combo = QComboBox()
         combo.addItems(items)
-        combo.setStyleSheet("""
-            QComboBox {
-                padding: 3px 6px;
-                border: 1px solid #BDBDBD;
-                border-radius: 3px;
-                background-color: white;
-            }
-            QComboBox:hover { background-color: #F5F5F5; }
-        """)
         return combo
 
     def _make_year_spin(self, year: int = None) -> QSpinBox:
@@ -332,9 +324,10 @@ class VehiclesTab(TabMixin, QWidget):
     # Заполнение таблицы
     # ─────────────────────────────────────────────────────────
 
-    def fill_data(self, vehicles: List[Dict[str, Any]]) -> None:
+    def fill_data(self, vehicles: List[Dict[str, Any]], *, append=False, imported=False) -> None:
         """Заполняет таблицу данными."""
-        self.table.setRowCount(0)
+        if not append:
+            self.table.setRowCount(0)
 
         for vehicle in vehicles:
             row = self.table.rowCount()
@@ -346,14 +339,22 @@ class VehiclesTab(TabMixin, QWidget):
 
             # ── Год: из данных или текущий ──
             year_value = vehicle.get("year", 0)
+            if imported:
+                year_value = int(year_value or 0)
             year_spin = self._make_year_spin(year_value)
+            if imported:
+                year_spin.setRange(0, 2100)
+                year_spin.setSpecialValueText("—")
+                year_spin.setValue(int(year_value or 0))
             self.table.setCellWidget(row, self.COL_YEAR, year_spin)
 
             self.table.setItem(row, self.COL_COLOR, QTableWidgetItem(str(vehicle.get("color", ""))))
 
             type_combo = QComboBox()
             type_combo.addItems(["Легковой автомобиль", "Тягач", "Прицеп", "Фургон", "Автобус"])
-            vehicle_type = vehicle.get("vehicle_type", "Легковой автомобиль")
+            if imported:
+                type_combo.insertItem(0, "")
+            vehicle_type = vehicle.get("vehicle_type", "" if imported else "Легковой автомобиль")
             idx = type_combo.findText(vehicle_type)
             if idx >= 0:
                 type_combo.setCurrentIndex(idx)

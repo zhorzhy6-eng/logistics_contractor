@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QDate, pyqtSignal
 
-from ui.tabs.base_tab import TabMixin
+from ui.tabs.base_tab import DadataDriverMixin
 from ui.widgets import PasteableLineEdit, PasteableTextEdit, PasteableDateEdit, RecognitionPanel
 
 logger = logging.getLogger("ui.tabs.driver_tab")
@@ -58,13 +58,20 @@ def _normalize_series(value: str) -> str:
     return str(value).strip()
 
 
-class DriverTab(TabMixin, QWidget):
+class DriverTab(DadataDriverMixin, QWidget):
     """
     Вкладка с данными водителя.
+
+    Кнопка «🔎» у поля «Кем выдан паспорт» ищет подразделение ФМС по коду
+    подразделения (поле «Код подразделения») через DaData — только по
+    явному нажатию, без автозаполнения при вводе.
     """
 
     # Сигнал для передачи данных в главное окно для распознавания
     recognize_requested = pyqtSignal(str)
+
+    #: Название вкладки для сообщений и логов DaData
+    DADATA_TAB_TITLE = "Водитель"
 
     def __init__(self):
         super().__init__()
@@ -125,7 +132,11 @@ class DriverTab(TabMixin, QWidget):
 
         # Кем выдан паспорт
         self.passport_issuer = PasteableLineEdit("Отделом УФМС России по г. Москве")
-        passport_layout.addRow("Кем выдан паспорт", self.passport_issuer)
+        # Кнопка «🔎» — подразделение ФМС по коду подразделения (DaData).
+        # Запрос уходит только по нажатию, автозаполнения при вводе нет.
+        passport_layout.addRow(
+            "Кем выдан паспорт", self._setup_dadata_fms_fill(self.passport_issuer)
+        )
 
         # Код подразделения
         self.passport_code = PasteableLineEdit("XXX-XXX")

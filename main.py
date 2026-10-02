@@ -62,12 +62,18 @@ def main() -> int:
         # Создаём приложение
         app = QApplication(sys.argv)
 
+        from ui.action_logging import install_action_logging
+        install_action_logging(app)
+
         # Устанавливаем стиль
         app.setStyle("Fusion")
 
-        # Единая светлая тема (палитра, блоки, кнопки, вкладки, статус-бар)
+        # Тема оформления: режим Windows (если включено следование за ним)
+        # или выбор пользователя из config/settings.json — ui/system_theme.py
+        from core.settings_service import get_settings_service
+        from ui.system_theme import preferred_theme
         from ui.theme import apply_theme
-        apply_theme(app)
+        apply_theme(app, preferred_theme(get_settings_service()))
 
         # Создаём и показываем главное окно
         window = MainWindow()
@@ -76,7 +82,9 @@ def main() -> int:
         logger.info("Приложение успешно запущено")
 
         # Запускаем цикл событий
-        return app.exec_()
+        exit_code = app.exec_()
+        logger.info("Приложение закрыто: код=%s", exit_code)
+        return exit_code
 
     except Exception as e:
         logger.error(f"Критическая ошибка при запуске: {e}", exc_info=True)

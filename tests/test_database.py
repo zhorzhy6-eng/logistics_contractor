@@ -157,6 +157,62 @@ def test_migration_adds_is_deleted_to_existing_db(work_file, monkeypatch):
     assert [d["full_name"] for d in database.get_all_drivers()] == ["Иванов Иван Иванович"]
 
 
+def test_migration_links_new_vehicles_without_losing_existing_rows(work_file, monkeypatch):
+    import sqlite3
+    import db.database as database
+
+    db_file = work_file("old_vehicles.db")
+    monkeypatch.setattr(database, "DB_PATH", str(db_file))
+    monkeypatch.setattr(database, "restrict_to_current_user", lambda *a, **k: True)
+    monkeypatch.setattr(database, "backup_database", lambda *a, **k: None)
+
+    conn = sqlite3.connect(str(db_file))
+    try:
+        conn.execute(
+            "CREATE TABLE vehicles (id INTEGER PRIMARY KEY, carrier_id INTEGER, "
+            "vin TEXT, brand_model TEXT, plate_number TEXT, year INTEGER, "
+            "color TEXT, vehicle_type TEXT)"
+        )
+        conn.execute("INSERT INTO vehicles (vin) VALUES ('OLDVIN')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.init_database()
+    contract_id = database.save_contract({"number": "NEW-1"})
+    database.save_vehicles([{"vin": "NEWVIN"}], contract_id=contract_id)
+
+    conn = database.get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT vin, contract_id FROM vehicles ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [("OLDVIN", None), ("NEWVIN", contract_id)]
+
+
+def test_contract_details_rollback_on_failed_vehicle(isolated_db):
+    with pytest.raises(AttributeError):
+        isolated_db.save_contract_with_details(
+            {"number": "ROLLBACK-1"},
+            [{"address": "Склад А"}],
+            [{"address": "Склад Б"}],
+            [{"vin": "OK"}, None],
+        )
+
+    conn = isolated_db.get_connection()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM contracts WHERE contract_number = ?",
+            ("ROLLBACK-1",),
+        ).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM contract_points").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 # ─────────────────────────────────────────────────────────────
 # Организации
 # ─────────────────────────────────────────────────────────────

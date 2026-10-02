@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 Диалог настроек приложения.
-Позволяет выбрать провайдера распознавания (Ollama / GigaChat)
-и настроить его параметры.
+Позволяет выбрать провайдера распознавания (Ollama / GigaChat),
+настроить его параметры и выбрать тему оформления.
 """
 
 import logging
@@ -17,13 +17,24 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 from core import secrets_store
+from ui import theme
+from ui import system_theme
 
 logger = logging.getLogger("ui.settings_dialog")
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """Значение из settings.json → bool (отсутствие ключа даёт default)."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "да", "on")
+
+
 class SettingsDialog(QDialog):
     """
-    Диалог настроек: провайдер + его параметры.
+    Диалог настроек: оформление, провайдер распознавания и его параметры.
     """
 
     def __init__(self, settings: Dict[str, Any], parent=None):
@@ -33,6 +44,51 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(520)
 
         layout = QVBoxLayout(self)
+
+        # ═══════════════════════════════════════════════════════
+        # ── Оформление: тема приложения и следование за Windows ──
+        # ═══════════════════════════════════════════════════════
+        #: Пока True, программная установка темы в списке не считается
+        #: ручным выбором (нужно, когда показываем тему системы).
+        self._suppress_follow_reset = False
+
+        appearance_group = QGroupBox("Оформление")
+        appearance_layout = QFormLayout(appearance_group)
+
+        self.theme_combo = QComboBox()
+        for key, label in theme.available_themes():
+            self.theme_combo.addItem(label, key)
+
+        current_theme = theme.normalize(
+            settings.get("ui_theme", theme.active_theme())
+        )
+        index = self.theme_combo.findData(current_theme)
+        if index >= 0:
+            self.theme_combo.setCurrentIndex(index)
+        appearance_layout.addRow("Тема:", self.theme_combo)
+
+        self.theme_hint_label = QLabel(theme.theme_hint(current_theme))
+        self.theme_hint_label.setObjectName("mutedLabel")
+        self.theme_hint_label.setWordWrap(True)
+        appearance_layout.addRow("", self.theme_hint_label)
+
+        self.follow_system_checkbox = QCheckBox("Следовать за темой Windows")
+        self.follow_system_checkbox.setChecked(
+            _as_bool(settings.get("ui_theme_follow_system"), True)
+        )
+        self.follow_system_checkbox.setToolTip(
+            "Если включено, приложение повторяет режим оформления Windows.\n"
+            "Выбор темы в списке выше отключает следование: ручной выбор "
+            "приоритетнее системного."
+        )
+        appearance_layout.addRow("", self.follow_system_checkbox)
+
+        # Сигналы подключаем после начальной установки значений: иначе
+        # первичный setCurrentIndex выглядел бы как ручной выбор темы.
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        self.follow_system_checkbox.toggled.connect(self._on_follow_system_toggled)
+
+        layout.addWidget(appearance_group)
 
         # ── Выбор провайдера ──
         provider_group = QGroupBox("Провайдер распознавания")
@@ -86,7 +142,7 @@ class SettingsDialog(QDialog):
         # и не должен попадать ни в этот диалог, ни в settings.json.
         self.key_status_label = QLabel(secrets_store.describe_key_state())
         self.key_status_label.setWordWrap(True)
-        self.key_status_label.setStyleSheet("color: #555; font-size: 11px;")
+        self.key_status_label.setObjectName("mutedLabel")
         gigachat_layout.addRow("Ключ авторизации:", self.key_status_label)
 
         self.btn_check_key = QPushButton("Обновить статус ключа")
@@ -128,6 +184,14 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(self.gigachat_group)
 
+        self.document_cloud = QCheckBox("Разрешить отправку изображений документов в GigaChat")
+        self.document_cloud.setChecked(settings.get("document_cloud_enabled") is True)
+        layout.addWidget(self.document_cloud)
+        document_form = QFormLayout()
+        self.document_soffice = QLineEdit(settings.get("document_soffice", ""))
+        document_form.addRow("LibreOffice soffice (для DOC):", self.document_soffice)
+        layout.addLayout(document_form)
+
         # ── Подсказка ──
         hint_label = QLabel(
             "💡 GigaChat: ключ авторизации берите в личном кабинете "
@@ -135,7 +199,7 @@ class SettingsDialog(QDialog):
             "💡 Ollama: для распознавания изображений нужны "
             "мультимодальные модели (llava, pixtral, bakllava)."
         )
-        hint_label.setStyleSheet("color: #666; font-size: 11px;")
+        hint_label.setObjectName("mutedLabel")
         hint_label.setWordWrap(True)
         layout.addWidget(hint_label)
 
@@ -172,6 +236,44 @@ class SettingsDialog(QDialog):
         # диалог подгоняет размер под содержимое
         self.adjustSize()
 
+    def _on_theme_changed(self, index: int) -> None:
+        """
+        Показывает пояснение к выбранной теме.
+
+        Сама тема применяется после «Сохранить» (main_window применяет её к
+        приложению сразу, поэтому отмена настроек ничего не меняет). Ручной
+        выбор темы отключает следование за Windows: он приоритетнее.
+        """
+        key = self.theme_combo.itemData(index) or theme.active_theme()
+        self.theme_hint_label.setText(theme.theme_hint(key))
+
+        checkbox = getattr(self, "follow_system_checkbox", None)
+        if (
+            checkbox is not None
+            and checkbox.isChecked()
+            and not self._suppress_follow_reset
+        ):
+            checkbox.setChecked(False)
+
+    def _on_follow_system_toggled(self, checked: bool) -> None:
+        """При включении следования показывает в списке тему системы."""
+        if not checked:
+            return
+
+        system_key = system_theme.read_system_theme()
+        if system_key is None:
+            return
+
+        index = self.theme_combo.findData(system_key)
+        if index >= 0 and index != self.theme_combo.currentIndex():
+            self._suppress_follow_reset = True
+            try:
+                self.theme_combo.setCurrentIndex(index)
+            finally:
+                self._suppress_follow_reset = False
+
+        self.theme_hint_label.setText(theme.theme_hint(system_key))
+
     def _on_check_key(self) -> None:
         """Обновляет статус ключа, не показывая его значение."""
         state = secrets_store.describe_key_state()
@@ -199,6 +301,11 @@ class SettingsDialog(QDialog):
         return {
             "provider": provider,
 
+            # Оформление: ключ темы из ui/theme_palettes.py и следование
+            # за режимом Windows (ui/system_theme.py)
+            "ui_theme": self.theme_combo.currentData() or theme.active_theme(),
+            "ui_theme_follow_system": self.follow_system_checkbox.isChecked(),
+
             # Ollama
             "ollama_url": self.url_edit.text().strip(),
             "ollama_model": self.model_edit.text().strip(),
@@ -209,4 +316,6 @@ class SettingsDialog(QDialog):
             "gigachat_scope": self.gigachat_scope_combo.currentText(),
             "gigachat_timeout": self.gigachat_timeout_spin.value(),
             "gigachat_verify_ssl": self.gigachat_verify_ssl_checkbox.isChecked(),
+            "document_cloud_enabled": self.document_cloud.isChecked(),
+            "document_soffice": self.document_soffice.text().strip(),
         }
