@@ -449,3 +449,92 @@ def test_real_main_switches_types_and_exits(work_file):
         assert marker in result.stdout, (
             f"нет маркера {marker!r} в выводе:\n{result.stdout}"
         )
+
+
+# ─────────────────────────────────────────────────────────────
+# Реестр типов при старте приложения (ЭТАП 3.1.A.6.3)
+# ─────────────────────────────────────────────────────────────
+
+def test_load_contract_types_registers_picker_types(main_module):
+    """
+    _load_contract_types() прогревает реестр: фабрика знает все типы списка.
+
+    Без этого GeneratorFactory.get_generator("formika") в нестрогом режиме
+    молча вернул бы генератор перевозки (fallback на тип по умолчанию).
+    """
+    from core.contracts.registry import ContractTypeRegistry
+
+    main_module._load_contract_types()
+
+    known = set(ContractTypeRegistry.known_types())
+    assert EXPECTED_TYPES <= known
+    assert "formika" in known
+
+
+def test_generator_factory_knows_formika_after_warmup(main_module):
+    """После прогрева реестра фабрика отдаёт генератор Формики, а не перевозку."""
+    from core.contracts.factory import GeneratorFactory
+    from core.contracts.formika.generator import FormikaGenerator
+
+    main_module._load_contract_types()
+
+    generator = GeneratorFactory.get_generator("formika", strict=True)
+    assert isinstance(generator, FormikaGenerator)
+
+
+class _FakeApplication:
+    """Заглушка QApplication: тесту нужен только порядок вызовов в main()."""
+
+    def __init__(self, argv=None):
+        self.argv = argv
+
+    def setQuitOnLastWindowClosed(self, value):  # noqa: N802 — имя из Qt
+        self.quit_on_close = value
+
+    def setStyle(self, style):  # noqa: N802 — имя из Qt
+        self.style = style
+
+    def exec_(self):
+        return 0
+
+    def quit(self):
+        pass
+
+
+def test_main_loads_registry_before_choosing_type(main_module, monkeypatch):
+    """
+    main() прогревает реестр ДО выбора типа договора.
+
+    Проверяется момент вызова _choose_contract_type(): если к этому времени
+    форма не знает про formika, первый же вызов фабрики из окна типа ушёл бы
+    в перевозку. Полный main() прогоняется на заглушках Qt и БД: цикл
+    событий и реальную базу в тесте поднимать нельзя.
+    """
+    import db.database as database
+    import ui.action_logging as action_logging
+    import ui.system_theme as system_theme
+    import ui.theme as theme
+    import core.settings_service as settings_service
+    import PyQt5.QtWidgets as qt_widgets
+
+    from core.contracts.registry import ContractTypeRegistry
+
+    monkeypatch.setattr(qt_widgets, "QApplication", _FakeApplication)
+    monkeypatch.setattr(database, "init_database", lambda: None)
+    monkeypatch.setattr(action_logging, "install_action_logging", lambda app: None)
+    monkeypatch.setattr(theme, "apply_theme", lambda app, name: None)
+    monkeypatch.setattr(system_theme, "preferred_theme", lambda service: "light")
+    monkeypatch.setattr(settings_service, "get_settings_service", lambda: None)
+
+    observed = {}
+
+    def fake_choose_type():
+        # Здесь реестр уже обязан быть загружен.
+        observed["known_types"] = ContractTypeRegistry.known_types()
+        return None
+
+    monkeypatch.setattr(main_module, "_choose_contract_type", fake_choose_type)
+
+    assert main_module.main() == 0
+    assert EXPECTED_TYPES <= set(observed["known_types"])
+    assert "formika" in observed["known_types"]
