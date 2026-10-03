@@ -18,6 +18,8 @@ from core.contracts.base_generator import BaseContractGenerator
 from core.contracts.base_validator import BaseValidator
 from core.contracts.contract_types import ContractType, DEFAULT_CONTRACT_TYPE
 from core.contracts.factory import GeneratorFactory
+from core.contracts.formika.generator import FormikaGenerator
+from core.contracts.logistiks_rus.generator import LogistiksRusGenerator
 from core.contracts.paths import PROJECT_ROOT, TEMPLATES_DIR
 from core.contracts.perevozka.generator import PerevozkaGenerator
 from core.contracts.perevozka.validator import PerevozkaValidator
@@ -259,19 +261,26 @@ def _ensure_registered(package: str, key: str) -> None:
 
 
 def test_all_builtin_types_registered():
+    _ensure_registered("core.contracts.formika", "formika")
+    _ensure_registered("core.contracts.logistiks_rus", "logistiks_rus")
     _ensure_registered("core.contracts.arenda_ts", "arenda_ts")
     _ensure_registered("core.contracts.expediciya", "expediciya")
     _ensure_registered("core.contracts.zayavka", "zayavka_excel")
     known = ContractTypeRegistry.known_types()
-    for key in ("perevozka", "arenda_ts", "expediciya", "zayavka_excel"):
+    for key in ("perevozka", "formika", "logistiks_rus",
+                "arenda_ts", "expediciya", "zayavka_excel"):
         assert key in known
 
 
 def test_stub_generators_raise_not_implemented():
+    _ensure_registered("core.contracts.formika", "formika")
+    _ensure_registered("core.contracts.logistiks_rus", "logistiks_rus")
     _ensure_registered("core.contracts.arenda_ts", "arenda_ts")
     _ensure_registered("core.contracts.expediciya", "expediciya")
     _ensure_registered("core.contracts.zayavka", "zayavka_excel")
     for contract_type, fragment in (
+        ("formika", "Формика"),
+        ("logistiks_rus", "Логистикс Рус"),
         ("arenda_ts", "аренды ТС"),
         ("expediciya", "Экспедиторская заявка"),
         ("zayavka_excel", "Excel"),
@@ -283,12 +292,38 @@ def test_stub_generators_raise_not_implemented():
 
 def test_stub_types_do_not_affect_perevozka():
     """Заглушки зарегистрированы и падают сами — перевозка работает как раньше."""
+    _ensure_registered("core.contracts.formika", "formika")
+    _ensure_registered("core.contracts.logistiks_rus", "logistiks_rus")
     _ensure_registered("core.contracts.arenda_ts", "arenda_ts")
     _ensure_registered("core.contracts.expediciya", "expediciya")
     _ensure_registered("core.contracts.zayavka", "zayavka_excel")
     generator = GeneratorFactory.get_generator("perevozka")
     replacements = generator._build_replacements_map({"contract": {}})
     assert "contract_number" in replacements
+
+
+def test_new_types_do_not_affect_perevozka():
+    """
+    Регистрация formika и logistiks_rus не подменяет рабочий тип:
+    ключ perevozka, его класс генератора и тип по умолчанию прежние.
+    """
+    _ensure_registered("core.contracts.formika", "formika")
+    _ensure_registered("core.contracts.logistiks_rus", "logistiks_rus")
+
+    spec = ContractTypeRegistry.get("perevozka")
+    assert spec.generator_class is PerevozkaGenerator
+    assert spec.validator_class is PerevozkaValidator
+    assert DEFAULT_CONTRACT_TYPE.value == "perevozka"
+
+    # Новые типы — заглушки DOCX-базы с собственными префиксами файлов
+    assert isinstance(
+        GeneratorFactory.get_generator("formika"), FormikaGenerator
+    )
+    assert isinstance(
+        GeneratorFactory.get_generator("logistiks_rus"), LogistiksRusGenerator
+    )
+    assert FormikaGenerator.FILE_PREFIX == "Заявка_Формика"
+    assert LogistiksRusGenerator.FILE_PREFIX == "Заявка_Логистикс_Рус"
 
 
 def test_zayavka_generator_is_not_docx_based():
