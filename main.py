@@ -77,6 +77,40 @@ def _load_contract_types() -> None:
         logger.warning(f"Типы договоров загружены не полностью: {failures}")
 
 
+def _make_factories():
+    """
+    Фабрики окон по типам договоров (ЭТАП 2B).
+
+    Окна создаются лениво: WindowManager вызовет нужную фабрику только
+    при первом открытии типа. Импорты — внутри функции: main.py
+    импортируется и в тестах (tests/test_logging_config.py), где поднимать
+    Qt не нужно.
+
+    «Экспедиторство» — рабочий тип (MainWindow), остальные типы (Формика,
+    Логистикс Рус, Разовая аренда, Хавалы) показывают окно-заглушку
+    «в разработке». Ключ рабочего типа берётся из ContractType, а не из
+    литерала: переименование типа не сломает запуск.
+    """
+    from core.contracts.contract_types import DEFAULT_CONTRACT_TYPE
+    from ui.contract_picker import picker_items, picker_title
+    from ui.main_window import MainWindow
+    from ui.placeholder_window import PlaceholderWindow
+
+    def make_main_window():
+        return MainWindow()
+
+    def make_placeholder_factory(contract_type: str):
+        def factory():
+            return PlaceholderWindow(contract_type, picker_title(contract_type))
+        return factory
+
+    factories = {DEFAULT_CONTRACT_TYPE.value: make_main_window}
+    for contract_type, _title in picker_items():
+        # setdefault: рабочий тип остаётся MainWindow, даже если он есть в списке
+        factories.setdefault(contract_type, make_placeholder_factory(contract_type))
+    return factories
+
+
 def main() -> int:
     """
     Главная функция. Создаёт приложение и запускает его.
@@ -97,6 +131,12 @@ def main() -> int:
         # Создаём приложение
         app = QApplication(sys.argv)
 
+        # Окна типов договоров живут всё время приложения, а закрытие окна —
+        # это hide() (данные в формах не теряются). Поэтому «последнее окно
+        # закрыто» не должно завершать программу: реальный выход — только
+        # явный (WindowManager.close_all()).
+        app.setQuitOnLastWindowClosed(False)
+
         from ui.action_logging import install_action_logging
         install_action_logging(app)
 
@@ -116,26 +156,27 @@ def main() -> int:
         # ── Тип договора: спрашиваем ДО открытия окна ──
         # «Экспедиторство» — текущий рабочий тип (MainWindow), остальные
         # типы показывают окно-заглушку «в разработке».
-        from core.contracts.contract_types import DEFAULT_CONTRACT_TYPE
-        from ui.contract_picker import picker_title
-
         contract_type = _choose_contract_type()
         if contract_type is None:
             logger.info("Тип договора не выбран — приложение закрывается")
             return 0
 
-        if contract_type == DEFAULT_CONTRACT_TYPE.value:
-            # Импорт главного окна — только для рабочего типа: заглушке
-            # вкладки, вкладки распознавания и клиент GigaChat не нужны.
-            from ui.main_window import MainWindow
-            window = MainWindow()
-        else:
-            from ui.placeholder_window import PlaceholderWindow
-            window = PlaceholderWindow(contract_type, picker_title(contract_type))
+        # ── Окна типов: лениво, через менеджер (ЭТАП 2B) ──
+        # Окна не уничтожаются при переключении типа: пользователь может
+        # вернуться к уже заполненной форме.
+        from ui.windows import WindowManager
 
-        # Создаём и показываем окно
-        window.show()
+        manager = WindowManager(_make_factories())
+        window = manager.switch_to(contract_type)
+        if window is None:
+            logger.error(f"Не удалось открыть окно типа договора: {contract_type}")
+            return 1
+
         logger.info(f"Открыт тип договора: {contract_type}")
+
+        # TODO (ЭТАП 2C): переключение типа из уже открытого окна —
+        # по сигналу окна вызывать manager.switch_to(<новый тип>).
+        # Пока такого сигнала нет: тип выбирается один раз при запуске.
 
         logger.info("Приложение успешно запущено")
 
