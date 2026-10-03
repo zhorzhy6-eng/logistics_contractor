@@ -795,14 +795,25 @@ class GigaChatClient:
         """Задержка перед повтором: 1с → 2с → 4с."""
         return GigaChatClient.RETRY_BASE_DELAY * (2 ** attempt)
 
-    def recognize_text(self, text: str, retries: Optional[int] = None) -> dict:
+    def recognize_text(self, text: str, prompt: Optional[str] = None,
+                       retries: Optional[int] = None) -> dict:
         """
         Отправляет текст в GigaChat и возвращает разобранный JSON.
+
+        prompt=None (или пустая строка) → используется системный промпт
+        клиента SYSTEM_PROMPT: так работает перевозка и остальные типы без
+        своего промпта, поведение не меняется.
+        prompt="..." → модели уходит переданный текст: типы со своим
+        промптом (Формика, Логистикс Рус, Аренда, Хавалы) шлют собственные
+        правила извлечения из core/prompts/. SYSTEM_PROMPT при этом не
+        изменяется и остаётся доступен как значение по умолчанию.
 
         Перед отправкой текст обезличивается (core/pseudonymizer.py): вместо
         ФИО, паспортов, ВУ, ИНН, СНИЛС, телефонов, адресов, VIN и госномеров
         в модель уходят плейсхолдеры <<TYPE_N>>, а после ответа оригиналы
         восстанавливаются. Маппинг живёт только внутри этого вызова.
+        Переданный промпт типа обезличиванию не подвергается: это правила
+        извлечения, а не данные документа.
 
         Шаг 7 оптимизации:
           * при 401 токен сбрасывается и запрос повторяется один раз
@@ -815,13 +826,18 @@ class GigaChatClient:
         (fallback внутри Vision не должен добивать API повторами).
         """
         max_retries = self.MAX_RETRIES if retries is None else max(0, int(retries))
-        prompt = self._limit_prompt(text)
+
+        # ── Промпт: свой у типа договора, иначе системный (перевозка) ──
+        system_prompt = prompt if prompt else self.SYSTEM_PROMPT
+        logger.info("GigaChat: промпт=%s", "свой" if prompt else "дефолтный")
+
+        user_text = self._limit_prompt(text)
 
         # ── Обезличивание: во внешнюю модель уходят только плейсхолдеры ──
         # Маппинг «токен → оригинал» живёт в локальной переменной до конца
         # метода: на диск не пишется, в логи не попадает и наружу не отдаётся.
         pseudonymizer = Pseudonymizer()
-        prompt, mapping = pseudonymizer.anonymize(prompt)
+        user_text, mapping = pseudonymizer.anonymize(user_text)
         if mapping:
             logger.info(
                 "GigaChat: в запрос уходят только плейсхолдеры (%s)",
@@ -832,18 +848,18 @@ class GigaChatClient:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_text},
             ],
             "temperature": 0.1,
             "max_tokens": self.MAX_TOKENS,
             # GigaChat НЕ поддерживает response_format: json_object!
         }
 
-        logger.info(f"Отправка текста в GigaChat ({len(prompt)} символов)...")
+        logger.info(f"Отправка текста в GigaChat ({len(user_text)} символов)...")
         logger.debug(
             f"Распознавание старт | вход: {len(text)} символов | "
-            f"промпт: {len(prompt)} символов (лимит {self.MAX_PROMPT_CHARS}) | "
+            f"промпт: {len(user_text)} символов (лимит {self.MAX_PROMPT_CHARS}) | "
             f"модель={self.model} | temperature={payload['temperature']} | "
             f"max_tokens={payload['max_tokens']}"
         )
@@ -865,7 +881,7 @@ class GigaChatClient:
             logger.debug(
                 f"GigaChat: отправка запроса | попытка {attempt + 1}/"
                 f"{max_retries + 1} | timeout={self.timeout} с | "
-                f"длина промпта: {len(prompt)} символов"
+                f"длина текста: {len(user_text)} символов"
             )
             request_started = time.perf_counter()
 
@@ -919,7 +935,7 @@ class GigaChatClient:
                 logger.warning(
                     f"SLOW GigaChat: ответ занял {request_elapsed:.1f} с "
                     f"(порог {self.SLOW_REQUEST_SECONDS:.0f} с) | "
-                    f"модель={self.model} | промпт: {len(prompt)} символов"
+                    f"модель={self.model} | текст: {len(user_text)} символов"
                 )
 
             # ── 401: токен отозван/просрочен — сбрасываем и пробуем снова ──
