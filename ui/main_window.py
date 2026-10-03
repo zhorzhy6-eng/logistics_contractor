@@ -1434,6 +1434,30 @@ class MainWindow(QMainWindow):
         self._refresh_status_indicators()
         self.statusBar().showMessage("Вкладка очищена", 3000)
 
+    # --------------------------------------------------------
+    # ЗАКРЫТИЕ ОКНА  ← ЭТАП 2B
+    # --------------------------------------------------------
+    def closeEvent(self, event):
+        """
+        Закрытие окна = скрытие (ЭТАП 2B).
+
+        Окна типов живут всё время приложения: закрытие крестиком не должно
+        уничтожать данные в формах. Реальное завершение — через
+        ui/windows/manager.py (close_all() вызывает force_close()).
+        """
+        if getattr(self, "_force_close", False):
+            event.accept()
+            return
+
+        logger.info("Окно скрыто (закрытие крестиком данные не теряет)")
+        event.ignore()
+        self.hide()
+
+    def force_close(self) -> None:
+        """Закрывает окно по-настоящему: выход из приложения, не скрытие."""
+        self._force_close = True
+        self.close()
+
 
 class BulkPasteDialog(QDialog):
     def __init__(self, parent=None):
