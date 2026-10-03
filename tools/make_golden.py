@@ -16,11 +16,15 @@
   ip_with_vat    — шаблон ИП с НДС, перевозчик «ИП с НДС»;
   ip_without_vat — шаблон ИП без НДС, перевозчик «ИП без НДС»;
   gap            — шаблон ООО, маршрут с «дыркой» (пустой адрес точки
-                   в середине), машины привязаны к исходным номерам точек.
+                   в середине), машины привязаны к исходным номерам точек;
+  formika_sample — шаблон Формики, 4 машины (ЭТАП 3.1.A, свой генератор).
 
 Все данные синтетические (как в tests/conftest.py), реальных ПДн нет.
 
 Перегенерация:  python tools/make_golden.py
+Один сценарий:  python tools/make_golden.py formika_sample
+(без аргументов перегенерируются ВСЕ эталоны; чтобы не переписывать
+эталоны перевозки, указывайте нужный сценарий явно).
 """
 
 import hashlib
@@ -38,6 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from docx import Document  # noqa: E402
 
 from core.contract_generator import ContractGenerator  # noqa: E402
+from core.contracts.factory import GeneratorFactory  # noqa: E402
+from core.contracts.registry import ContractTypeRegistry  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GOLDEN_DIR = PROJECT_ROOT / "tests" / "data" / "golden"
@@ -165,6 +171,61 @@ SCENARIOS = {
 
 
 # ─────────────────────────────────────────────────────────────
+# Сценарии Формики (ЭТАП 3.1.A): свой генератор, свой шаблон.
+# Отдельный словарь, потому что golden-тест перевозки жёстко
+# использует ContractGenerator, а Формика рендерится FormikaGenerator.
+# ─────────────────────────────────────────────────────────────
+
+def formika_payload() -> dict:
+    """
+    Данные договора-заявки «Формика»: 4 перевозимые машины.
+
+    Тягач и полуприцеп лежат отдельными блоками и в таблицу груза не
+    попадают; лишние (пустые) строки таблицы удаляет постобработка.
+    """
+    return {
+        "driver": DRIVER,
+        "carrier": dict(ORGANIZATION, entity_type="ООО"),
+        "customer": dict(ORGANIZATION, full_name="ООО «Заказчик»",
+                         short_name="ООО «Заказчик»"),
+        "vehicles": [
+            {"vin": "EC3TEUMB0T0000001", "brand_model": "МОДЕЛЬ 1",
+             "vehicle_type": "Легковой автомобиль"},
+            {"vin": "EC3TEUMB0T0000002", "brand_model": "МОДЕЛЬ 2",
+             "vehicle_type": "Легковой автомобиль"},
+            {"vin": "EC3TEUMB0T0000003", "brand_model": "МОДЕЛЬ 3",
+             "vehicle_type": "Легковой автомобиль"},
+            {"vin": "EC3TEUMB0T0000004", "brand_model": "МОДЕЛЬ 4",
+             "vehicle_type": "Легковой автомобиль"},
+            {"vin": "", "brand_model": "", "vehicle_type": ""},
+        ],
+        "tractor": TRACTOR,
+        "trailer": TRAILER,
+        "contract": {
+            "number": "ФМ-2026-1", "date": "2026-07-24",
+            "route": "г. Воронеж - г. Москва", "carrier_type": "ООО (с НДС)",
+            "vat_rate": "22%", "vat_rate_num": 22,
+            "price_without_vat": 180300.0, "price_with_vat": 219966.0,
+            "loading_plan_date": "2026-07-27",
+            "loading_plan_time_from": "", "loading_plan_time_to": "",
+        },
+        "loadings": [
+            {"address": "г. Воронеж, ул. Остужева 52Б",
+             "date": "2026-07-27", "time_window": "09:00-15:00"},
+        ],
+        "unloadings": [
+            {"address": "г. Москва, Перерва 19 стр 3",
+             "date": "2026-07-30", "time_window": ""},
+        ],
+    }
+
+
+FORMIKA_SCENARIOS = {
+    "formika_sample": ("shablon_formika.docx", formika_payload()),
+}
+
+
+# ─────────────────────────────────────────────────────────────
 # Облегчённая копия шаблона (как в tests/test_contract_generator.py)
 # ─────────────────────────────────────────────────────────────
 
@@ -248,53 +309,96 @@ def fingerprint(docx_path: Path) -> dict:
 # Основной прогон
 # ─────────────────────────────────────────────────────────────
 
-def main() -> int:
+def _make_generator(kind: str, templates_dir: str):
+    """
+    Генератор сценария: перевозка (по умолчанию) или Формика.
+
+    Реестр типов загружается явно (как в main.py при старте приложения):
+    без load_builtin() фабрика не знает про formika и в нестрогом режиме
+    молча отдаёт генератор перевозки — эталон тогда снимается не с того
+    типа. strict=True превращает такую ошибку в исключение.
+    """
+    if kind == "formika":
+        ContractTypeRegistry.load_builtin()
+        return GeneratorFactory.get_generator(
+            "formika", templates_dir=templates_dir, strict=True
+        )
+    return ContractGenerator(templates_dir=templates_dir)
+
+
+def _render_scenario(scenario, template_name, payload, kind, work) -> dict:
+    """Рендерит один сценарий в tests/data/golden/<scenario>.{docx,json}."""
+    templates_dir = work / scenario
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    strip_embedded_fonts(
+        PROJECT_ROOT / "templates" / template_name,
+        templates_dir / template_name,
+    )
+
+    generator = _make_generator(kind, str(templates_dir))
+    docx_path = GOLDEN_DIR / f"{scenario}.docx"
+    if docx_path.exists():
+        docx_path.unlink()
+
+    generator.generate_docx(payload, str(docx_path))
+
+    fingerprint_path = GOLDEN_DIR / f"{scenario}.json"
+    fingerprint_path.write_text(
+        json.dumps(fingerprint(docx_path), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    size = docx_path.stat().st_size
+    result = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+    print(f"[OK] {scenario}: {docx_path.name} ({size} байт), "
+          f"sha256_text={result['sha256_text'][:16]}..., "
+          f"плейсхолдеров осталось: {len(result['placeholders_left'])}")
+    return result
+
+
+def main(argv=None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:  # старые Python без reconfigure
         pass
+
+    selected = {arg for arg in (sys.argv[1:] if argv is None else argv) if arg}
+    known = set(SCENARIOS) | set(FORMIKA_SCENARIOS)
+    unknown = selected - known
+    if unknown:
+        print(f"Неизвестные сценарии: {sorted(unknown)}")
+        print(f"Известны: {sorted(known)}")
+        return 2
 
     GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
 
     work = Path(tempfile.mkdtemp(prefix="make_golden_"))
     try:
         for scenario, (template_name, payload) in SCENARIOS.items():
-            templates_dir = work / scenario
-            templates_dir.mkdir(parents=True, exist_ok=True)
-            strip_embedded_fonts(
-                PROJECT_ROOT / "templates" / template_name,
-                templates_dir / template_name,
-            )
+            if selected and scenario not in selected:
+                continue
+            _render_scenario(scenario, template_name, payload, "perevozka", work)
 
-            generator = ContractGenerator(templates_dir=str(templates_dir))
-            docx_path = GOLDEN_DIR / f"{scenario}.docx"
-            if docx_path.exists():
-                docx_path.unlink()
-
-            out = generator.generate_docx(payload, str(docx_path))
-
-            fingerprint_path = GOLDEN_DIR / f"{scenario}.json"
-            fingerprint_path.write_text(
-                json.dumps(fingerprint(docx_path), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-
-            size = docx_path.stat().st_size
-            fp = json.loads(fingerprint_path.read_text(encoding="utf-8"))
-            print(f"[OK] {scenario}: {docx_path.name} ({size} байт), "
-                  f"sha256_text={fp['sha256_text'][:16]}..., "
-                  f"плейсхолдеров осталось: {len(fp['placeholders_left'])}")
+        for scenario, (template_name, payload) in FORMIKA_SCENARIOS.items():
+            if selected and scenario not in selected:
+                continue
+            _render_scenario(scenario, template_name, payload, "formika", work)
 
         readme = GOLDEN_DIR / "README.md"
         readme.write_text(
             "# Золотые эталоны договоров\n\n"
-            "Выводы `ContractGenerator` (Шаг 0 рефакторинга архитектуры контрактов) "
+            "Выводы генераторов (Шаг 0 рефакторинга архитектуры контрактов) "
             "на облегчённых копиях реальных шаблонов (без встроенных шрифтов).\n\n"
-            "Сценарии: `ooo`, `ip_with_vat`, `ip_without_vat`, `gap` (маршрут с "
-            "пустой точкой). Для каждого: `<сценарий>.docx` — документ, "
+            "Сценарии перевозки (`ContractGenerator`): `ooo`, `ip_with_vat`, "
+            "`ip_without_vat`, `gap` (маршрут с пустой точкой).\n"
+            "Сценарий Формики (`FormikaGenerator`, ЭТАП 3.1.A): "
+            "`formika_sample` — 4 машины в таблице груза.\n\n"
+            "Для каждого сценария: `<сценарий>.docx` — документ, "
             "`<сценарий>.json` — структурный отпечаток для сверки в "
-            "`tests/test_contract_generator_golden.py`.\n\n"
-            "Перегенерация: `python tools/make_golden.py`.\n\n"
+            "`tests/test_contract_generator_golden.py` (перевозка) и "
+            "`tests/test_formika_generator.py` (Формика).\n\n"
+            "Перегенерация: `python tools/make_golden.py [сценарий ...]`.\n"
+            "Без аргументов перегенерируются ВСЕ эталоны.\n\n"
             "Все данные синтетические, реальных ПДн нет.\n",
             encoding="utf-8",
         )

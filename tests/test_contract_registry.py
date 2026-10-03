@@ -273,13 +273,18 @@ def test_all_builtin_types_registered():
 
 
 def test_stub_generators_raise_not_implemented():
-    _ensure_registered("core.contracts.formika", "formika")
+    """
+    Заглушки без реализации падают с понятным текстом.
+
+    formika из списка убрана на ЭТАПЕ 3.1.A: у типа появился рабочий
+    генератор (core/contracts/formika/generator.py), и NotImplementedError
+    он больше не поднимает.
+    """
     _ensure_registered("core.contracts.logistiks_rus", "logistiks_rus")
     _ensure_registered("core.contracts.arenda_ts", "arenda_ts")
     _ensure_registered("core.contracts.expediciya", "expediciya")
     _ensure_registered("core.contracts.zayavka", "zayavka_excel")
     for contract_type, fragment in (
-        ("formika", "Формика"),
         ("logistiks_rus", "Логистикс Рус"),
         ("arenda_ts", "аренды ТС"),
         ("expediciya", "Экспедиторская заявка"),
@@ -315,14 +320,16 @@ def test_new_types_do_not_affect_perevozka():
     assert spec.validator_class is PerevozkaValidator
     assert DEFAULT_CONTRACT_TYPE.value == "perevozka"
 
-    # Новые типы — заглушки DOCX-базы с собственными префиксами файлов
+    # Новые типы — DOCX-база с собственными префиксами файлов.
+    # formika с ЭТАПА 3.1.A — рабочий тип: свой шаблон и своё имя файла.
     assert isinstance(
         GeneratorFactory.get_generator("formika"), FormikaGenerator
     )
     assert isinstance(
         GeneratorFactory.get_generator("logistiks_rus"), LogistiksRusGenerator
     )
-    assert FormikaGenerator.FILE_PREFIX == "Заявка_Формика"
+    assert FormikaGenerator.FILE_PREFIX == "Договор-заявка_Формика"
+    assert FormikaGenerator.TEMPLATE_NAMES == {"formika": "shablon_formika.docx"}
     assert LogistiksRusGenerator.FILE_PREFIX == "Заявка_Логистикс_Рус"
 
 
