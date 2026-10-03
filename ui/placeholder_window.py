@@ -92,5 +92,28 @@ class PlaceholderWindow(QMainWindow):
         """Кнопка «Закрыть» (для тестов)."""
         return self.btn_close
 
+    def closeEvent(self, event):
+        """
+        Закрытие окна = скрытие (ЭТАП 2B).
+
+        Окна типов живут всё время приложения: закрытие окна не должно
+        терять состояние. Реальное завершение — через
+        ui/windows/manager.py (close_all() вызывает force_close()).
+        """
+        if getattr(self, "_force_close", False):
+            event.accept()
+            return
+
+        logger.info(
+            f"Заглушка типа {self.contract_type} скрыта (окно не уничтожено)"
+        )
+        event.ignore()
+        self.hide()
+
+    def force_close(self) -> None:
+        """Закрывает окно по-настоящему: выход из приложения, не скрытие."""
+        self._force_close = True
+        self.close()
+
 
 __all__ = ["PlaceholderWindow"]
