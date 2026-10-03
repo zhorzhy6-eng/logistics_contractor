@@ -36,6 +36,10 @@ output/
 !templates/shablon_ooo.docx
 !templates/shablon_ip_with_vat.docx
 !templates/shablon_ip_without_vat.docx
+# Шаблон Формики (ЭТАП 3.1.A) и образец, по которому он собран:
+# образец — источник структуры, только чтение, но должен быть в git.
+!templates/shablon_formika.docx
+!templates/Заявка_ТЛ_447 Формика_Технологистика.docx
 templates/*.xlsx
 
 # ─────────────────────────────────────────────────────────────
