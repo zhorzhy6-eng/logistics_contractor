@@ -7,49 +7,33 @@
 приложение открывает соответствующее окно — «Экспедиторство» работает как
 раньше (MainWindow), остальные типы открывают окно-заглушку.
 
-Порядок пунктов задан здесь жёстко (PICKER_ORDER), а не взят из
-ContractTypeRegistry.titles(): в реестре ключи сортируются по алфавиту,
-а пользователю нужен порядок из задания. Ключ типа хранится в data пункта,
-поэтому название можно менять, не ломая логику запуска.
+Сам порядок пунктов (PICKER_ORDER) живёт в core/contracts/picker_order.py
+(ЭТАП 2C): он нужен не только диалогу запуска, но и селектору типа в шапке
+окна. Здесь имена только реэкспортируются — внешний код, импортировавший
+их отсюда, продолжает работать.
+
+Порядок задан явно, а не взят из ContractTypeRegistry.titles(): в реестре
+ключи сортируются по алфавиту, а пользователю нужен порядок из задания.
+Ключ типа хранится в data пункта, поэтому название можно менять, не ломая
+логику запуска.
 """
 
 import logging
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from PyQt5.QtWidgets import (
     QComboBox, QDialog, QHBoxLayout, QLabel, QVBoxLayout,
 )
 
+from core.contracts.picker_order import (
+    DEFAULT_PICKER_TYPE,
+    PICKER_ORDER,
+    picker_items,
+    picker_title,
+)
 from ui import theme
 
 logger = logging.getLogger("ui.contract_picker")
-
-#: Пункты выпадающего списка: (ключ ContractType, название для пользователя).
-#: expediciya («Экспедиторская заявка») в список не входит: это служебная
-#: заглушка шага 8, а не пользовательский тип договора.
-PICKER_ORDER: Tuple[Tuple[str, str], ...] = (
-    ("perevozka", "Экспедиторство"),
-    ("formika", "Формика"),
-    ("logistiks_rus", "Логистикс Рус"),
-    ("arenda_ts", "Разовая аренда"),
-    ("zayavka_excel", "Хавалы"),
-)
-
-#: Тип, выбранный в списке по умолчанию (историческое поведение программы).
-DEFAULT_PICKER_TYPE = "perevozka"
-
-
-def picker_items() -> List[Tuple[str, str]]:
-    """Копия списка пунктов (для тестов и внешнего кода)."""
-    return list(PICKER_ORDER)
-
-
-def picker_title(contract_type: str) -> str:
-    """Название типа для заголовков окон; неизвестный ключ возвращается как есть."""
-    for key, title in PICKER_ORDER:
-        if key == contract_type:
-            return title
-    return str(contract_type or "")
 
 
 class ContractPickerDialog(QDialog):

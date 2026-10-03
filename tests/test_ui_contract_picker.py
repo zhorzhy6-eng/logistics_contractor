@@ -142,7 +142,57 @@ def test_buttons_are_themed(dialog):
 
 def test_picker_title_helper():
     assert picker_title("perevozka") == "Экспедиторство"
+    assert picker_title("formika") == "Формика"
     assert picker_title("zayavka_excel") == "Хавалы"
     # Неизвестный ключ возвращается как есть — окно-заглушка не падает
+    assert picker_title("unknown") == "unknown"
     assert picker_title("unknown_type") == "unknown_type"
     assert picker_title("") == ""
+
+
+# ─────────────────────────────────────────────────────────────
+# Порядок пунктов вынесен в core (ЭТАП 2C)
+#
+# Раньше PICKER_ORDER жил в этом же модуле. Теперь он нужен и селектору
+# типа в шапке окна (ui/controls/contract_type_selector.py), поэтому
+# переехал в core/contracts/picker_order.py, а ui.contract_picker только
+# реэкспортирует имена — старые импорты продолжают работать.
+# ─────────────────────────────────────────────────────────────
+
+def test_core_picker_order_has_five_items_in_required_order():
+    from core.contracts.picker_order import PICKER_ORDER as core_order
+
+    assert len(core_order) == 5
+    assert [key for key, _title in core_order] == [k for k, _t in EXPECTED_ORDER]
+    assert [title for _key, title in core_order] == [t for _k, t in EXPECTED_ORDER]
+
+
+def test_core_picker_title_helper():
+    from core.contracts.picker_order import picker_title as core_title
+
+    assert core_title("formika") == "Формика"
+    assert core_title("unknown") == "unknown"
+    assert core_title("") == ""
+
+
+def test_core_picker_titles_map():
+    from core.contracts.picker_order import picker_titles
+
+    titles = picker_titles()
+    assert titles["perevozka"] == "Экспедиторство"
+    assert titles["formika"] == "Формика"
+    assert titles["logistiks_rus"] == "Логистикс Рус"
+    assert titles["arenda_ts"] == "Разовая аренда"
+    assert titles["zayavka_excel"] == "Хавалы"
+    assert "expediciya" not in titles
+
+
+def test_ui_picker_reexports_core_objects():
+    """Импорт из ui.contract_picker возвращает объекты из core."""
+    from core.contracts import picker_order as core_order
+    from ui import contract_picker as ui_picker
+
+    assert ui_picker.PICKER_ORDER is core_order.PICKER_ORDER
+    assert ui_picker.picker_items is core_order.picker_items
+    assert ui_picker.picker_title is core_order.picker_title
+    assert ui_picker.DEFAULT_PICKER_TYPE == core_order.DEFAULT_PICKER_TYPE
