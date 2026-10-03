@@ -6,7 +6,11 @@
 Проверяют: заготовки типов существуют и импортируются, get_prompt() отдаёт
 None для незаполненных промптов и для неизвестного типа, а сам механизм
 умеет возвращать строку, когда PROMPT заполнен (проверяется на подменённом
-модуле — реальные промпты появятся вместе с генераторами типов).
+модуле).
+
+С ЭТАПА 3.1.A.2 промпт «Формики» заполнен (core/prompts/formika.py), поэтому
+formika из списка заглушек убран и проверяется отдельно: он непустой,
+упоминает фиксированные стороны и не содержит данных из образца.
 """
 
 import sys
@@ -43,7 +47,7 @@ def test_get_prompt_perevozka_is_string_or_none():
 
 
 @pytest.mark.parametrize("contract_type", [
-    "formika", "logistiks_rus", "arenda_ts", "zayavka_excel",
+    "logistiks_rus", "arenda_ts", "zayavka_excel",
 ])
 def test_get_prompt_stubs_are_none(contract_type):
     assert get_prompt(contract_type) is None
@@ -52,6 +56,69 @@ def test_get_prompt_stubs_are_none(contract_type):
 @pytest.mark.parametrize("value", ["unknown", "", None, "expediciya"])
 def test_get_prompt_unknown_type_is_none(value):
     assert get_prompt(value) is None
+
+
+# ─────────────────────────────────────────────────────────────
+# Промпт «Формики» (ЭТАП 3.1.A.2)
+# ─────────────────────────────────────────────────────────────
+
+def test_formika_prompt_is_filled():
+    """Промпт Формики заполнен: get_prompt отдаёт непустую строку."""
+    prompt = get_prompt("formika")
+    assert isinstance(prompt, str)
+    assert prompt.strip(), "промпт Формики пуст"
+    assert prompt == prompt.strip(), "промпт не обрезан по краям"
+
+
+@pytest.mark.parametrize("keyword", [
+    "Формика", "Экспедитор", "Заказчик", "ТЕХНОЛОГИСТИКА",
+])
+def test_formika_prompt_mentions_parties(keyword):
+    """Стороны договора-заявки названы прямо в промпте."""
+    assert keyword in get_prompt("formika")
+
+
+@pytest.mark.parametrize("keyword", [
+    "JSON", "vin", "vehicles", "tractor", "trailer", "driver", "contract",
+])
+def test_formika_prompt_mentions_schema_blocks(keyword):
+    assert keyword in get_prompt("formika")
+
+
+def test_formika_prompt_limits_cargo_to_twelve_cars():
+    """Груз — от 1 до 12 машин, как таблица шаблона."""
+    prompt = get_prompt("formika")
+    assert "от 1 до 12" in prompt
+
+
+def test_formika_prompt_requires_vin_and_forbids_inventing_data():
+    prompt = get_prompt("formika")
+    assert "VIN ОБЯЗАТЕЛЕН" in prompt
+    assert "НЕ придумывай" in prompt
+    assert "Vin по факту погрузки" in prompt, (
+        "промпт должен прямо называть заглушку VIN из образца"
+    )
+
+
+def test_formika_prompt_keeps_pseudonym_placeholders():
+    """Правило обезличивания: плейсхолдеры возвращаются как есть."""
+    assert "<<PERSON_1>>" in get_prompt("formika")
+
+
+def test_formika_prompt_says_cost_includes_vat():
+    prompt = get_prompt("formika")
+    assert "price_input" in prompt
+    assert "vat_rate" in prompt
+    assert "ВКЛЮЧАЮЩЕЙ НДС" in prompt
+
+
+@pytest.mark.parametrize("fragment", [
+    "Дмитренко", "Haval", "Geely", "Chery", "ВАЗ", "350179", "768037",
+    "EC2EF4A58TA023077", "ТЛ-447",
+])
+def test_formika_prompt_has_no_sample_data(fragment):
+    """В промпте нет данных из образца — только описания полей."""
+    assert fragment not in get_prompt("formika")
 
 
 def test_get_prompt_returns_text_when_filled(monkeypatch):
