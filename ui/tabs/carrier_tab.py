@@ -43,6 +43,12 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
 
     recognize_requested = pyqtSignal(str)
 
+    # ── Действия вкладки (ЭТАП 2B) ──
+    #: Объявляются в самой вкладке: TabMixin — не QObject, pyqtSignal там
+    #: невозможен.
+    create_contract_requested = pyqtSignal()
+    clear_requested = pyqtSignal()
+
     #: Название вкладки для сообщений и логов DaData
     DADATA_TAB_TITLE = "Перевозчик"
 
@@ -222,6 +228,12 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
+
+        # ── Панель действий внизу вкладки (ЭТАП 2B) ──
+        # Вне прокручиваемой области: кнопки видны всегда. Внутри scroll
+        # их пришлось бы искать прокруткой, а вкладка «Перевозчик» длинная.
+        self._tab_actions = self._build_tab_actions()
+        main_layout.addWidget(self._tab_actions)
 
         self._on_carrier_type_changed()
 

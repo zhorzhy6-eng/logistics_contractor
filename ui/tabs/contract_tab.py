@@ -71,6 +71,10 @@ class ContractTab(TabMixin, QWidget):
 
     recognize_requested = pyqtSignal(str)
 
+    # ── Действия вкладки (ЭТАП 2B) ──
+    create_contract_requested = pyqtSignal()
+    clear_requested = pyqtSignal()
+
     # ── Сигналы для синхронизации с другими вкладками ──
     loadings_changed = pyqtSignal()
     unloadings_changed = pyqtSignal()
@@ -303,6 +307,12 @@ class ContractTab(TabMixin, QWidget):
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(scroll)
+
+        # ── Панель действий внизу вкладки (ЭТАП 2B) ──
+        # Добавляется в основной layout (вне прокрутки): поля вкладки идут
+        # сверху вниз, и фиксированные высоты внутри scroll не меняются.
+        self._tab_actions = self._build_tab_actions()
+        main_layout.addWidget(self._tab_actions)
 
         # ── Сигналы расчёта ──
         self.price_input.valueChanged.connect(self._calculate_price)

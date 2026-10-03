@@ -49,6 +49,10 @@ class VehiclesTab(TabMixin, QWidget):
 
     recognize_requested = pyqtSignal(str)
 
+    # ── Действия вкладки (ЭТАП 2B) ──
+    create_contract_requested = pyqtSignal()
+    clear_requested = pyqtSignal()
+
     # Колонки таблицы
     COL_VIN = 0
     COL_BRAND = 1
@@ -139,6 +143,10 @@ class VehiclesTab(TabMixin, QWidget):
         # ── Кэш текущих списков точек ──
         self._loadings_points: List[Dict[str, str]] = []
         self._unloadings_points: List[Dict[str, str]] = []
+
+        # ── Панель действий внизу вкладки (ЭТАП 2B) ──
+        self._tab_actions = self._build_tab_actions()
+        layout.addWidget(self._tab_actions)
 
         logger.debug("VehiclesTab инициализирована")
 

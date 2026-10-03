@@ -33,9 +33,9 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt5.QtCore import QDate, QObject, QRunnable, Qt, QThreadPool, pyqtSignal
+from PyQt5.QtCore import QDate, QObject, QRunnable, QSize, Qt, QThreadPool, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication, QHBoxLayout, QInputDialog, QMessageBox, QWidget,
+    QApplication, QFrame, QHBoxLayout, QInputDialog, QMessageBox, QWidget,
 )
 
 from core.dadata_client import (
@@ -46,6 +46,7 @@ from core.dadata_client import (
 )
 from core.dates import parse_date
 from ui import theme
+from ui.icons import action_icon
 
 logger = logging.getLogger("ui.tabs.base_tab")
 
@@ -112,6 +113,62 @@ class TabMixin:
 
         date_edit.setDate(QDate(dt.year, dt.month, dt.day))
         return True
+
+    # ---------------------------------------------------------
+    # Панель действий вкладки (ЭТАП 2B)
+    # ---------------------------------------------------------
+    def _build_tab_actions(self) -> QFrame:
+        """
+        Панель действий внизу вкладки: «Создать договор» + «Очистить форму».
+
+        Раньше эти кнопки жили в шапке окна и действовали на все вкладки.
+        Теперь они есть на каждой вкладке: «Создать» собирает данные со ВСЕХ
+        вкладок окна (одна кнопка — один документ), «Очистить» чистит только
+        текущую вкладку.
+
+        Не QGroupBox: тест test_carrier_tab_has_semantic_sections сравнивает
+        точный список QGroupBox в CarrierTab.
+
+        Сигналы create_contract_requested / clear_requested объявляются
+        в каждой вкладке отдельно: TabMixin — не QObject, pyqtSignal здесь
+        невозможен.
+        """
+        frame = QFrame()
+        frame.setObjectName("actionBar")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        self.btn_create_contract = theme.accent_button(
+            "Создать договор",
+            tooltip="Проверить данные и сформировать договор DOCX",
+        )
+        self.btn_create_contract.setIcon(action_icon("contract.svg"))
+        self.btn_create_contract.setIconSize(QSize(18, 18))
+        self.btn_create_contract.clicked.connect(self._on_tab_create_clicked)
+        layout.addWidget(self.btn_create_contract)
+
+        self.btn_clear_form = theme.secondary_button(
+            "Очистить форму",
+            tooltip="Очистить поля только этой вкладки",
+        )
+        self.btn_clear_form.setIcon(action_icon("clear.svg"))
+        self.btn_clear_form.setIconSize(QSize(18, 18))
+        self.btn_clear_form.clicked.connect(self._on_tab_clear_clicked)
+        layout.addWidget(self.btn_clear_form)
+
+        layout.addStretch()
+        return frame
+
+    def _on_tab_create_clicked(self) -> None:
+        """Пробрасывает запрос «Создать договор» в окно."""
+        logger.debug(f"{type(self).__name__}: запрошено создание договора")
+        self.create_contract_requested.emit()
+
+    def _on_tab_clear_clicked(self) -> None:
+        """Пробрасывает запрос «Очистить форму» в окно."""
+        logger.debug(f"{type(self).__name__}: запрошена очистка вкладки")
+        self.clear_requested.emit()
 
 
 # ─────────────────────────────────────────────────────────────
