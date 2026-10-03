@@ -367,10 +367,31 @@ class MainWindow(QMainWindow):
             (getattr(self, "btn_save_db", None), "save.svg"),
             (getattr(self, "btn_open_db", None), "database.svg"),
             (getattr(self, "btn_settings", None), "settings.svg"),
-            (getattr(self, "btn_clear", None), "clear.svg"),
         ):
             if button is not None:
                 button.setIcon(_action_icon(name))
+
+        # ── Кнопки на вкладках (ЭТАП 2B) ──
+        # «Создать договор» и «Очистить форму» живут на каждой вкладке: при
+        # смене темы их значки нужно пересобрать, иначе светлые останутся
+        # на тёмном фоне.
+        for tab in (
+            getattr(self, "carrier_tab", None),
+            getattr(self, "driver_tab", None),
+            getattr(self, "trailer_tab", None),
+            getattr(self, "vehicles_tab", None),
+            getattr(self, "contract_tab", None),
+            getattr(self, "customer_tab", None),
+        ):
+            if tab is None:
+                continue
+            for attr, name in (
+                ("btn_create_contract", "contract.svg"),
+                ("btn_clear_form", "clear.svg"),
+            ):
+                button = getattr(tab, attr, None)
+                if button is not None:
+                    button.setIcon(_action_icon(name))
 
     def _init_ui(self):
         central = QWidget()
@@ -454,11 +475,9 @@ class MainWindow(QMainWindow):
         self.btn_settings.clicked.connect(self._on_open_settings)
         top_bar.addWidget(self.btn_settings)
 
-        self.btn_clear = theme.secondary_button("Очистить форму")
-        self.btn_clear.setIcon(_action_icon("clear.svg"))
-        self.btn_clear.setIconSize(QSize(18, 18))
-        self.btn_clear.clicked.connect(self._on_clear_form)
-        top_bar.addWidget(self.btn_clear)
+        # «Очистить форму» из шапки убрана (ЭТАП 2B): теперь у каждой вкладки
+        # своя кнопка, и очищается только она (см. _on_clear_tab). Кнопка
+        # «Создать договор» осталась в шапке — она действует на всё окно.
 
         top_bar.addStretch()
 
@@ -480,6 +499,17 @@ class MainWindow(QMainWindow):
         self.vehicles_tab.recognize_requested.connect(self._on_tab_recognize_requested)
         self.trailer_tab.recognize_requested.connect(self._on_tab_recognize_requested)
         self.contract_tab.recognize_requested.connect(self._on_tab_recognize_requested)
+
+        # ── Действия вкладок (ЭТАП 2B) ──
+        # Кнопка «Создать договор» есть и на вкладках, и в шапке: она собирает
+        # данные со ВСЕХ вкладок — документ один. «Очистить форму» очищает
+        # только свою вкладку (сигнал несёт саму вкладку через lambda).
+        for tab in (
+            self.carrier_tab, self.driver_tab, self.trailer_tab,
+            self.vehicles_tab, self.contract_tab, self.customer_tab,
+        ):
+            tab.create_contract_requested.connect(self._on_create_contract)
+            tab.clear_requested.connect(lambda t=tab: self._on_clear_tab(t))
 
         self.contract_tab.loadings_changed.connect(self._sync_loadings_to_vehicles)
         self.contract_tab.unloadings_changed.connect(self._sync_unloadings_to_vehicles)
@@ -1382,6 +1412,27 @@ class MainWindow(QMainWindow):
         self._sync_unloadings_to_vehicles()
 
         self.statusBar().showMessage("Форма очищена", 3000)
+
+    def _on_clear_tab(self, tab) -> None:
+        """
+        Очищает ТОЛЬКО указанную вкладку (ЭТАП 2B).
+
+        Раньше кнопка «Очистить форму» в шапке чистила все вкладки сразу.
+        Теперь у каждой вкладки своя кнопка: пользователь очищает только то,
+        что ему нужно. Старый _on_clear_form остаётся (для совместимости),
+        но из UI больше не вызывается.
+        """
+        logger.info("Очистка вкладки: %s", type(tab).__name__)
+        self._log_ui_action(
+            "нажата кнопка «Очистить форму» на вкладке",
+            tab=type(tab).__name__,
+        )
+        tab.clear()
+        if tab is self.contract_tab:
+            self._sync_loadings_to_vehicles()
+            self._sync_unloadings_to_vehicles()
+        self._refresh_status_indicators()
+        self.statusBar().showMessage("Вкладка очищена", 3000)
 
 
 class BulkPasteDialog(QDialog):
