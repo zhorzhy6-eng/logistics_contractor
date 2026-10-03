@@ -33,6 +33,10 @@ class CustomerTab(DadataFillMixin, DadataBankMixin, QWidget):
 
     recognize_requested = pyqtSignal(str)
 
+    # ── Действия вкладки (ЭТАП 2B) ──
+    create_contract_requested = pyqtSignal()
+    clear_requested = pyqtSignal()
+
     #: Название вкладки для сообщений и логов DaData
     DADATA_TAB_TITLE = "Заказчик"
 
@@ -132,6 +136,10 @@ class CustomerTab(DadataFillMixin, DadataBankMixin, QWidget):
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(scroll)
+
+        # ── Панель действий внизу вкладки (ЭТАП 2B) ──
+        self._tab_actions = self._build_tab_actions()
+        main_layout.addWidget(self._tab_actions)
 
         logger.debug("CustomerTab инициализирована")
 

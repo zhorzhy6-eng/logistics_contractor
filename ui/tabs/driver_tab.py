@@ -70,6 +70,10 @@ class DriverTab(DadataDriverMixin, QWidget):
     # Сигнал для передачи данных в главное окно для распознавания
     recognize_requested = pyqtSignal(str)
 
+    # ── Действия вкладки (ЭТАП 2B) ──
+    create_contract_requested = pyqtSignal()
+    clear_requested = pyqtSignal()
+
     #: Название вкладки для сообщений и логов DaData
     DADATA_TAB_TITLE = "Водитель"
 
@@ -198,6 +202,10 @@ class DriverTab(DadataDriverMixin, QWidget):
         # Основной layout
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(scroll)
+
+        # ── Панель действий внизу вкладки (ЭТАП 2B) ──
+        self._tab_actions = self._build_tab_actions()
+        main_layout.addWidget(self._tab_actions)
 
         logger.debug("DriverTab инициализирована")
 

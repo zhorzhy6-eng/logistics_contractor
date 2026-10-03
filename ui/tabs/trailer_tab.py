@@ -27,6 +27,10 @@ class TrailerTab(TabMixin, QWidget):
 
     recognize_requested = pyqtSignal(str)
 
+    # ── Действия вкладки (ЭТАП 2B) ──
+    create_contract_requested = pyqtSignal()
+    clear_requested = pyqtSignal()
+
     def __init__(self):
         super().__init__()
 
@@ -92,6 +96,10 @@ class TrailerTab(TabMixin, QWidget):
         # Основной layout
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(scroll)
+
+        # ── Панель действий внизу вкладки (ЭТАП 2B) ──
+        self._tab_actions = self._build_tab_actions()
+        main_layout.addWidget(self._tab_actions)
 
         logger.debug("TrailerTab инициализирована")
 
