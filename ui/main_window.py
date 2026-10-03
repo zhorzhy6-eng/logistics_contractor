@@ -21,6 +21,7 @@ from db.database import (
 
 from core import audit, secrets_store
 from core.contract_data import ContractData
+from core.contracts.contract_types import DEFAULT_CONTRACT_TYPE
 from core.contract_generator import ContractGenerator
 from core.gigachat_client import GigaChatClient
 from core.recognizer import filled_only, filled_only_list
@@ -31,6 +32,7 @@ from core.validator import ValidationReport, Validator
 
 from ui import theme
 from ui import system_theme
+from ui.controls.contract_type_selector import ContractTypeSelector
 from ui.icons import action_icon as _action_icon
 from ui.icons import resource_path as _resource_path
 from ui.icons import tab_icon as _tab_icon
@@ -151,6 +153,15 @@ class RecognitionTask(QRunnable):
 
 
 class MainWindow(QMainWindow):
+    # ── Переключение типа и выход (ЭТАП 2C) ──
+    # Окно «Экспедиторство» — не подкласс BaseContractWindow (нельзя ломать
+    # рабочую вкладку-логику), но сигналы у него те же: main.py подключает
+    # их к WindowManager и завершению приложения.
+    #: Пользователь выбрал другой тип договора в селекторе шапки.
+    switch_to_type_requested = pyqtSignal(str)
+    #: Пользователь нажал «Выход».
+    exit_requested = pyqtSignal()
+
     # Ожидаемые разделы ответа модели. Нужны для debug-лога: видно не только
     # то, что распознано, но и то, что модель вообще не вернула.
     _RECOGNITION_SECTIONS = (
@@ -417,6 +428,13 @@ class MainWindow(QMainWindow):
         header.addLayout(heading)
         header.addStretch()
 
+        # ── Селектор типа договора (ЭТАП 2C) ──
+        # Виджет только сообщает о выборе: переключает окна main.py через
+        # WindowManager. Тип окна берётся из ContractType, а не из литерала.
+        self.selector = ContractTypeSelector(DEFAULT_CONTRACT_TYPE.value)
+        self.selector.contract_type_selected.connect(self.switch_to_type_requested)
+        header.addWidget(self.selector)
+
         self.btn_create_contract = theme.accent_button(
             "Создать договор",
             tooltip="Проверить данные и сформировать договор DOCX",
@@ -425,6 +443,16 @@ class MainWindow(QMainWindow):
         self.btn_create_contract.setIconSize(QSize(18, 18))
         self.btn_create_contract.clicked.connect(self._on_create_contract)
         header.addWidget(self.btn_create_contract)
+
+        # ── «Выход» (ЭТАП 2C) ──
+        # Крестик окна только прячет его (данные в формах не теряются),
+        # поэтому штатный выход из программы — эта кнопка: сигнал ловит
+        # main.py, закрывает окна через WindowManager и завершает цикл.
+        self.btn_exit = theme.secondary_button(
+            "Выход", tooltip="Закрыть программу"
+        )
+        self.btn_exit.clicked.connect(self.exit_requested)
+        header.addWidget(self.btn_exit)
         main_layout.addWidget(header_frame)
 
         action_frame = QFrame()
