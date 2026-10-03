@@ -299,3 +299,46 @@ def test_zayavka_generator_is_not_docx_based():
     assert not issubclass(ZayavkaExcelGenerator, BaseContractGenerator)
     generator = GeneratorFactory.get_generator("zayavka_excel")
     assert isinstance(generator, ZayavkaExcelGenerator)
+
+
+# ─────────────────────────────────────────────────────────────
+# Инфраструктура типов договоров (ЭТАП 1: выпадающий список)
+# ─────────────────────────────────────────────────────────────
+
+#: Ключи пяти пунктов выпадающего списка (см. ui/contract_picker.py).
+#: expediciya («Экспедиторская заявка») в список НЕ входит: это отдельная
+#: заглушка шага 8, а не пользовательский тип договора.
+UI_CONTRACT_TYPE_KEYS = (
+    "perevozka",
+    "formika",
+    "logistiks_rus",
+    "arenda_ts",
+    "zayavka_excel",
+)
+
+
+def test_contract_type_enum_has_all_ui_types():
+    """ContractType содержит все пять ключей выпадающего списка."""
+    values = {member.value for member in ContractType}
+    for key in UI_CONTRACT_TYPE_KEYS:
+        assert key in values, f"нет значения ContractType для {key!r}"
+
+
+def test_builtin_type_modules_include_new_types():
+    """formika и logistiks_rus добавлены, существующие модули не потеряны."""
+    for module in (
+        "core.contracts.perevozka",
+        "core.contracts.formika",
+        "core.contracts.logistiks_rus",
+        "core.contracts.arenda_ts",
+        "core.contracts.expediciya",
+        "core.contracts.zayavka",
+    ):
+        assert module in BUILTIN_TYPE_MODULES, f"нет модуля {module}"
+    assert len(BUILTIN_TYPE_MODULES) == 6
+
+
+def test_default_contract_type_is_still_perevozka():
+    """Тип по умолчанию не менялся: старые вызовы без типа — перевозка."""
+    assert DEFAULT_CONTRACT_TYPE is ContractType.PEREVOZKA
+    assert DEFAULT_CONTRACT_TYPE.value == "perevozka"
