@@ -146,3 +146,133 @@ def test_every_tab_declares_signals(qt_app, name, expected):
             assert hasattr(widget, expected), tab_name
         finally:
             widget.deleteLater()
+
+
+# ─────────────────────────────────────────────────────────────
+# MainWindow: сигналы вкладок подключены к окну
+# ─────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def window(qt_app, monkeypatch):
+    """MainWindow без GigaChat, без таймера слежения за темой Windows."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    from ui.main_window import MainWindow
+
+    monkeypatch.setattr(
+        MainWindow, "_init_gigachat_client", lambda self, show_dialog=True: False
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
+
+    win = MainWindow()
+    yield win
+    win.system_theme_watcher.stop()
+    win.close()
+    win.deleteLater()
+
+
+def test_window_has_no_clear_button_in_header(window):
+    """«Очистить форму» из шапки убрана: она есть только на вкладках."""
+    assert not hasattr(window, "btn_clear")
+
+
+def test_window_keeps_create_button_in_header(window):
+    """Кнопка «Создать договор» осталась в шапке."""
+    assert window.btn_create_contract.parent() is not None
+
+
+def test_tab_create_signal_is_connected_to_window(qt_app, monkeypatch):
+    """Клик по кнопке вкладки доходит до MainWindow._on_create_contract."""
+    from PyQt5.QtWidgets import QMessageBox
+
+    from ui.main_window import MainWindow
+
+    monkeypatch.setattr(
+        MainWindow, "_init_gigachat_client", lambda self, show_dialog=True: False
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
+
+    calls = []
+    monkeypatch.setattr(
+        MainWindow, "_on_create_contract", lambda self: calls.append("create")
+    )
+
+    win = MainWindow()
+    try:
+        for tab in (
+            win.carrier_tab, win.driver_tab, win.trailer_tab,
+            win.vehicles_tab, win.contract_tab, win.customer_tab,
+        ):
+            calls.clear()
+            tab.btn_create_contract.click()
+            assert calls == ["create"], type(tab).__name__
+    finally:
+        win.system_theme_watcher.stop()
+        win.close()
+        win.deleteLater()
+
+
+def test_clear_tab_clears_only_that_tab(window):
+    """_on_clear_tab чистит указанную вкладку и не трогает остальные."""
+    window.driver_tab.full_name.setText("Иванов Иван Иванович")
+    window.contract_tab.route.setText("Москва → Санкт-Петербург")
+
+    window._on_clear_tab(window.contract_tab)
+
+    assert window.contract_tab.route.text() == ""
+    assert window.driver_tab.full_name.text() == "Иванов Иван Иванович"
+
+
+def test_clear_button_on_tab_clears_only_that_tab(window):
+    """Кнопка «Очистить форму» на вкладке действует только на свою вкладку."""
+    window.driver_tab.full_name.setText("Иванов Иван Иванович")
+    window.contract_tab.route.setText("Москва → Санкт-Петербург")
+
+    window.driver_tab.btn_clear_form.click()
+
+    assert window.driver_tab.full_name.text() == ""
+    assert window.contract_tab.route.text() == "Москва → Санкт-Петербург"
+
+
+def test_direct_clear_of_one_tab_does_not_touch_others(window):
+    """Прямой вызов clear() на вкладке не затрагивает соседние."""
+    window.carrier_tab.full_name.setText("ООО «Транс-Логистик»")
+    window.contract_tab.route.setText("Москва → Санкт-Петербург")
+
+    window.carrier_tab.clear()
+
+    assert window.carrier_tab.full_name.text() == ""
+    assert window.contract_tab.route.text() == "Москва → Санкт-Петербург"
+
+
+def test_old_clear_form_still_clears_everything(window):
+    """Старый _on_clear_form сохранён: чистит все вкладки (совместимость)."""
+    window.driver_tab.full_name.setText("Иванов Иван Иванович")
+    window.contract_tab.route.setText("Москва → Санкт-Петербург")
+
+    window._on_clear_form()
+
+    assert window.driver_tab.full_name.text() == ""
+    assert window.contract_tab.route.text() == ""
+
+
+def test_theme_change_rebuilds_tab_button_icons(window, qt_app):
+    """Смена темы пересобирает значки кнопок на вкладках."""
+    from ui import theme
+
+    try:
+        theme.apply_theme(qt_app, "classic")
+        window._refresh_nav_icons()
+        icon_before = window.contract_tab.btn_create_contract.icon()
+
+        theme.apply_theme(qt_app, "dark_pro")
+        window._refresh_nav_icons()
+        icon_after = window.contract_tab.btn_create_contract.icon()
+
+        assert not icon_after.isNull()
+        assert icon_before.cacheKey() != icon_after.cacheKey()
+    finally:
+        theme.apply_theme(qt_app, "classic")
+
