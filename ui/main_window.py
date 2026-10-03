@@ -1,11 +1,9 @@
 import logging
 import os
-import sys
 from datetime import datetime
 from typing import Dict, Any, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QRunnable, QThreadPool, QTimer, QSize
-from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QPushButton, QMessageBox, QDialog, QLabel, QFrame,
@@ -33,6 +31,10 @@ from core.validator import ValidationReport, Validator
 
 from ui import theme
 from ui import system_theme
+from ui.icons import action_icon as _action_icon
+from ui.icons import resource_path as _resource_path
+from ui.icons import tab_icon as _tab_icon
+from ui.icons import themed_icon as _themed_icon
 from ui.system_theme import SystemThemeWatcher
 from ui.tabs.driver_tab import DriverTab
 from ui.tabs.customer_tab import CustomerTab
@@ -50,42 +52,13 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATES_DIR = os.path.join(_PROJECT_ROOT, "templates")
 
-
-def _resource_path(relative: str) -> str:
-    """Путь к ресурсу в исходном проекте или сборке PyInstaller."""
-    base = getattr(sys, "_MEIPASS", _PROJECT_ROOT)
-    return os.path.join(base, relative)
-
-
-def _themed_icon(folder: str, name: str) -> QIcon:
-    """
-    Иконка с учётом активной темы.
-
-    Для тёмных тем сначала ищется вариант в подпапке ``dark/``: светлые
-    значки на тёмном фоне читаются плохо. Если варианта нет, берётся обычный
-    файл — отсутствие картинки не должно ломать интерфейс.
-    """
-    if theme.is_dark():
-        dark_path = _resource_path(
-            os.path.join("resources", "icons", folder, "dark", name)
-        )
-        dark_icon = QIcon(dark_path)
-        if not dark_icon.isNull():
-            return dark_icon
-
-    path = _resource_path(os.path.join("resources", "icons", folder, name))
-    icon = QIcon(path)
-    if icon.isNull():
-        logger.warning("Иконка не загружена: %s", path)
-    return icon
+# ── Иконки тем (ЭТАП 2B) ──
+# Помощники _resource_path/_themed_icon/_tab_icon/_action_icon переехали
+# в ui/icons.py: теперь их используют и вкладки (кнопки «Создать договор»
+# и «Очистить форму»). Имена оставлены алиасами: внешний код, который
+# импортировал их отсюда, продолжает работать.
 
 
-def _tab_icon(name: str) -> QIcon:
-    return _themed_icon("tabs", name)
-
-
-def _action_icon(name: str) -> QIcon:
-    return _themed_icon("actions", name)
 def _validate_gigachat_key(key: str) -> Optional[str]:
     if not key:
         return (
