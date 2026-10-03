@@ -503,13 +503,15 @@ class MainWindow(QMainWindow):
         # ── Действия вкладок (ЭТАП 2B) ──
         # Кнопка «Создать договор» есть и на вкладках, и в шапке: она собирает
         # данные со ВСЕХ вкладок — документ один. «Очистить форму» очищает
-        # только свою вкладку (сигнал несёт саму вкладку через lambda).
+        # только свою вкладку; вкладку слот берёт у отправителя сигнала
+        # (sender()), а не из замыкания: lambda, захватывающая вкладку,
+        # создаёт цикл ссылок Python ↔ Qt и роняет процесс при выходе.
         for tab in (
             self.carrier_tab, self.driver_tab, self.trailer_tab,
             self.vehicles_tab, self.contract_tab, self.customer_tab,
         ):
             tab.create_contract_requested.connect(self._on_create_contract)
-            tab.clear_requested.connect(lambda t=tab: self._on_clear_tab(t))
+            tab.clear_requested.connect(self._on_tab_clear_requested)
 
         self.contract_tab.loadings_changed.connect(self._sync_loadings_to_vehicles)
         self.contract_tab.unloadings_changed.connect(self._sync_unloadings_to_vehicles)
@@ -1412,6 +1414,20 @@ class MainWindow(QMainWindow):
         self._sync_unloadings_to_vehicles()
 
         self.statusBar().showMessage("Форма очищена", 3000)
+
+    def _on_tab_clear_requested(self) -> None:
+        """
+        Слот кнопки «Очистить форму» на вкладке (ЭТАП 2B).
+
+        Вкладка берётся у отправителя сигнала: держать её в замыкании
+        (lambda t=tab: ...) нельзя — получается цикл ссылок Python ↔ Qt,
+        из-за которого процесс падает при завершении.
+        """
+        tab = self.sender()
+        if tab is None:
+            logger.warning("Запрос очистки вкладки без отправителя — пропущен")
+            return
+        self._on_clear_tab(tab)
 
     def _on_clear_tab(self, tab) -> None:
         """

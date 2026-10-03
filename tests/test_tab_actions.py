@@ -247,6 +247,21 @@ def test_direct_clear_of_one_tab_does_not_touch_others(window):
     assert window.contract_tab.route.text() == "Москва → Санкт-Петербург"
 
 
+def test_clear_slot_without_sender_is_safe(window):
+    """
+    Слот очистки вызывается только по сигналу вкладки.
+
+    Вкладка берётся у отправителя (sender()), а не из замыкания: lambda,
+    захватывающая вкладку, создаёт цикл ссылок Python ↔ Qt и роняет процесс
+    при завершении. Прямой вызов слота без отправителя ничего не чистит.
+    """
+    window.contract_tab.route.setText("Москва → Санкт-Петербург")
+
+    window._on_tab_clear_requested()  # не должно бросить и не должно чистить
+
+    assert window.contract_tab.route.text() == "Москва → Санкт-Петербург"
+
+
 def test_old_clear_form_still_clears_everything(window):
     """Старый _on_clear_form сохранён: чистит все вкладки (совместимость)."""
     window.driver_tab.full_name.setText("Иванов Иван Иванович")
