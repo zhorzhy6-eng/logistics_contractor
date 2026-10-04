@@ -23,6 +23,14 @@ generator.py) и валидатор (core/contracts/formika/validator.py). Сб�
                     price_with_vat / vat_rate / vat_rate_num /
                     payment_days / special_conditions
 
+Две точки входа:
+
+    build(customer_tab, cargo_tab, ...)  — по именам вкладок (окно, ЭТАП 3.1.B.3);
+    collect_formika_data({"customer": tab, ...}) — по словарю (ЭТАП 3.1.B.1).
+
+Первая — тонкая обёртка над второй: раскладка полей живёт в одном месте,
+и оба вызова дают одинаковый ContractData.
+
 Стороны договора — заказчик и экспедитор — в бланке Формики фиксированы
 (ООО «Формика» и ООО «ТЕХНОЛОГИСТИКА»), поэтому customer и carrier остаются
 пустыми: значения не выдумываются.
@@ -277,7 +285,14 @@ def _build_route(tabs: Mapping[str, Any]) -> Dict[str, Any]:
 
     unloading_address = _text(data.get("unloading_address"))
     if unloading_address:
-        unloadings.append({"address": unloading_address})
+        unloadings.append({
+            "address": unloading_address,
+            # Плановая дата выгрузки в бланке Формики печатается, но вводится
+            # не вручную: на вкладке это поле только для чтения (см.
+            # ui/windows/formika/tabs/route_tab.py). В заявке указывается срок
+            # доставки, поэтому дата идёт в точку, а не остаётся пустой.
+            "date": _text(data.get("unloading_plan_date")),
+        })
 
     return {"contract": contract, "loadings": loadings, "unloadings": unloadings}
 
@@ -311,13 +326,26 @@ def _build_driver(tabs: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _build_vehicle(tabs: Mapping[str, Any]) -> Dict[str, Any]:
-    """Тягач и полуприцеп: поля ContractData.tractor / .trailer."""
+    """
+    Тягач и полуприцеп: поля ContractData.tractor / .trailer.
+
+    Ключи вкладки читаются ровно такие, какие отдаёт VehicleTab.get_data()
+    (tractor_brand, tractor_type, ...): тип ТС лежит в поле tractor_type, а
+    в ContractData он называется vehicle_type — типы ТС справочника машин
+    и шаблона Формики («{{tractor_type}}») знают только это имя.
+
+    Запасной ключ ts_type оставлен для данных из справочника: там тип ТС
+    может прийти под этим именем.
+    """
     data = _raw_data(tabs, "vehicle")
 
     tractor: Dict[str, Any] = {}
     _set_if_filled(tractor, "brand_model", _text(data.get("tractor_brand")))
     _set_if_filled(tractor, "plate_number", _text(data.get("tractor_plate")))
-    _set_if_filled(tractor, "vehicle_type", _text(data.get("tractor_type")))
+    _set_if_filled(
+        tractor, "vehicle_type",
+        _text(data.get("tractor_type")) or _text(data.get("ts_type")),
+    )
     _set_if_filled(tractor, "color", _text(data.get("tractor_color")))
     _set_if_filled(tractor, "year", _text(data.get("tractor_year")))
 
@@ -388,7 +416,47 @@ def collect_formika_data(tabs: Mapping[str, Any]) -> ContractData:
     return contract_data
 
 
+def build(
+    customer_tab: Any,
+    cargo_tab: Any,
+    route_tab: Any,
+    driver_tab: Any,
+    vehicle_tab: Any,
+    price_tab: Any,
+) -> ContractData:
+    """
+    Собирает ContractData из шести вкладок окна «Формика» (ЭТАП 3.1.B.3).
+
+    Точка входа для окна: вкладки передаются по именам и в порядке разделов,
+    а не словарём — так вызов читается и его нельзя перепутать местами
+    незаметно для теста. Раскладка полей при этом одна: метод собирает
+    словарь и вызывает collect_formika_data.
+
+    Обращений к интерфейсу здесь нет: у вкладок читается только get_data().
+    Вкладка может быть None или не отдавать данные — раздел останется пустым,
+    исключение не поднимется (см. _raw_data).
+
+    :param customer_tab: вкладка «Заказчик» (номер и дата заявки).
+    :param cargo_tab: вкладка «Груз» (перевозимые машины).
+    :param route_tab: вкладка «Маршрут» (маршрут, адреса, план погрузки).
+    :param driver_tab: вкладка «Водитель».
+    :param vehicle_tab: вкладка «ТС» (тягач и полуприцеп).
+    :param price_tab: вкладка «Стоимость».
+    :return: ContractData; customer и carrier пустые — стороны в бланке
+        Формики фиксированы.
+    """
+    return collect_formika_data({
+        "customer": customer_tab,
+        "cargo": cargo_tab,
+        "route": route_tab,
+        "driver": driver_tab,
+        "vehicle": vehicle_tab,
+        "price": price_tab,
+    })
+
+
 __all__ = [
+    "build",
     "collect_formika_data",
     "SECTION_TITLES",
     "DRIVER_FIELDS",

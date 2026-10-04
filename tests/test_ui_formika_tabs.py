@@ -831,7 +831,14 @@ def test_all_tabs_feed_collect_formika_data(qt_app):
         "date": "2026-09-24",
         "time_window": "09:00-18:00",
     }]
-    assert data.unloadings == [{"address": "г. Пятигорск, Бештаугорское шоссе 17", "date": "", "time_window": ""}]
+    # Выгрузка получает плановую дату выгрузки вкладки «Маршрут»: в бланке
+    # Формики она печатается, хотя и не вводится вручную. Вкладка показывает
+    # её по умолчанию как «сегодня + 3 дня»; окна времени у выгрузки нет.
+    assert data.unloadings == [{
+        "address": "г. Пятигорск, Бештаугорское шоссе 17",
+        "date": QDate.currentDate().addDays(3).toString("yyyy-MM-dd"),
+        "time_window": "",
+    }]
 
     assert data.driver["full_name"] == "Иванов Иван Иванович"
     assert data.driver["passport_series"] == "18 22"

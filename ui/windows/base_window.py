@@ -84,7 +84,7 @@ class BaseContractWindow(QMainWindow):
 
         self.side_nav = SideNav("Разделы")
         for tab_title, icon_key in self.TAB_CONFIGS:
-            tab = self._make_placeholder_tab(tab_title)
+            tab = self._make_tab(tab_title, icon_key)
             self.tabs.addTab(tab, tab_icon(icon_key), tab_title)
             self.side_nav.add_item(tab_title, tab_icon(icon_key))
 
@@ -132,6 +132,21 @@ class BaseContractWindow(QMainWindow):
         header.addWidget(self.btn_exit)
 
         return header_frame
+
+    def _make_tab(self, title: str, icon_key: str) -> QWidget:
+        """
+        Фабрика вкладки по заголовку. По умолчанию — заглушка.
+
+        Окна типов, у которых вкладки уже написаны (ЭТАП 3.1.B, Формика),
+        переопределяют этот хук и возвращают настоящую вкладку. Каркас окна
+        при этом не меняется: порядок вкладок, сайдбар и сигналы остаются
+        общими для всех типов.
+
+        :param title: заголовок вкладки из TAB_CONFIGS.
+        :param icon_key: ключ иконки вкладки (resources/icons/tabs/).
+        :return: виджет страницы QTabWidget.
+        """
+        return self._make_placeholder_tab(title)
 
     def _make_placeholder_tab(self, title: str) -> QWidget:
         """Вкладка-заглушка: сообщение и панель действий."""

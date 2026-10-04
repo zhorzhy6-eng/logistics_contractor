@@ -18,7 +18,7 @@ from typing import Any, Dict
 
 from PyQt5.QtCore import QDate, QTime, pyqtSignal
 from PyQt5.QtWidgets import (
-    QDateEdit, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QDateEdit, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QScrollArea, QTimeEdit, QVBoxLayout, QWidget,
 )
 
