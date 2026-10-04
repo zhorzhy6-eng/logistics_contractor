@@ -288,18 +288,13 @@ def test_full_action_pass_runs_offscreen(
     assert win.cargo_tab.get_data()["vehicles"]
     assert win.recognition_task is None, "состояние задачи не сброшено"
 
-    # Тягач распознавание Формики не заполняет — это дефект ЭТАПА 3.1.B
-    # (см. test_recognition_does_not_fill_tractor_fields ниже). Пока его не
-    # исправили, блок исполнителя вводим руками: иначе валидатор не пустит
-    # договор дальше и проверка жизненного цикла упрётся в чужую проблему.
-    win.vehicle_tab.fill_data({
-        "tractor_brand": "Foton Auman",
-        "tractor_plate": "O844XY196",
-        "tractor_type": "Седельный тягач",
-        "trailer_brand": "YANGMINDA",
-        "trailer_plate": "71ABF18",
-    })
-    settle(qt_app)
+    # Блок исполнителя распознавание раскладывает по вкладке «ТС» само:
+    # ключи промпта (brand_model, plate_number) переводит карта ключей
+    # _TRACTOR_KEYS / _TRAILER_KEYS.
+    vehicle = win.vehicle_tab.get_data()
+    assert vehicle["tractor_brand"] == "Foton Auman", vehicle
+    assert vehicle["tractor_plate"] == "O844XY196", vehicle
+    assert vehicle["trailer_brand"] == "YANGMINDA", vehicle
 
     # ── «Создать договор»: кнопка шапки → валидатор → генератор ──
     win.btn_create_contract.click()
@@ -333,26 +328,16 @@ def test_full_action_pass_runs_offscreen(
     assert contract_path.exists() is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "ДЕФЕКТ ЭТАПА 3.1.B: схема промпта Формики (core/prompts/formika.py, "
-        "JSON-пример) отдаёт блок «tractor» с ключами БЕЗ префикса — "
-        "brand_model / plate_number / vehicle_type, — а "
-        "FormikaWindow._vehicle_tab_data раскладывает через карту только "
-        "прицеп (_TRAILER_KEYS) и ждёт от тягача уже готовые ключи "
-        "tractor_brand / tractor_plate. Распознавание не заполняет тягач, "
-        "валидатор даёт «Не заполнена марка тягача» и «Не заполнен госномер "
-        "тягача», договор не создаётся. Существующий "
-        "test_recognition_fills_tabs этого не ловит: он подаёт ключи "
-        "tractor_brand / tractor_plate, которых промпт не обещает. Снять "
-        "xfail, когда в _vehicle_tab_data появится карта тягача."
-    ),
-)
-def test_recognition_does_not_fill_tractor_fields(
+def test_recognition_fills_tractor_fields(
     qt_app, quiet_messages, window_factory
 ):
-    """Дефект: распознанный тягач не попадает на вкладку «ТС»."""
+    """
+    Распознанный тягач попадает на вкладку «ТС».
+
+    Регресс на дефект: схема промпта Формики отдаёт блок «tractor» с
+    ключами БЕЗ префикса (brand_model / plate_number / vehicle_type), а
+    вкладка ждёт tractor_brand / tractor_plate / tractor_type.
+    """
     win = window_factory()
     win.show()
 
@@ -362,19 +347,23 @@ def test_recognition_does_not_fill_tractor_fields(
     vehicle = win.vehicle_tab.get_data()
     assert vehicle["tractor_brand"] == "Foton Auman", vehicle
     assert vehicle["tractor_plate"] == "O844XY196", vehicle
+    assert vehicle["tractor_type"] == "Седельный тягач", vehicle
+    # Прицеп раскладывался и раньше — проверяем, что не сломался.
+    assert vehicle["trailer_brand"] == "YANGMINDA", vehicle
+    assert vehicle["trailer_plate"] == "71ABF18", vehicle
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Следствие того же дефекта: после распознавания валидатор Формики "
-        "не пропускает договор из-за пустого блока тягача."
-    ),
-)
 def test_recognition_alone_is_enough_to_create_contract(
     qt_app, quiet_messages, window_factory
 ):
-    """Дефект: данных распознавания не хватает валидатору из-за тягача."""
+    """
+    Данных распознавания хватает валидатору: ошибок «тягач» больше нет.
+
+    Регресс на дефект: пустой блок тягача давал ошибки «Не заполнена марка
+    тягача» и «Не заполнен госномер тягача», и договор создать было нельзя.
+    Замечания (не ошибки) валидатора договор не блокируют — например, про
+    неполные данные водителя: их в этом ответе модели и нет.
+    """
     from core.contracts.formika.validator import FormikaValidator
 
     win = window_factory()
@@ -386,7 +375,9 @@ def test_recognition_alone_is_enough_to_create_contract(
     report = FormikaValidator().check(win._collect_data())
 
     assert report.errors == [], report.errors
-    assert report.is_clean is True, report.format_text()
+    assert not [error for error in report.errors if "тягач" in error.lower()]
+    # Ошибок нет — значит, диалог проверки не остановит создание договора.
+    assert report.has_errors is False
 
 
 def test_generation_in_offscreen_run_goes_to_test_dir(

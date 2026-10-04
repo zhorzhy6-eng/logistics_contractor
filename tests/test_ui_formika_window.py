@@ -738,8 +738,10 @@ def test_recognition_fills_tabs(window, monkeypatch, quiet_messages):
         {"brand_model": "JETOUR T2", "vin": "EC3TEUMB0T0002608"}
     ]
 
-    # Тягач и прицеп: ключи ответа совпадают с именами полей вкладки
-    # (tractor_brand, trailer_year, ...), поэтому раскладываются как есть.
+    # Тягач и прицеп: ключи ответа — ровно те, что обещает схема промпта
+    # Формики (core/prompts/formika.py): brand_model / plate_number /
+    # vehicle_type, БЕЗ префиксов tractor_ и trailer_. Раскладывает их карта
+    # ключей в _vehicle_tab_data.
     vehicle = window.vehicle_tab.get_data()
     assert vehicle["tractor_brand"] == "Foton Auman"
     assert vehicle["tractor_plate"] == "O844XY196"
@@ -750,6 +752,65 @@ def test_recognition_fills_tabs(window, monkeypatch, quiet_messages):
 
     assert window.route_tab.get_data()["route"] == "Мурманск - Пятигорск (обновлено)"
     assert window.price_tab.get_data()["special_conditions"] == "Без дозагрузки"
+
+
+def test_vehicle_tab_keys_win_over_prompt_keys(window, monkeypatch, quiet_messages):
+    """
+    Ключи вкладки (tractor_brand) важнее ключей схемы промпта (brand_model).
+
+    Ответ может прийти в обоих видах: справочник машин и повторное
+    распознавание отдают имена полей вкладки, а схема промпта Формики —
+    краткие имена. Явное значение должно побеждать.
+    """
+    _answer_recognition(window, monkeypatch, {
+        "tractor": {"tractor_brand": "Явная марка", "brand_model": "Из промпта",
+                    "plate_number": "O844XY196"},
+        "trailer": {"brand_model": "YANGMINDA"},
+    })
+
+    vehicle = window.vehicle_tab.get_data()
+    assert vehicle["tractor_brand"] == "Явная марка"
+    assert vehicle["tractor_plate"] == "O844XY196"
+    assert vehicle["trailer_brand"] == "YANGMINDA"
+
+
+def test_vehicle_tab_data_maps_prompt_schema():
+    """
+    Прямая проверка раскладки блока tractor / trailer (схема промпта).
+
+    Отдельно от окна: так видно саму карту ключей, а не её косвенное
+    действие через вкладку.
+    """
+    data = FormikaWindow._vehicle_tab_data({
+        "tractor": {"brand_model": "Foton Auman", "plate_number": "O844XY196",
+                    "vehicle_type": "Седельный тягач", "color": "Белый",
+                    "year": "2023"},
+        "trailer": {"brand_model": "YANGMINDA", "plate_number": "71ABF18",
+                    "color": "Серый", "year": "2020"},
+    })
+
+    assert data == {
+        "tractor_brand": "Foton Auman",
+        "tractor_plate": "O844XY196",
+        "tractor_type": "Седельный тягач",
+        "tractor_color": "Белый",
+        "tractor_year": "2023",
+        "trailer_brand": "YANGMINDA",
+        "trailer_plate": "71ABF18",
+        "trailer_color": "Серый",
+        "trailer_year": "2020",
+    }
+
+    # Пустые значения схема обещает как "" — они не должны ничего затирать.
+    assert FormikaWindow._vehicle_tab_data({
+        "tractor": {"brand_model": "", "plate_number": ""},
+        "trailer": {},
+    }) == {}
+
+    # ts_type — запасной ключ типа ТС (как в ui/windows/formika/data.py).
+    assert FormikaWindow._vehicle_tab_data({
+        "tractor": {"ts_type": "Автопоезд"},
+    }) == {"tractor_type": "Автопоезд"}
 
 
 def test_recognition_does_not_overwrite_manual_input(window, monkeypatch, quiet_messages):

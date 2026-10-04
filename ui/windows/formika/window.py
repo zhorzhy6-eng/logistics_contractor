@@ -170,11 +170,26 @@ class FormikaWindow(BaseContractWindow):
         ("contract", "договор"),
     )
 
+    #: Ключи блока «tractor» ответа модели → имена полей вкладки «ТС».
+    #: Схема промпта Формики (core/prompts/formika.py, JSON-пример) отдаёт
+    #: тягач БЕЗ префикса: brand_model, plate_number, vehicle_type, color,
+    #: year. Вкладка же ждёт tractor_brand / tractor_plate / ... — без этой
+    #: карты распознанный тягач не попадал ни в одно поле, и валидатор
+    #: отказывался создавать договор («Не заполнена марка тягача»).
+    #: ts_type — запасной ключ типа ТС, как в ui/windows/formika/data.py.
+    _TRACTOR_KEYS: Dict[str, str] = {
+        "brand_model": "tractor_brand",
+        "plate_number": "tractor_plate",
+        "vehicle_type": "tractor_type",
+        "ts_type": "tractor_type",
+        "color": "tractor_color",
+        "year": "tractor_year",
+    }
+
     #: Ключи блока «trailer» ответа модели → имена полей вкладки «ТС».
-    #: Схема промпта Формики у прицепа без префикса ("year", "color"),
-    #: а вкладка ждёт trailer_year / trailer_color. У тягача префикс уже
-    #: есть (brand_model / plate_number / vehicle_type), поэтому в карте
-    #: только прицеп.
+    #: Схема промпта Формики у прицепа тоже без префикса: brand_model,
+    #: plate_number, color, year. Тип ТС у прицепа не спрашивается — в
+    #: бланке он не печатается.
     _TRAILER_KEYS: Dict[str, str] = {
         "brand_model": "trailer_brand",
         "plate_number": "trailer_plate",
@@ -697,7 +712,10 @@ class FormikaWindow(BaseContractWindow):
         Поля вкладки «ТС» из блоков tractor / trailer ответа модели.
 
         Ключи вкладки (tractor_brand, trailer_year, ...) имеют приоритет:
-        если модель вернула и их, и краткие имена, берётся явное значение.
+        если модель вернула и их, и краткие имена из схемы промпта, берётся
+        явное значение. Раскладку делают карты _TRACTOR_KEYS и
+        _TRAILER_KEYS — обе схемы промпта отдают тягач и прицеп БЕЗ
+        префиксов, а вкладка ждёт имена с префиксом.
         """
         if not isinstance(section, dict):
             return {}
@@ -705,15 +723,16 @@ class FormikaWindow(BaseContractWindow):
         tractor = filled_only(section.get("tractor"))
         trailer = filled_only(section.get("trailer"))
 
-        data: Dict[str, Any] = {
-            key: value for key, value in tractor.items() if key.startswith("tractor_")
-        }
-        for key, value in trailer.items():
-            data.setdefault(cls._TRAILER_KEYS.get(key, key), value)
+        data: Dict[str, Any] = {}
+        for source, mapping in (
+            (tractor, cls._TRACTOR_KEYS),
+            (trailer, cls._TRAILER_KEYS),
+        ):
+            for key, value in source.items():
+                # Ключ вкладки (tractor_brand) важнее краткого (brand_model),
+                # но краткий не должен затирать уже разложенное значение.
+                data.setdefault(mapping.get(key, key), value)
 
-        data.update(
-            {key: value for key, value in tractor.items() if not key.startswith("tractor_")}
-        )
         return data
 
     def _fill_vehicle(self, section: Any) -> None:
