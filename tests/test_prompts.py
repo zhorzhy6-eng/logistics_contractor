@@ -11,6 +11,10 @@ None для незаполненных промптов и для неизвес
 С ЭТАПА 3.1.A.2 промпт «Формики» заполнен (core/prompts/formika.py), поэтому
 formika из списка заглушек убран и проверяется отдельно: он непустой,
 упоминает фиксированные стороны и не содержит данных из образца.
+
+С ЭТАПА 3.1.C.A.2 заполнен и промпт «Логистикс Рус»
+(core/prompts/logistiks_rus.py): он тоже убран из заглушек и проверяется
+отдельно — в tests/test_prompts_logistiks_rus.py.
 """
 
 import sys
@@ -47,7 +51,7 @@ def test_get_prompt_perevozka_is_string_or_none():
 
 
 @pytest.mark.parametrize("contract_type", [
-    "logistiks_rus", "arenda_ts", "zayavka_excel",
+    "arenda_ts", "zayavka_excel",
 ])
 def test_get_prompt_stubs_are_none(contract_type):
     assert get_prompt(contract_type) is None
