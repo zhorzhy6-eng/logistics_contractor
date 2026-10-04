@@ -17,6 +17,8 @@
     с датами выдач), срок аренды, маршрут, тягач с типом ТС и прицеп;
   * арендная плата — три суммы (без НДС / НДС / итог) либо одна
     «НДС не облагается», плюс ставка НДС;
+  * ЭДО обеих сторон (поля edo в блоках lessee и lessor) извлекается
+    из раздела 9; если не указан — пустая строка;
   * в промпте нет данных из образца договора (номер ТЛ-574, ФИО, VIN,
     госномера, адреса, суммы, ИНН/ОГРН, реквизиты).
 
@@ -55,6 +57,7 @@ LESSEE_KEYS = {
     "entity_type", "full_name", "short_name", "inn", "kpp", "ogrn",
     "legal_address", "actual_address", "bank_account", "bank_name", "bik",
     "corr_account", "director_name", "director_position", "phone", "email",
+    "edo",
 }
 
 #: У Арендодателя нет ни типа стороны, ни КПП (в шаблоне он всегда ООО,
@@ -171,6 +174,27 @@ def test_prompt_takes_director_name_in_full(prompt):
     """ФИО директора — полное и в падеже документа, а не «И.И. Иванов»."""
     assert "director_name" in prompt
     assert "в родительном падеже" in prompt
+
+
+# ─────────────────────────────────────────────────────────────
+# ЭДО сторон
+# ─────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("block", ["lessee", "lessor"])
+def test_schema_has_edo_key(schema, block):
+    """В схеме есть ключ edo и у Арендатора, и у Арендодателя."""
+    assert "edo" in schema[block], f"в схеме нет ключа edo в блоке {block}"
+    assert schema[block]["edo"] == "", "ЭДО по умолчанию — пустая строка"
+
+
+def test_prompt_extracts_edo(prompt):
+    """Промпт извлекает ЭДО обеих сторон и требует пустую строку, если его нет."""
+    assert "ЭДО" in prompt
+    assert "электронного документооборота" in prompt
+    assert "GUID" in prompt
+    assert "XXXXX-XXXX-XXXXX" in prompt
+    assert "Если не указан — пустая строка" in prompt
+    assert "НЕ переноси ЭДО одной стороны в другую" in prompt
 
 
 # ─────────────────────────────────────────────────────────────
