@@ -47,6 +47,13 @@ output/
 !templates/shablon_logistiks_rus_ip.docx
 !templates/Приложение № 1 Заявка_600_ООО «ДжейСиСиТиЭс Интернейшнл Логистикс Рус».docx
 !templates/Приложение № 1 Заявка_359_ИП_ «ДжейСиСиТиЭс Интернейшнл Логистикс Рус».docx
+# Шаблоны разовой аренды ТС с экипажем (ЭТАП 3.1.D.A.1) и образец, по
+# которому они собраны: образец — источник структуры и формулировок,
+# только чтение, но должен быть в git (иначе нечем проверить SHA256).
+!templates/shablon_arenda_ts_ooo.docx
+!templates/shablon_arenda_ts_ip_with_vat.docx
+!templates/shablon_arenda_ts_ip_without_vat.docx
+!templates/Договор_аренды_ТС_с_экипажем_ТЛ-574_Технологистика_ЛЦ_обновленный.docx
 templates/*.xlsx
 
 # ─────────────────────────────────────────────────────────────
