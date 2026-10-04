@@ -19,6 +19,11 @@ contract["unloadings"]: только этот путь сохраняет наз
 докстринг core/contracts/logistiks_rus/generator.py. Поведение с точками
 верхнего уровня описано отдельным тестом.
 
+Шаги постобработки по отдельности (на программно собранном Document())
+проверяются в tests/test_logistiks_rus_postprocess.py; здесь остаются
+интеграционные проверки — тот же результат в готовом документе после
+generate().
+
 Все данные синтетические, реальных ПДн нет.
 """
 
@@ -597,152 +602,8 @@ def test_more_than_twelve_cars_are_truncated(generator, caplog):
 
 
 # ─────────────────────────────────────────────────────────────
-# Постобработка: пустые строки таблицы груза
+# Интеграция: постобработка в готовом документе
 # ─────────────────────────────────────────────────────────────
-
-def _cargo_doc_with_empty_rows() -> Document:
-    """Документ с таблицей автомобилей, где заполнены только две строки из трёх."""
-    doc = Document()
-    table = doc.add_table(rows=4, cols=3)
-    for cell, title in zip(table.rows[0].cells, CARGO_HEADERS):
-        cell.text = title
-    rows = [
-        ("1", "МОДЕЛЬ 1", "VIN1"),
-        ("2", "", ""),
-        ("3", "МОДЕЛЬ 3", "VIN3"),
-    ]
-    for index, values in enumerate(rows, 1):
-        for cell, value in zip(table.rows[index].cells, values):
-            cell.text = value
-    return doc
-
-
-def test_remove_empty_rows_step_deletes_only_empty_rows(tmp_path):
-    generator = LogistiksRusGenerator(templates_dir=str(tmp_path))
-    doc = _cargo_doc_with_empty_rows()
-
-    RemoveEmptyVehicleRowsStep(generator).apply(doc, None)
-
-    values = [[cell.text for cell in row.cells] for row in doc.tables[0].rows]
-    assert values == [
-        ["№", "Марка, модель", "VIN-номер"],
-        ["1", "МОДЕЛЬ 1", "VIN1"],
-        ["3", "МОДЕЛЬ 3", "VIN3"],
-    ]
-
-
-def test_remove_empty_rows_keeps_row_with_only_brand(tmp_path):
-    """Строка с маркой, но без VIN, не удаляется: данные не теряем."""
-    generator = LogistiksRusGenerator(templates_dir=str(tmp_path))
-    doc = Document()
-    table = doc.add_table(rows=2, cols=3)
-    for cell, title in zip(table.rows[0].cells, CARGO_HEADERS):
-        cell.text = title
-    table.rows[1].cells[1].text = "МОДЕЛЬ БЕЗ VIN"
-
-    RemoveEmptyVehicleRowsStep(generator).apply(doc, None)
-
-    assert len(doc.tables[0].rows) == 2
-
-
-def test_remove_empty_rows_ignores_foreign_tables(tmp_path):
-    """Чужие таблицы (подписи, реквизиты) не трогаются: шапка не та."""
-    generator = LogistiksRusGenerator(templates_dir=str(tmp_path))
-    doc = Document()
-    signatures = doc.add_table(rows=1, cols=2)
-    signatures.rows[0].cells[0].text = "Заказчик:"
-    signatures.rows[0].cells[1].text = "Экспедитор:"
-
-    requisites = doc.add_table(rows=2, cols=3)
-    for cell, title in zip(requisites.rows[0].cells, ("ИНН", "КПП", "ОГРН")):
-        cell.text = title
-
-    RemoveEmptyVehicleRowsStep(generator).apply(doc, None)
-
-    assert len(doc.tables[0].rows) == 1
-    assert len(doc.tables[1].rows) == 2
-
-
-# ─────────────────────────────────────────────────────────────
-# Постобработка: пустые блоки грузоотправителей и грузополучателей
-# ─────────────────────────────────────────────────────────────
-
-def _points_doc() -> Document:
-    """Документ с двумя блоками погрузки, из которых второй пуст."""
-    doc = Document()
-    doc.add_paragraph("1. ПОГРУЗКА")
-    doc.add_paragraph("Грузоотправитель: ООО «Первый»")
-    doc.add_paragraph("Адрес погрузки: Адрес первый")
-    doc.add_paragraph("Грузоотправитель:")
-    doc.add_paragraph("Адрес погрузки:")
-    doc.add_paragraph("Дата / время погрузки: 26.09.2026 г. Время с 08:00 по 20:00")
-    return doc
-
-
-def test_remove_empty_point_blocks_deletes_only_empty_pairs(tmp_path):
-    generator = LogistiksRusGenerator(templates_dir=str(tmp_path))
-    doc = _points_doc()
-
-    RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
-
-    assert _body_texts(doc) == [
-        "1. ПОГРУЗКА",
-        "Грузоотправитель: ООО «Первый»",
-        "Адрес погрузки: Адрес первый",
-        "Дата / время погрузки: 26.09.2026 г. Время с 08:00 по 20:00",
-    ]
-
-
-@pytest.mark.parametrize(
-    "name, address",
-    [
-        ("ООО «Только имя»", ""),
-        ("", "Только адрес"),
-    ],
-)
-def test_remove_empty_point_blocks_keeps_partially_filled(tmp_path, name, address):
-    """Блок с названием или адресом сохраняется: данные не теряем."""
-    generator = LogistiksRusGenerator(templates_dir=str(tmp_path))
-    doc = Document()
-    doc.add_paragraph(f"Грузоотправитель: {name}")
-    doc.add_paragraph(f"Адрес погрузки: {address}")
-
-    RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
-
-    assert len(_body_texts(doc)) == 2
-
-
-def test_remove_empty_point_blocks_handles_consignees(tmp_path):
-    """Грузополучатели удаляются по своим меткам, вместе с адресом выгрузки."""
-    generator = LogistiksRusGenerator(templates_dir=str(tmp_path))
-    doc = Document()
-    doc.add_paragraph("Грузополучатель №1: ООО «Первый»")
-    doc.add_paragraph("Адрес выгрузки: Адрес первый")
-    doc.add_paragraph("Грузополучатель №2:")
-    doc.add_paragraph("Адрес выгрузки:")
-    doc.add_paragraph("Плановая дата / время завершения выгрузки: 01.10.2026 г.")
-
-    RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
-
-    assert _body_texts(doc) == [
-        "Грузополучатель №1: ООО «Первый»",
-        "Адрес выгрузки: Адрес первый",
-        "Плановая дата / время завершения выгрузки: 01.10.2026 г.",
-    ]
-
-
-def test_remove_empty_point_blocks_ignores_other_sections(tmp_path):
-    """Строки других разделов с теми же словами не удаляются."""
-    generator = LogistiksRusGenerator(templates_dir=str(tmp_path))
-    doc = Document()
-    doc.add_paragraph("Замена водителя, тягача или прицепа допускается.")
-    doc.add_paragraph("Все остальные условия оказания услуг.")
-    doc.add_paragraph("Общее количество: 3 шт.")
-
-    RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
-
-    assert len(_body_texts(doc)) == 3
-
 
 def test_empty_blocks_removed_in_generated_document(generator, work_dir):
     """В готовом документе остаются только фактически заполненные блоки."""
