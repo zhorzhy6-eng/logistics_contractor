@@ -29,17 +29,20 @@
     и «Возврат ТС», таблица подписей;
   * в бланках нет данных образца (марок, VIN, ФИО, госномеров, адресов,
     сумм, ИНН/ОГРН, банковских реквизитов, номера ТЛ-574);
-  * оформление повторяет образец: Letter, поля 2,0/1,7 см,
+  * оформление: страница A4 (21,0 × 29,7 см), поля 2,0/1,7 см,
     Times New Roman (10,5 pt основной текст);
-  * образец-источник не изменён (сверка по SHA256);
+  * образец-источник не изменён (сверка по SHA256, если файл есть локально);
   * docxtpl рендерит шаблон без остатка плейсхолдеров;
   * сборщик tools/make_arenda_ts_template.py даёт ровно тот же текст.
 
 Образец
 (templates/Договор_аренды_ТС_с_экипажем_ТЛ-574_Технологистика_ЛЦ_обновленный.docx)
-— только источник структуры, формулировок и оформления: тест
-test_sample_document_untouched намеренно падает, если его отредактировали
-или пересобрали.
+— только источник структуры, формулировок и оформления. В git он НЕ хранится:
+в нём реальные персональные данные водителя (ФИО, паспорт, адрес, телефон),
+а это нарушение 152-ФЗ даже в приватном репозитории (шаг 3.1.D.A.2, см.
+.gitignore). Локально файл нужен: из него собираются шаблоны и по нему
+сверяется SHA256. Если образца нет (чистый клон) —
+test_sample_document_untouched пропускается, а не падает.
 """
 
 import gc
@@ -61,16 +64,18 @@ CARRIER_TYPES = tuple(TEMPLATE_NAMES)
 #: Варианты, в которых арендная плата облагается НДС (три суммы).
 VAT_VARIANTS = ("ООО", "ИП с НДС")
 
-#: SHA256 собранных шаблонов (ЭТАП 3.1.D.A.1).
+#: SHA256 собранных шаблонов (ЭТАП 3.1.D.A.2: геометрия A4).
 #: Если шаблон пересобрали осознанно (например, поменяли формулировку),
 #: значения нужно обновить — тест ловит ручную правку .docx мимо сборщика.
 TEMPLATE_SHA256 = {
-    "ООО": "aa9e8580f5c7b97770d19ff7f7378da6ad257ef4595b3f22202a1472e16f5bba",
-    "ИП с НДС": "d4227d7156b104c4e31eb1e12a6ae57f0df5832393c190f5a8d66089d00ecbd4",
-    "ИП без НДС": "4f6936c981dfcd68b170c334378b784e027d470cec7713307545f10f54f9075a",
+    "ООО": "a63b14cc6cbfd8e03f5cc6ff07d89b27038c72fc858d432a0ab7cdcb119fc3f6",
+    "ИП с НДС": "eb117fe83691aafa7b8d415ac6e9fcae9d11c6284614b1fd0d22b2cfe5713dcf",
+    "ИП без НДС": "b94152ab462942a6d2d9e4546e5cdd3242b430181aee6b308d9b723ba35368e0",
 }
 
 #: Образец-источник и его SHA256 на момент сборки шаблонов.
+#: В git образец НЕ хранится (персональные данные водителя, см. .gitignore),
+#: поэтому проверка SHA256 работает только там, где файл есть локально.
 SAMPLE_NAME = (
     "Договор_аренды_ТС_с_экипажем_ТЛ-574_Технологистика_ЛЦ_обновленный.docx"
 )
@@ -863,15 +868,62 @@ def test_all_runs_are_times_new_roman(template_doc, variant):
     assert not wrong, f"runs не Times New Roman: {wrong[:5]}"
 
 
-def test_page_geometry_matches_sample(template_doc, variant):
-    """Геометрия образца: Letter, поля 2,0 см по бокам и 1,7 см сверху/снизу."""
+def test_page_geometry_is_a4(template_doc, variant):
+    """Геометрия A4: 21,0 × 29,7 см, поля 2,0 см по бокам и 1,7 см сверху/снизу."""
     section = template_doc.sections[0]
-    assert round(section.page_width.cm, 2) == 21.59
-    assert round(section.page_height.cm, 2) == 27.94
+    assert round(section.page_width.cm, 2) == 21.0
+    assert round(section.page_height.cm, 2) == 29.7
     assert round(section.left_margin.cm, 2) == 2.0
     assert round(section.right_margin.cm, 2) == 2.0
     assert round(section.top_margin.cm, 2) == 1.7
     assert round(section.bottom_margin.cm, 2) == 1.7
+
+
+def test_full_width_tables_fit_a4_text_block(template_doc, variant):
+    """
+    Таблицы во всю ширину ужаты под полосу набора A4.
+
+    В образце (Letter) таблица реквизитов и подписей занимала всю полосу
+    набора — 9972 twips (4986 + 4986). На A4 полоса набора уже (9638),
+    поэтому те же таблицы обязаны ужаться вместе с ней: иначе они вылезают
+    в правое поле. Таблица автомобилей п. 3.1 — исключение: у неё ширины
+    колонок образца (8731 twips), и в полосу набора A4 они вписываются.
+    """
+    section = template_doc.sections[0]
+    text_width = (section.page_width.twips - section.left_margin.twips
+                  - section.right_margin.twips)
+    assert text_width == 9638, "полоса набора A4 посчитана неверно"
+
+    full_width_tables = {
+        "шапка договора (город/дата)": _two_column_row_table(
+            template_doc, "г. Москва", "{{contract_date}}"),
+        "реквизиты сторон (раздел 9)": _requisites_table(template_doc),
+        "передача ТС (Приложение № 1)": _act_table(
+            template_doc, "Место передачи"),
+        "возврат ТС (Приложение № 1)": _act_table(
+            template_doc, "Место возврата"),
+        "подписи Акта (Приложение № 1)": _appendix_signature_table(
+            template_doc),
+    }
+
+    for label, table in full_width_tables.items():
+        assert table is not None, f"не найдена таблица: {label}"
+        tblW = table._tbl.tblPr.find(W_NS + "tblW")
+        assert int(tblW.get(W_NS + "w")) == text_width, (
+            f"таблица «{label}» шире полосы набора A4"
+        )
+        widths = [int(column.get(W_NS + "w"))
+                  for column in table._tbl.tblGrid]
+        assert sum(widths) == text_width, (
+            f"колонки таблицы «{label}» в сумме не дают полосу набора A4: "
+            f"{widths}"
+        )
+
+    car_widths = [int(column.get(W_NS + "w"))
+                  for column in _car_table(template_doc)._tbl.tblGrid]
+    assert sum(car_widths) == 8731 < text_width, (
+        "таблица автомобилей перестала вписываться в полосу набора A4"
+    )
 
 
 def test_title_is_bold_centered(template_doc, variant):
@@ -963,12 +1015,19 @@ def test_sample_document_untouched(templates_dir):
     """
     Образец — источник структуры, только чтение.
 
-    Если этот тест упал, значит образец отредактировали (или пересобрали).
-    Вернуть файл из git:
-        git checkout -- "templates/Договор_аренды_ТС_с_экипажем_ТЛ-574_…docx"
+    Образец не отслеживается в git (в нём персональные данные водителя,
+    см. .gitignore), поэтому в чистом клоне его нет — это не ошибка:
+    тест пропускается. Где образец есть, он обязан совпасть по SHA256;
+    если этот тест упал, значит образец отредактировали (или пересобрали),
+    а он нужен как есть: из него собираются шаблоны.
     """
     sample = templates_dir / SAMPLE_NAME
-    assert sample.exists(), f"пропал образец договора аренды: {sample}"
+    if not sample.exists():
+        pytest.skip(
+            "Образец с ПДн не отслеживается в git "
+            "(см. .gitignore). Локально он должен быть для "
+            "сборки шаблона и проверки SHA256."
+        )
 
     digest = hashlib.sha256(sample.read_bytes()).hexdigest()
     assert digest == SAMPLE_SHA256, (

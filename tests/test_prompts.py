@@ -15,6 +15,11 @@ formika из списка заглушек убран и проверяется 
 С ЭТАПА 3.1.C.A.2 заполнен и промпт «Логистикс Рус»
 (core/prompts/logistiks_rus.py): он тоже убран из заглушек и проверяется
 отдельно — в tests/test_prompts_logistiks_rus.py.
+
+С ЭТАПА 3.1.D.A.2 заполнен промпт разовой аренды ТС с экипажем
+(core/prompts/arenda_ts.py): он тоже убран из заглушек и проверяется
+отдельно — в tests/test_prompts_arenda_ts.py. Заглушкой остаётся только
+тип zayavka_excel («Хавалы», Excel-форма заявки).
 """
 
 import sys
@@ -51,7 +56,7 @@ def test_get_prompt_perevozka_is_string_or_none():
 
 
 @pytest.mark.parametrize("contract_type", [
-    "arenda_ts", "zayavka_excel",
+    "zayavka_excel",
 ])
 def test_get_prompt_stubs_are_none(contract_type):
     assert get_prompt(contract_type) is None
