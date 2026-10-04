@@ -279,13 +279,13 @@ def test_stub_generators_raise_not_implemented():
     formika из списка убрана на ЭТАПЕ 3.1.A: у типа появился рабочий
     генератор (core/contracts/formika/generator.py), и NotImplementedError
     он больше не поднимает. logistiks_rus убрана на ЭТАПЕ 3.1.C.A.3 — по той
-    же причине (core/contracts/logistiks_rus/generator.py).
+    же причине (core/contracts/logistiks_rus/generator.py). arenda_ts убрана
+    на ЭТАПЕ 3.1.D.A.3: генератор разовой аренды ТС с экипажем тоже рабочий
+    (core/contracts/arenda_ts/generator.py).
     """
-    _ensure_registered("core.contracts.arenda_ts", "arenda_ts")
     _ensure_registered("core.contracts.expediciya", "expediciya")
     _ensure_registered("core.contracts.zayavka", "zayavka_excel")
     for contract_type, fragment in (
-        ("arenda_ts", "аренды ТС"),
         ("expediciya", "Экспедиторская заявка"),
         ("zayavka_excel", "Excel"),
     ):
