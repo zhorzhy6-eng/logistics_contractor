@@ -21,7 +21,9 @@ tests/test_logistiks_rus_postprocess.py, tests/test_prompts_logistiks_rus.py).
      (core/prompts/logistiks_rus.py) кладёт contract.sum_wo_vat / sum_vat /
      sum_total, а генератор читает price_without_vat / price_input. Стык
      СЕЙЧАС НЕ РАБОТАЕТ: см. test_recognition_names_are_not_read_by_generator
-     — он фиксирует текущее поведение и ловит регресс до 3.1.C.B.1.
+     — он фиксирует текущее поведение и ловит регресс до 3.1.C.B.1. Пока
+     стык не починен, генератор сообщает о нём WARNING'ом — см.
+     test_logs_warn_when_recognized_sums_are_not_mapped.
   3. «валидатор → генератор»: валидатор не портит данные, генератор не падает
      на проверенных данных и печатает те же значения.
   4. «генератор → постобработка»: пустые строки таблицы машин и пустые блоки
@@ -361,10 +363,11 @@ def test_no_pd_in_logs(caplog, generator, valid_ooo_data, valid_ip_data, work_di
     """
     Логи генерации не содержат персональных данных.
 
-    В лог попадают только имена полей и количества; ФИО, адреса, VIN, названия
-    сторон и марок машин — нет. Проверяются оба варианта сразу: сообщения у них
-    одни и те же, различается только расчёт стоимости (суммы в логе есть —
-    это отдельное расхождение, см. test_logs_contain_amounts_current_behaviour).
+    В лог попадают только имена полей, количества и суммы (суммы — это данные
+    самого договора, они видны в готовом документе, см.
+    test_logs_contain_amounts_are_substituted); ФИО, адреса, VIN, названия
+    сторон и марок машин — нет. Проверяются оба варианта сразу: строка
+    стоимости у них одна и та же по форме, различается только составом сумм.
     """
     with caplog.at_level(logging.INFO, logger="core.contract_generator"):
         _generate(generator, valid_ooo_data, work_dir, "e2e_logs_ooo")
@@ -394,39 +397,107 @@ def test_no_pd_in_logs(caplog, generator, valid_ooo_data, valid_ip_data, work_di
     # данные, и по нему строится имя готового файла (generate() печатает путь).
     assert "ЛР-2026-17" in messages
 
-    # Имена полей и количества — можно.
+    # Имена полей, количества и суммы — можно.
     assert "машин в заявке — 3" in messages
     assert "удалено пустых строк таблицы груза: 9" in messages
-    assert "стоимость (ООО)" in messages
-    assert "стоимость (ИП, без НДС)" in messages
+    assert "Логистикс Рус [ООО]: в бланк подставлено" in messages
+    assert "Логистикс Рус [ИП]: в бланк подставлено" in messages
 
 
-def test_logs_contain_amounts_current_behaviour(caplog, generator,
-                                               valid_ooo_data, work_dir):
+def test_logs_contain_amounts_are_substituted(caplog, generator,
+                                              valid_ooo_data, valid_ip_data,
+                                              work_dir):
     """
-    EXPECTED CURRENT BEHAVIOUR (фиксация факта, а не требование).
+    INFO про стоимость — ровно одна строка, и в ней фактические значения.
 
-    Задание на тип требует, чтобы в логи не попадали суммы — «только имена
-    полей и количества». Фактически LogistiksRusGenerator._fill_cost печатает
-    суммы и ставку в INFO («стоимость (ООО) без НДС=221099.18, НДС=48641.82
-    (22%), итого=269741.00»). Суммы заявки — коммерческая тайна заказчика, и
-    это расхождение стоит закрыть отдельным fix-шагом: убрать числа из
-    сообщения (оставив факт расчёта) наравне с vat_rate.
-
-    Пока модуль не тронут (шаг 3.1.C.A.6 — только тесты), тест фиксирует
-    текущее поведение, чтобы оно не изменилось незаметно.
+    В лог идут те же строки, что ушли в шаблон: те же разряды неразрывным
+    пробелом и запятая перед копейками (сверяется с картой замен, а не
+    с пересчитанными числами). У ИП плейсхолдеров sum_wo_vat / sum_vat /
+    vat_rate в бланке нет — там «—», и это тоже видно в логе.
     """
     with caplog.at_level(logging.INFO, logger="core.contract_generator"):
-        _generate(generator, valid_ooo_data, work_dir, "e2e_logs_amounts")
+        _generate(generator, valid_ooo_data, work_dir, "e2e_logs_amounts_ooo")
+        _generate(generator, valid_ip_data, work_dir, "e2e_logs_amounts_ip")
 
-    messages = "\n".join(
+    cost_lines = [
         record.getMessage() for record in caplog.records
         if record.name == "core.contract_generator"
+        and "в бланк подставлено" in record.getMessage()
+    ]
+
+    # Одна строка на генерацию, а не несколько разрозненных.
+    assert len(cost_lines) == 2, cost_lines
+
+    ooo_line = next(line for line in cost_lines if "[ООО]" in line)
+    ip_line = next(line for line in cost_lines if "[ИП]" in line)
+
+    # Формат строки целиком: суммы ООО совпадают с тем, что печатает бланк
+    # (см. test_ooo_docx_has_vat_lines), ставка — «22%».
+    assert ooo_line == (
+        "Логистикс Рус [ООО]: в бланк подставлено — "
+        f"без НДС={OOO_SUM_WO_VAT_TEXT}, НДС={OOO_SUM_VAT_TEXT}, "
+        f"итого={OOO_SUM_TOTAL_TEXT}, ставка=22%"
+    )
+    assert ip_line == (
+        "Логистикс Рус [ИП]: в бланк подставлено — "
+        f"без НДС=—, НДС=—, итого={IP_SUM_TOTAL_TEXT}, ставка=—"
     )
 
-    assert f"без НДС={OOO_PRICE_WITHOUT_VAT:.2f}" in messages
-    assert "НДС=48641.82 (22%)" in messages
-    assert "итого=269741.00" in messages
+    # И то же самое сверяется с картой замен: логируется подставленное,
+    # а не вычисленное заново.
+    ooo_replacements = generator.build_replacements(valid_ooo_data)
+    assert f"без НДС={ooo_replacements['sum_wo_vat']}" in ooo_line
+    assert f"НДС={ooo_replacements['sum_vat']}" in ooo_line
+    assert f"итого={ooo_replacements['sum_total']}" in ooo_line
+    assert f"ставка={ooo_replacements['vat_rate']}" in ooo_line
+
+    ip_replacements = generator.build_replacements(valid_ip_data)
+    assert f"итого={ip_replacements['sum_total']}" in ip_line
+    for absent in ("sum_wo_vat", "sum_vat", "vat_rate"):
+        assert absent not in ip_replacements, f"в ИП-вариант положен {absent!r}"
+
+
+def test_logs_warn_when_recognized_sums_are_not_mapped(caplog, generator,
+                                                       work_dir):
+    """
+    Распознанная стоимость не замаплена — об этом есть WARNING.
+
+    Суммы распознавания лежат в contract.sum_total, а генератор читает
+    price_without_vat / price_input (TODO 3.1.C.B.1), поэтому в бланк уйдёт
+    0,00. Лог обязан сказать это явно: иначе расхождение видно только
+    в готовом документе — см. test_recognition_names_are_not_read_by_generator.
+    """
+    data = ContractData(contract={
+        "number": "ЛР-2026-19",
+        "date": "2026-09-24",
+        "carrier_type": "ООО",
+        "sum_total": RECOGNIZED_SUM_TOTAL,
+        "vat_rate": "22%",
+    })
+    assert "price_without_vat" not in data.contract
+    assert "price_input" not in data.contract
+
+    with caplog.at_level(logging.WARNING, logger="core.contract_generator"):
+        path = _generate(generator, data, work_dir, "e2e_logs_unmapped_sums")
+
+    try:
+        warnings = [
+            record.getMessage() for record in caplog.records
+            if record.name == "core.contract_generator"
+            and record.levelno == logging.WARNING
+        ]
+        assert any("в бланк уйдёт 0,00" in text for text in warnings), warnings
+        assert any(
+            "price_without_vat / price_input отсутствуют" in text
+            for text in warnings
+        ), warnings
+        assert any("Логистикс Рус [ООО]" in text for text in warnings), warnings
+        assert any("TODO 3.1.C.B.1" in text for text in warnings), warnings
+
+        # Предупреждение не врёт: в бланке действительно 0,00.
+        assert "Стоимость услуг: 0,00 руб." in _document_text(Document(str(path)))
+    finally:
+        path.unlink(missing_ok=True)
 
 
 # ─────────────────────────────────────────────────────────────

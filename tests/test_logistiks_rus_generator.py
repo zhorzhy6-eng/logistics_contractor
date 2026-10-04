@@ -751,7 +751,7 @@ def test_generation_logs_to_contract_generator(caplog, generator, work_dir):
     assert "машин в заявке — 4" in messages
     assert "удалено пустых строк таблицы груза: 8" in messages
     assert "удалено пустых блоков грузоотправителей и грузополучателей: 15" in messages
-    assert "стоимость (ООО)" in messages
+    assert "Логистикс Рус [ООО]: в бланк подставлено" in messages
 
 
 def test_logs_have_no_personal_data(caplog, generator, work_dir):

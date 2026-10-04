@@ -543,7 +543,14 @@ class LogistiksRusGenerator(BaseContractGenerator):
         цифрами и прописью. Вариант ИП: одна сумма «Без НДС», ставка НДС
         считается нулевой, а sum_wo_vat / sum_vat в карту замен НЕ кладутся:
         в ИП-бланке таких плейсхолдеров нет.
+
+        Оба варианта пишут в INFO ровно одну строку, и в неё попадают
+        ФАКТИЧЕСКИ подставленные значения — они читаются из карты замен уже
+        после присваивания, а не пересчитываются повторно. Там, где
+        плейсхолдера в бланке нет (ИП: sum_wo_vat / sum_vat / vat_rate),
+        печатается «—».
         """
+        carrier_type = "ИП" if is_ip else "ООО"
         vat_rate_num = self._resolve_vat_rate_num(contract)
         price_wo_vat = self._price_without_vat(contract)
 
@@ -551,25 +558,41 @@ class LogistiksRusGenerator(BaseContractGenerator):
             total = round(price_wo_vat, 2)
             replacements["sum_total"] = self._format_money(total)
             replacements["sum_total_words"] = amount_to_words(total)
+        else:
+            vat_amount = round(price_wo_vat * vat_rate_num / 100, 2)
+            total = round(price_wo_vat + vat_amount, 2)
 
-            logger.info(f"{TITLE}: стоимость (ИП, без НДС)={total:.2f}")
-            return
-
-        vat_amount = round(price_wo_vat * vat_rate_num / 100, 2)
-        total = round(price_wo_vat + vat_amount, 2)
-
-        replacements["sum_wo_vat"] = self._format_money(price_wo_vat)
-        replacements["sum_wo_vat_words"] = amount_to_words(price_wo_vat)
-        replacements["sum_vat"] = self._format_money(vat_amount)
-        replacements["sum_vat_words"] = amount_to_words(vat_amount)
-        replacements["sum_total"] = self._format_money(total)
-        replacements["sum_total_words"] = amount_to_words(total)
-        replacements["vat_rate"] = f"{vat_rate_num:.0f}%"
+            replacements["sum_wo_vat"] = self._format_money(price_wo_vat)
+            replacements["sum_wo_vat_words"] = amount_to_words(price_wo_vat)
+            replacements["sum_vat"] = self._format_money(vat_amount)
+            replacements["sum_vat_words"] = amount_to_words(vat_amount)
+            replacements["sum_total"] = self._format_money(total)
+            replacements["sum_total_words"] = amount_to_words(total)
+            replacements["vat_rate"] = f"{vat_rate_num:.0f}%"
 
         logger.info(
-            f"{TITLE}: стоимость (ООО) без НДС={price_wo_vat:.2f}, "
-            f"НДС={vat_amount:.2f} ({vat_rate_num:.0f}%), итого={total:.2f}"
+            f"{TITLE} [%s]: в бланк подставлено — "
+            "без НДС=%s, НДС=%s, итого=%s, ставка=%s",
+            carrier_type,
+            replacements.get("sum_wo_vat", "—"),
+            replacements.get("sum_vat", "—"),
+            replacements["sum_total"],
+            replacements.get("vat_rate", "—"),
         )
+
+        # Диагностика стыка «распознавание → генератор»: суммы в contract есть,
+        # а читать их генератору нечем (он читает price_without_vat /
+        # price_input) — значит, в бланк уйдёт 0,00. Проверяем по фактически
+        # посчитанной цене, а не только по наличию ключей: сообщение обещает
+        # именно 0,00 в бланке. Чинится в 3.1.C.B.1 (data builder).
+        recognized_sums = contract.get("sum_total") or contract.get("sum_wo_vat")
+        if recognized_sums and price_wo_vat <= 0:
+            logger.warning(
+                f"{TITLE} [%s]: в contract есть распознанные суммы (sum_*), "
+                "но price_without_vat / price_input отсутствуют — "
+                "в бланк уйдёт 0,00. Маппинг — TODO 3.1.C.B.1",
+                carrier_type,
+            )
 
     def _fill_conditions(
         self, replacements: Dict[str, str], contract: Dict[str, Any]
