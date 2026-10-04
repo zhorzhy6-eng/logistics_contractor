@@ -16,13 +16,15 @@
   * блоки погрузки/выгрузки: по 10 пар «грузоотправитель/грузополучатель»;
   * таблица автомобилей: шапка «№ / Марка, модель / VIN-номер» и ровно
     12 строк с плейсхолдерами марки и VIN;
-  * в ООО-шаблоне три суммы (sum_wo_vat / vat_rate+sum_vat / sum_total),
-    в ИП-шаблоне — одна (sum_total, «Без НДС»);
+  * в ООО-шаблоне три суммы (sum_wo_vat / vat_rate+sum_vat / sum_total)
+    и все три суммы прописью (sum_wo_vat_words / sum_vat_words /
+    sum_total_words), в ИП-шаблоне — одна сумма (sum_total, «Без НДС»)
+    и только sum_total_words;
   * в шаблоне нет данных образцов (марки, VIN, ФИО, госномера, адреса,
     суммы, номера заявок) и нет незакрытых «{{»;
   * вариант экспедитора и номер генерального договора — свои у каждого
     шаблона (ТЭ0909/01 у ООО, ТЭ0909/02 у ИП);
-  * оформление повторяет образец: A4, поля 2,54 см, Times New Roman 12 pt;
+  * оформление повторяет образец: A4, поля 2,54 см, Arial 12 pt;
   * образцы-источники не изменены (сверка по SHA256);
   * docxtpl рендерит шаблон без остатка плейсхолдеров;
   * сборщик tools/make_logistiks_rus_template.py даёт ровно тот же текст.
@@ -46,6 +48,14 @@ TEMPLATE_NAMES = {
 }
 
 CARRIER_TYPES = tuple(TEMPLATE_NAMES)
+
+#: SHA256 собранных шаблонов (ЭТАП 3.1.C.A.1-fix: Arial + суммы прописью).
+#: Если шаблон пересобрали осознанно (например, поменяли формулировку),
+#: значения нужно обновить — тест ловит ручную правку .docx мимо сборщика.
+TEMPLATE_SHA256 = {
+    "ООО": "f22828c3838d1d53502aa61f529c2671f8a3837c5e085b89f14aeee36bb63fdd",
+    "ИП": "899345da146480b49453f28017f3680f3bf385dd0137f47fc2fc1aa7f6173794",
+}
 
 #: Образцы-источники и их SHA256 на момент сборки шаблонов.
 SAMPLES = {
@@ -87,11 +97,19 @@ COMMON_PLACEHOLDERS = (
     "trailer_plate",
     "driver_name",
     "sum_total",
+    "sum_total_words",
     "special_conditions",
 )
 
 #: Плейсхолдеры ООО-варианта: расчёт НДС по ставке (в ИП-шаблоне их нет).
-OOO_PLACEHOLDERS = ("sum_wo_vat", "vat_rate", "sum_vat")
+OOO_PLACEHOLDERS = (
+    "sum_wo_vat", "sum_wo_vat_words",
+    "vat_rate",
+    "sum_vat", "sum_vat_words",
+)
+
+#: Плейсхолдеры сумм прописью, которых в ИП-шаблоне быть не должно.
+OOO_WORDS_ONLY = ("sum_wo_vat_words", "sum_vat_words")
 
 #: Номер генерального договора: свой у каждого варианта.
 CONTRACT_NUMBERS = {
@@ -322,18 +340,19 @@ def test_placeholder_names_are_known(template_doc, carrier_type):
 
 
 def test_ooo_template_has_vat_placeholders(templates):
-    """ООО-вариант: три суммы — без НДС, НДС по ставке, итого."""
+    """ООО-вариант: три суммы — без НДС, НДС по ставке, итого, каждая с прописью."""
     texts = _body_texts(templates["ООО"])
-    assert "Стоимость услуг: {{sum_wo_vat}} руб." in texts
-    assert "НДС {{vat_rate}}: {{sum_vat}} руб." in texts
-    assert "Итого: {{sum_total}} руб." in texts
+    assert "Стоимость услуг: {{sum_wo_vat}} руб. ({{sum_wo_vat_words}})" in texts
+    assert "НДС {{vat_rate}}: {{sum_vat}} руб. ({{sum_vat_words}})" in texts
+    assert "Итого: {{sum_total}} руб. ({{sum_total_words}})" in texts
 
 
 def test_ip_template_has_single_sum_without_vat(templates):
-    """ИП-вариант: одна сумма «Без НДС», плейсхолдеров НДС нет."""
+    """ИП-вариант: одна сумма «Без НДС» с прописью, плейсхолдеров НДС нет."""
     doc = templates["ИП"]
     texts = _body_texts(doc)
-    assert "Стоимость услуг: {{sum_total}} руб. Без НДС" in texts
+    assert ("Стоимость услуг: {{sum_total}} руб. ({{sum_total_words}}) "
+            "Без НДС") in texts
 
     text = _document_text(doc)
     for name in OOO_PLACEHOLDERS:
@@ -341,6 +360,22 @@ def test_ip_template_has_single_sum_without_vat(templates):
             f"в ИП-шаблоне лишний плейсхолдер {name!r}"
         )
     assert text.count("{{sum_total}}") == 1
+
+
+def test_words_placeholders_present(templates, carrier_type):
+    """Суммы прописью: у ООО — три, у ИП — одна (ИП без НДС)."""
+    text = _document_text(templates[carrier_type])
+
+    assert "{{sum_total_words}}" in text, "нет суммы итого прописью"
+
+    if carrier_type == "ООО":
+        assert "{{sum_wo_vat_words}}" in text
+        assert "{{sum_vat_words}}" in text
+    else:
+        for name in OOO_WORDS_ONLY:
+            assert "{{" + name + "}}" not in text, (
+                f"в ИП-шаблоне лишний плейсхолдер {name!r}"
+            )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -482,8 +517,8 @@ def test_template_has_no_sample_data(templates, carrier_type, fragment):
 # Оформление
 # ─────────────────────────────────────────────────────────────
 
-def test_title_is_times_new_roman_bold_centered(template_doc, carrier_type):
-    """«ЗАЯВКА № {{contract_number}}» — по центру, полужирным, 12 pt."""
+def test_title_is_arial_bold_centered(template_doc, carrier_type):
+    """«ЗАЯВКА № {{contract_number}}» — по центру, полужирным, Arial 12 pt."""
     title = next(
         p for p in template_doc.paragraphs
         if p.text.strip().startswith("ЗАЯВКА № ")
@@ -492,7 +527,7 @@ def test_title_is_times_new_roman_bold_centered(template_doc, carrier_type):
     assert str(title.alignment) == "CENTER (1)"
 
     for run in title.runs:
-        assert run.font.name == "Times New Roman"
+        assert run.font.name == "Arial"
         assert run.font.size.pt == 12
         assert run.bold is True
 
@@ -508,18 +543,30 @@ def test_page_geometry_matches_sample(template_doc, carrier_type):
     assert round(section.bottom_margin.cm, 2) == 2.54
 
 
-def test_body_font_is_times_new_roman(template_doc, carrier_type):
-    """Основной текст — Times New Roman 12 pt."""
+def test_body_font_is_arial(template_doc, carrier_type):
+    """Основной текст — Arial 12 pt, ровно как в образцах."""
     normal = template_doc.styles["Normal"]
-    assert normal.font.name == "Times New Roman"
+    assert normal.font.name == "Arial"
     assert normal.font.size.pt == 12
 
     paragraph = next(
         p for p in template_doc.paragraphs if p.text.startswith("Тягач:")
     )
     for run in paragraph.runs:
-        assert run.font.name == "Times New Roman"
+        assert run.font.name == "Arial"
         assert run.font.size.pt == 12
+
+
+def test_all_runs_are_arial_twelve(template_doc, carrier_type):
+    """Во всём бланке (абзацы и таблица) нет ни одного run другого шрифта."""
+    wrong = []
+    for paragraph in _all_paragraphs(template_doc):
+        for run in paragraph.runs:
+            if run.text and (run.font.name != "Arial" or run.font.size.pt != 12):
+                wrong.append((run.text[:30], run.font.name,
+                              run.font.size.pt if run.font.size else None))
+
+    assert not wrong, f"runs не Arial 12 pt: {wrong[:5]}"
 
 
 def test_sections_go_in_order(template_doc, carrier_type):
@@ -566,6 +613,24 @@ def test_sample_documents_untouched(templates_dir, carrier_type):
     digest = hashlib.sha256(sample.read_bytes()).hexdigest()
     assert digest == expected_digest, (
         f"образец {name!r} изменён: ожидался {expected_digest}, получен {digest}"
+    )
+
+
+@pytest.mark.parametrize("carrier_type", CARRIER_TYPES)
+def test_templates_match_pinned_sha(templates_dir, carrier_type):
+    """
+    Шаблон на диске — ровно то, что собрал сборщик (ЭТАП 3.1.C.A.1-fix).
+
+    Хеши зафиксированы после пересборки под Arial и суммы прописью. Если
+    этот тест упал после осознанной правки шаблона — пересобери его
+    (python tools/make_logistiks_rus_template.py) и обнови TEMPLATE_SHA256;
+    если правки не было — .docx кто-то отредактировал вручную.
+    """
+    path = templates_dir / TEMPLATE_NAMES[carrier_type]
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == TEMPLATE_SHA256[carrier_type], (
+        f"шаблон {TEMPLATE_NAMES[carrier_type]!r} не совпадает со сборкой: "
+        f"ожидался {TEMPLATE_SHA256[carrier_type]}, получен {digest}"
     )
 
 

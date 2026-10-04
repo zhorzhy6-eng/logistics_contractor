@@ -24,6 +24,8 @@
 
 Что воспроизводится по образцу:
   * A4 (11909×16834 twips) и поля 2,54 см со всех сторон;
+  * шрифт Arial 12 pt (в обоих образцах задан в docDefaults) — 1:1
+    с образцом, заказчик ждёт такое же оформление;
   * шапка: «Приложение № 1», ссылка на генеральный договор в две строки,
     «ЗАЯВКА № …» по центру, «на организацию перевозки транспортных
     средств», «Дата Заявки: «…» … года.», блок «Заказчик/Экспедитор»;
@@ -34,16 +36,15 @@
   * блок подписей — обычные абзацы (таблицы подписей в образце нет).
 
 Что сделано иначе, чем в образце (осознанные решения):
-  * шрифт — Times New Roman 12 pt, как в рабочих шаблонах shablon_ooo.docx
-    и shablon_formika.docx (в образцах Arial 12 pt). Размеры и геометрия
-    взяты из образца, семейство шрифта — проектное;
   * строка «Дата / время погрузки» одна на раздел 1 (в образце она стоит
     после блока грузоотправителя), строка «Плановая дата / время завершения
     выгрузки» — одна на раздел 2 (как в образце с четырьмя
     грузополучателями). Плейсхолдеры loading_*/unloading_* в шаблоне
     одиночные, поэтому дублировать строку в каждом блоке не нужно;
   * в разделе 5 ООО-варианта три суммы (без НДС / НДС по ставке / итого),
-    в ИП-варианте одна («Стоимость услуг: … руб. Без НДС») — как в образцах;
+    в ИП-варианте одна («Стоимость услуг: … руб. … Без НДС») — как
+    в образцах; суммы прописью (sum_*_words) в образцах не печатаются, но
+    в бланк добавлены по решению этапа — как в шаблонах Формики и перевозки;
   * ссылка на генеральный договор в разделе 6 пишется с пробелами
     («№ ТЭ 0909/01»), как в образце; в шапке — как в образце без пробела
     («№ТЭ0909/01»).
@@ -68,7 +69,7 @@ from docx.shared import Emu, Pt
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 
-FONT = "Times New Roman"
+FONT = "Arial"
 TEXT_SIZE = 12
 
 #: Геометрия страницы образца: A4, поля 2,54 см (1440 twips) со всех сторон.
@@ -450,6 +451,10 @@ def build_cost_section(doc, variant: Dict[str, Any]) -> None:
 
     ООО — три суммы (без НДС, НДС по ставке, итого), ИП — одна сумма
     «Без НДС»: плейсхолдеров sum_wo_vat и sum_vat в ИП-шаблоне нет.
+
+    Каждая сумма печатается цифрами и прописью в скобках — как в шаблонах
+    Формики и перевозки (sum_*_words считает генератор через
+    core.num_to_words.amount_to_words).
     """
     add_paragraph(doc, [("5. СТОИМОСТЬ", {"bold": True})],
                   space_before=SECTION_SPACE_BEFORE, space_after=BODY_SPACE_AFTER)
@@ -457,20 +462,20 @@ def build_cost_section(doc, variant: Dict[str, Any]) -> None:
     if variant["cost_with_vat"]:
         add_paragraph(doc, [
             ("Стоимость услуг:", {"bold": True}),
-            " {{sum_wo_vat}} руб.",
+            " {{sum_wo_vat}} руб. ({{sum_wo_vat_words}})",
         ], align=WD_ALIGN_PARAGRAPH.JUSTIFY, space_after=BODY_SPACE_AFTER)
         add_paragraph(doc, [
             ("НДС {{vat_rate}}:", {"bold": True}),
-            " {{sum_vat}} руб.",
+            " {{sum_vat}} руб. ({{sum_vat_words}})",
         ], align=WD_ALIGN_PARAGRAPH.JUSTIFY, space_after=BODY_SPACE_AFTER)
         add_paragraph(doc, [
             ("Итого:", {"bold": True}),
-            " {{sum_total}} руб.",
+            " {{sum_total}} руб. ({{sum_total_words}})",
         ], align=WD_ALIGN_PARAGRAPH.JUSTIFY, space_after=BODY_SPACE_AFTER)
     else:
         add_paragraph(doc, [
             ("Стоимость услуг:", {"bold": True}),
-            " {{sum_total}} руб. Без НДС",
+            " {{sum_total}} руб. ({{sum_total_words}}) Без НДС",
         ], align=WD_ALIGN_PARAGRAPH.JUSTIFY, space_after=BODY_SPACE_AFTER)
 
 
