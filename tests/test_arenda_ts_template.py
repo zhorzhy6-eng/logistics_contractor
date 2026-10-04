@@ -29,8 +29,8 @@
     и «Возврат ТС», таблица подписей;
   * в бланках нет данных образца (марок, VIN, ФИО, госномеров, адресов,
     сумм, ИНН/ОГРН, банковских реквизитов, номера ТЛ-574);
-  * оформление: страница A4 (21,0 × 29,7 см), поля 2,0/1,7 см,
-    Times New Roman (10,5 pt основной текст);
+  * оформление: страница A4 (21,0 × 29,7 см), поля российского стандарта
+    2,0 / 1,5 / 2,0 / 2,0 см, Times New Roman (10,5 pt основной текст);
   * образец-источник не изменён (сверка по SHA256, если файл есть локально);
   * docxtpl рендерит шаблон без остатка плейсхолдеров;
   * сборщик tools/make_arenda_ts_template.py даёт ровно тот же текст.
@@ -64,13 +64,14 @@ CARRIER_TYPES = tuple(TEMPLATE_NAMES)
 #: Варианты, в которых арендная плата облагается НДС (три суммы).
 VAT_VARIANTS = ("ООО", "ИП с НДС")
 
-#: SHA256 собранных шаблонов (ЭТАП 3.1.D.A.2: геометрия A4).
+#: SHA256 собранных шаблонов (ЭТАП 3.1.D.A.1-A.3-fix: поля российского
+#: стандарта 2,0 / 1,5 / 2,0 / 2,0 см на A4).
 #: Если шаблон пересобрали осознанно (например, поменяли формулировку),
 #: значения нужно обновить — тест ловит ручную правку .docx мимо сборщика.
 TEMPLATE_SHA256 = {
-    "ООО": "a63b14cc6cbfd8e03f5cc6ff07d89b27038c72fc858d432a0ab7cdcb119fc3f6",
-    "ИП с НДС": "eb117fe83691aafa7b8d415ac6e9fcae9d11c6284614b1fd0d22b2cfe5713dcf",
-    "ИП без НДС": "b94152ab462942a6d2d9e4546e5cdd3242b430181aee6b308d9b723ba35368e0",
+    "ООО": "bfbc6ea761ccef6aff88419e3dd43df5cc2739c52674e7464ce3c4444142abeb",
+    "ИП с НДС": "6a08de45bd0952976e3bd2d8f3208fa2feb5765e54be5c76bc7204e838f30633",
+    "ИП без НДС": "7496d1e8ae1404f5c2a02ba3fbcc03a83f437e1bf5d7485c0004bc10f7232309",
 }
 
 #: Образец-источник и его SHA256 на момент сборки шаблонов.
@@ -869,14 +870,14 @@ def test_all_runs_are_times_new_roman(template_doc, variant):
 
 
 def test_page_geometry_is_a4(template_doc, variant):
-    """Геометрия A4: 21,0 × 29,7 см, поля 2,0 см по бокам и 1,7 см сверху/снизу."""
+    """Геометрия A4: 21,0 × 29,7 см, поля 2,0 / 1,5 / 2,0 / 2,0 см."""
     section = template_doc.sections[0]
     assert round(section.page_width.cm, 2) == 21.0
     assert round(section.page_height.cm, 2) == 29.7
     assert round(section.left_margin.cm, 2) == 2.0
-    assert round(section.right_margin.cm, 2) == 2.0
-    assert round(section.top_margin.cm, 2) == 1.7
-    assert round(section.bottom_margin.cm, 2) == 1.7
+    assert round(section.right_margin.cm, 2) == 1.5
+    assert round(section.top_margin.cm, 2) == 2.0
+    assert round(section.bottom_margin.cm, 2) == 2.0
 
 
 def test_full_width_tables_fit_a4_text_block(template_doc, variant):
@@ -884,15 +885,16 @@ def test_full_width_tables_fit_a4_text_block(template_doc, variant):
     Таблицы во всю ширину ужаты под полосу набора A4.
 
     В образце (Letter) таблица реквизитов и подписей занимала всю полосу
-    набора — 9972 twips (4986 + 4986). На A4 полоса набора уже (9638),
-    поэтому те же таблицы обязаны ужаться вместе с ней: иначе они вылезают
-    в правое поле. Таблица автомобилей п. 3.1 — исключение: у неё ширины
-    колонок образца (8731 twips), и в полосу набора A4 они вписываются.
+    набора — 9972 twips (4986 + 4986). На A4 с полями 2,0 / 1,5 см полоса
+    набора 9921 twips, поэтому те же таблицы обязаны ужаться вместе с ней:
+    иначе они вылезают в правое поле. Таблица автомобилей п. 3.1 —
+    исключение: у неё ширины колонок образца (8731 twips), и в полосу
+    набора A4 они вписываются.
     """
     section = template_doc.sections[0]
     text_width = (section.page_width.twips - section.left_margin.twips
                   - section.right_margin.twips)
-    assert text_width == 9638, "полоса набора A4 посчитана неверно"
+    assert text_width == 9921, "полоса набора A4 посчитана неверно"
 
     full_width_tables = {
         "шапка договора (город/дата)": _two_column_row_table(
