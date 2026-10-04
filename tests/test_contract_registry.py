@@ -278,14 +278,13 @@ def test_stub_generators_raise_not_implemented():
 
     formika из списка убрана на ЭТАПЕ 3.1.A: у типа появился рабочий
     генератор (core/contracts/formika/generator.py), и NotImplementedError
-    он больше не поднимает.
+    он больше не поднимает. logistiks_rus убрана на ЭТАПЕ 3.1.C.A.3 — по той
+    же причине (core/contracts/logistiks_rus/generator.py).
     """
-    _ensure_registered("core.contracts.logistiks_rus", "logistiks_rus")
     _ensure_registered("core.contracts.arenda_ts", "arenda_ts")
     _ensure_registered("core.contracts.expediciya", "expediciya")
     _ensure_registered("core.contracts.zayavka", "zayavka_excel")
     for contract_type, fragment in (
-        ("logistiks_rus", "Логистикс Рус"),
         ("arenda_ts", "аренды ТС"),
         ("expediciya", "Экспедиторская заявка"),
         ("zayavka_excel", "Excel"),
@@ -322,6 +321,7 @@ def test_new_types_do_not_affect_perevozka():
 
     # Новые типы — DOCX-база с собственными префиксами файлов.
     # formika с ЭТАПА 3.1.A — рабочий тип: свой шаблон и своё имя файла.
+    # logistiks_rus с ЭТАПА 3.1.C.A.3 — тоже рабочий: два бланка (ООО/ИП).
     assert isinstance(
         GeneratorFactory.get_generator("formika"), FormikaGenerator
     )
@@ -331,6 +331,10 @@ def test_new_types_do_not_affect_perevozka():
     assert FormikaGenerator.FILE_PREFIX == "Договор-заявка_Формика"
     assert FormikaGenerator.TEMPLATE_NAMES == {"formika": "shablon_formika.docx"}
     assert LogistiksRusGenerator.FILE_PREFIX == "Заявка_Логистикс_Рус"
+    assert LogistiksRusGenerator.TEMPLATE_NAMES == {
+        "ООО": "shablon_logistiks_rus_ooo.docx",
+        "ИП": "shablon_logistiks_rus_ip.docx",
+    }
 
 
 def test_zayavka_generator_is_not_docx_based():
