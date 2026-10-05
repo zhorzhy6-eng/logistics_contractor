@@ -16,10 +16,15 @@ class ArendaTsWindow(BaseContractWindow):
 
     CONTRACT_TYPE = "arenda_ts"
     WINDOW_TITLE = "Разовая аренда"
+    #: Разделы окна: семь вкладок в порядке разделов бланка. Сами вкладки
+    #: написаны (ui/windows/arenda_ts/tabs) — на них окно переводится шагом
+    #: 3.1.D.B.3, здесь пока только разметка разделов.
     TAB_CONFIGS = [
         ("Арендатор", "customer.svg"),
         ("Арендодатель", "carrier.svg"),
         ("ТС", "vehicles.svg"),
+        ("Маршрут", "trailer.svg"),
+        ("Груз", "contract.svg"),
         ("Экипаж", "driver.svg"),
         ("Стоимость", "contract.svg"),
     ]
