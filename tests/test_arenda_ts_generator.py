@@ -1234,7 +1234,12 @@ def test_short_fio_uses_surname_and_initials(generator):
 
 
 def test_edo_placeholders_stay_empty(generator):
-    """ЭДО промпт не извлекает: плейсхолдеры остаются пустыми строками."""
+    """
+    В данных теста ЭДО нет — плейсхолдеры остаются пустыми строками.
+
+    Промпт ЭДО извлекает (поле edo блоков lessee / lessor), но в этих данных
+    такого поля нет: генератор печатает пустую строку и ничего не выдумывает.
+    """
     replacements = generator._build_replacements_map(_payload())
 
     assert replacements["lessee_edo"] == ""

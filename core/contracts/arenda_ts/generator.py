@@ -567,7 +567,8 @@ class ArendaTsGenerator(BaseContractGenerator):
             lessee.get("corr_account") or ""
         )
         replacements["lessee_email"] = self._single_line(lessee.get("email") or "")
-        # ЭДО в схеме распознавания пока нет — поле остаётся пустым.
+        # ЭДО промпт извлекает (edo блока стороны): если в документе его нет,
+        # значение пустое и печатается пустая строка — ничего не выдумываем.
         replacements["lessee_edo"] = self._single_line(lessee.get("edo") or "")
         replacements["lessee_director_position"] = self._single_line(
             lessee.get("director_position") or ""
