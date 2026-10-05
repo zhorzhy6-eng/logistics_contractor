@@ -19,9 +19,9 @@
 «промпт → генератор»: корневые поля обязаны дойти до бланка (generate()
 переносит их в contract, см. докстринг core/contracts/arenda_ts/generator.py).
 
-Шаги постобработки проверяются и здесь — на готовом документе, — и отдельно на
-программно собранном Document() (без шаблона), чтобы правки строк таблицы и
-точек маршрута были видны по отдельности.
+Шаги постобработки проверяются здесь на готовом документе (после generate());
+отдельно, на программно собранном Document() без шаблона, те же шаги и их
+краевые случаи разобраны в tests/test_arenda_ts_postprocess.py.
 
 Все данные синтетические, реальных ПДн нет.
 """
@@ -1251,117 +1251,6 @@ def test_multiline_values_are_flattened(generator):
 
     assert replacements["lessee_address"] == "г. Москва, ул. Тестовая, д. 1"
     assert replacements["lessor_director_name"] == "Сидоров Сидор Сидорович"
-
-
-# ─────────────────────────────────────────────────────────────
-# Шаги постобработки на программно собранном документе
-# ─────────────────────────────────────────────────────────────
-
-def _car_row(number: int, brand: str = "", vin: str = "",
-             loading: str = "", unloading: str = "") -> list:
-    return [str(number), brand, vin, loading, unloading]
-
-
-def _point_paragraph(number: int, address: str = "") -> str:
-    return (f"3.2.{number}. Точка погрузки № {number} — {address}. Плановая "
-            f"дата и время подачи ТС: 21.09.2026 г., с 08:00 до 18:00.")
-
-
-def _unloading_paragraph(number: int, address: str = "") -> str:
-    return (f"3.3.{number}. Точка выгрузки № {number} — {address}. Плановая "
-            f"дата завершения: 27.09.2026 г.")
-
-
-def _table_document(rows) -> Document:
-    doc = Document()
-    table = doc.add_table(rows=1, cols=5)
-    for index, header in enumerate(CAR_HEADERS):
-        table.rows[0].cells[index].text = header
-    for row in rows:
-        cells = table.add_row().cells
-        for index, value in enumerate(row):
-            cells[index].text = value
-    return doc
-
-
-def test_vehicle_rows_step_removes_only_fully_empty_rows(generator):
-    doc = _table_document([
-        _car_row(1, brand="МОДЕЛЬ 1", vin="TESTVIN1"),
-        _car_row(2),
-        _car_row(3, brand="МОДЕЛЬ 3", vin="TESTVIN3"),
-        _car_row(4),
-        _car_row(5, loading="Точка погрузки 5"),
-    ])
-
-    RemoveEmptyVehicleRowsStep(generator).apply(doc, None)
-
-    rows = [[cell.text.strip() for cell in row.cells] for row in doc.tables[0].rows]
-    assert len(rows) == 4
-    assert rows[1][1] == "МОДЕЛЬ 1"
-    assert rows[2][1] == "МОДЕЛЬ 3"
-    # Строка с одной лишь точкой погрузки — данные, её не удаляем.
-    assert rows[3][3] == "Точка погрузки 5"
-
-
-def test_vehicle_rows_step_ignores_other_tables(generator):
-    """Таблица без пяти заголовков машин не трогается."""
-    doc = Document()
-    table = doc.add_table(rows=2, cols=2)
-    table.rows[0].cells[0].text = "АРЕНДАТОР:"
-    table.rows[0].cells[1].text = "АРЕНДОДАТЕЛЬ:"
-    table.rows[1].cells[0].text = ""
-    table.rows[1].cells[1].text = ""
-
-    RemoveEmptyVehicleRowsStep(generator).apply(doc, None)
-
-    assert len(doc.tables[0].rows) == 2
-
-
-def test_point_blocks_step_removes_empty_points(generator):
-    doc = Document()
-    doc.add_paragraph("3.2. Согласованные точки погрузки:")
-    doc.add_paragraph(_point_paragraph(1, "Адрес погрузки 1"))
-    doc.add_paragraph(_point_paragraph(2))
-    doc.add_paragraph(_point_paragraph(3))
-    doc.add_paragraph("3.3. Согласованные точки выгрузки:")
-    doc.add_paragraph(_unloading_paragraph(1, "Адрес выгрузки 1"))
-    doc.add_paragraph(_unloading_paragraph(2))
-
-    RemoveEmptyLoadingUnloadingBlocksStep(generator).apply(doc, None)
-
-    texts = _body_texts(doc)
-    assert texts == [
-        "3.2. Согласованные точки погрузки:",
-        _point_paragraph(1, "Адрес погрузки 1"),
-        "3.3. Согласованные точки выгрузки:",
-        _unloading_paragraph(1, "Адрес выгрузки 1"),
-    ]
-
-
-def test_point_blocks_step_removes_empty_section_header(generator):
-    doc = Document()
-    doc.add_paragraph("3.2. Согласованные точки погрузки:")
-    doc.add_paragraph(_point_paragraph(1))
-    doc.add_paragraph(_point_paragraph(2))
-    doc.add_paragraph("3.4. Согласованный маршрут: Москва — Калуга.")
-
-    RemoveEmptyLoadingUnloadingBlocksStep(generator).apply(doc, None)
-
-    assert _body_texts(doc) == ["3.4. Согласованный маршрут: Москва — Калуга."]
-
-
-def test_point_blocks_step_keeps_point_without_date(generator):
-    """Точка без даты, но с адресом — это данные: строку не удаляем."""
-    doc = Document()
-    doc.add_paragraph("3.2. Согласованные точки погрузки:")
-    doc.add_paragraph(
-        "3.2.1. Точка погрузки № 1 — Адрес погрузки 1. Плановая дата и "
-        "время подачи ТС:  г., с  до ."
-    )
-
-    RemoveEmptyLoadingUnloadingBlocksStep(generator).apply(doc, None)
-
-    assert len(_body_texts(doc)) == 2
 
 
 # ─────────────────────────────────────────────────────────────
