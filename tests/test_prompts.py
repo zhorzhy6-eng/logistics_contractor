@@ -18,8 +18,13 @@ formika из списка заглушек убран и проверяется 
 
 С ЭТАПА 3.1.D.A.2 заполнен промпт разовой аренды ТС с экипажем
 (core/prompts/arenda_ts.py): он тоже убран из заглушек и проверяется
-отдельно — в tests/test_prompts_arenda_ts.py. Заглушкой остаётся только
-тип zayavka_excel («Хавалы», Excel-форма заявки).
+отдельно — в tests/test_prompts_arenda_ts.py.
+
+С ЭТАПА 3.1.E.A.2 заполнен и последний промпт из списка типов — Хавалы
+(core/prompts/havaly.py, Excel-форма заявки): он убран из заглушек
+и проверяется отдельно — в tests/test_prompts_havaly.py. Заглушек среди
+пяти пунктов списка больше нет; на дефолтном промпте клиента
+(GigaChatClient.SYSTEM_PROMPT) остаётся только перевозка (perevozka).
 """
 
 import sys
@@ -55,11 +60,22 @@ def test_get_prompt_perevozka_is_string_or_none():
     assert prompt is None or isinstance(prompt, str)
 
 
-@pytest.mark.parametrize("contract_type", [
-    "zayavka_excel",
-])
-def test_get_prompt_stubs_are_none(contract_type):
-    assert get_prompt(contract_type) is None
+def test_no_prompt_stubs_left_in_picker():
+    """
+    Заглушек среди типов из списка больше нет (ЭТАП 3.1.E.A.2).
+
+    Промпт есть у всех четырёх пользовательских типов, а на дефолтном
+    промпте клиента остаётся только перевозка («Экспедиторство»).
+    """
+    for key in ("formika", "logistiks_rus", "arenda_ts", "zayavka_excel"):
+        prompt = get_prompt(key)
+        assert isinstance(prompt, str) and prompt.strip(), (
+            f"промпт типа {key!r} не заполнен"
+        )
+
+    assert get_prompt("perevozka") is None, (
+        "перевозка работает на дефолтном промпте клиента"
+    )
 
 
 @pytest.mark.parametrize("value", ["unknown", "", None, "expediciya"])
