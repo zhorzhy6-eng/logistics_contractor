@@ -281,13 +281,15 @@ def test_stub_generators_raise_not_implemented():
     он больше не поднимает. logistiks_rus убрана на ЭТАПЕ 3.1.C.A.3 — по той
     же причине (core/contracts/logistiks_rus/generator.py). arenda_ts убрана
     на ЭТАПЕ 3.1.D.A.3: генератор разовой аренды ТС с экипажем тоже рабочий
-    (core/contracts/arenda_ts/generator.py).
+    (core/contracts/arenda_ts/generator.py). zayavka_excel убрана на ЭТАПЕ
+    3.1.E.A.3: Excel-генератор заявки Хавалов реализован
+    (core/contracts/zayavka/generator.py). Осталась одна заглушка —
+    экспедиторская заявка.
     """
     _ensure_registered("core.contracts.expediciya", "expediciya")
     _ensure_registered("core.contracts.zayavka", "zayavka_excel")
     for contract_type, fragment in (
         ("expediciya", "Экспедиторская заявка"),
-        ("zayavka_excel", "Excel"),
     ):
         generator = GeneratorFactory.get_generator(contract_type)
         with pytest.raises(NotImplementedError, match=fragment):
