@@ -1773,6 +1773,32 @@ def test_days_to_words(generator):
     assert generator._days_to_words(None) == "десяти"
 
 
+def test_days_to_words_genitive(generator):
+    """
+    Родительный падеж для «45 (сорока пяти) банковских дней».
+
+    Проверяются значения из границ поля вкладки «Стоимость» (0…365): словарь
+    _days_to_words знает только 1…20 и 30, а здесь нужны любые числа.
+    """
+    assert generator._days_to_words_genitive(30) == "тридцати"
+    assert generator._days_to_words_genitive(45) == "сорока пяти"
+    assert generator._days_to_words_genitive("45") == "сорока пяти"
+    assert generator._days_to_words_genitive(10) == "десяти"
+    assert generator._days_to_words_genitive(1) == "одного"
+    assert generator._days_to_words_genitive(21) == "двадцати одного"
+    assert generator._days_to_words_genitive(100) == "ста"
+    assert generator._days_to_words_genitive(365) == "трёхсот шестидесяти пяти"
+    assert generator._days_to_words_genitive(0) == "ноль"
+
+
+def test_days_to_words_genitive_does_not_invent_values(generator):
+    """Не число — пустая строка; заведомо не дни — цифры как есть."""
+    assert generator._days_to_words_genitive(None) == ""
+    assert generator._days_to_words_genitive("мусор") == ""
+    assert generator._days_to_words_genitive("") == ""
+    assert generator._days_to_words_genitive(1_000_000) == "1000000"
+
+
 def test_template_selection(generator, templates_dir):
     assert generator._get_template_path("ООО (с НДС)").endswith("shablon_ooo.docx")
     assert generator._get_template_path("ИП с НДС").endswith("shablon_ip_with_vat.docx")
