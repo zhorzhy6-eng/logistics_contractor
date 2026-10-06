@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Тесты сборки данных «Разовой аренды» из вкладок (ЭТАП 3.1.D.B.1).
+Тесты сборки данных «Разовой аренды» из вкладок (ЭТАП 3.1.D.B.1, дополнены
+на ШАГЕ FIX-1).
 
 Проверяется ui/windows/arenda_ts/data.py::collect_arenda_ts_data: раскладка
 полей семи вкладок по ContractData, пять маппингов этого шага (корневые поля
@@ -9,6 +10,11 @@
 Арендатора, разбор паспорта и удостоверения, carrier_type из entity_type
 и ставки НДС) и устойчивость сборки (нет вкладки, нет get_data(), get_data()
 упал, вернул не словарь).
+
+Отдельно проверяются два поля ШАГА FIX-1: три РАЗНЫЕ даты договора
+(lease_start_date / lease_end_date / planned_completion_date — п. 2.5 и
+п. 3.3.2 бланка, автоподстановки между ними нет) и срок оплаты
+contract.payment_days.
 
 Qt не нужен: вкладки подменяются простыми объектами-заглушками со своим
 get_data(). Отдельные тесты проверяют, что собранных данных достаточно
@@ -96,11 +102,17 @@ LOADING_NAME_2 = "ООО «Склад Юг»"
 LOADING_ADDRESS_2 = "г. Калуга, ул. Промышленная, д. 5"
 UNLOADING_NAME_1 = "ООО «Приёмка»"
 UNLOADING_ADDRESS_1 = "г. Чехов, ул. Приёмная, д. 9"
+UNLOADING_NAME_2 = "ООО «Возврат»"
+UNLOADING_ADDRESS_2 = "г. Калуга, ул. Возвратная, д. 4"
 LOADING_DATE_1 = "2026-09-21"
 LOADING_DATE_2 = "2026-09-22"
 LOADING_TIME_FROM = "08:00"
 LOADING_TIME_TO = "18:00"
 UNLOADING_DATE_1 = "2026-09-27"
+
+#: Планируемая дата завершения рейса (п. 3.3.2 бланка). Это ТРЕТЬЯ, отдельная
+#: дата договора: в образце ТЛ-574 она не равна окончанию аренды.
+COMPLETION_DATE = "2026-09-26"
 
 #: Экипаж (п. 3.5): документы приходят одной строкой — как их отдаёт промпт.
 DRIVER_NAME = "Иванов Иван Иванович"
@@ -174,6 +186,21 @@ class NotADictTab:
         return ["не", "словарь"]
 
 
+#: Плейсхолдер Jinja, оставшийся в готовом документе.
+PLACEHOLDER_RE = re.compile(r"\{\{[^{}]*\}\}")
+
+
+def _flatten(text: str) -> str:
+    """Текст одной строкой: любые пробелы (в том числе неразрывные) — по одному."""
+    return re.sub(r"\s+", " ", text.replace("\u00a0", " ")).strip()
+
+
+def _format_date(value: str) -> str:
+    """ISO-дата в формате бланка: «2026-09-26» → «26.09.2026»."""
+    year, month, day = str(value).split("-")
+    return f"{day}.{month}.{year}"
+
+
 # ─────────────────────────────────────────────────────────────
 # Данные вкладок: раскладка полей, зафиксированная на ЭТАПЕ 3.1.D.B
 # ─────────────────────────────────────────────────────────────
@@ -244,12 +271,13 @@ def _lessor_tab() -> dict:
 
 
 def _vehicle_tab() -> dict:
-    """Вкладка «ТС»: шапка договора, срок аренды, тягач и прицеп."""
+    """Вкладка «ТС»: шапка договора, три даты рейса, тягач и прицеп."""
     return {
         "contract_number": CONTRACT_NUMBER,
         "contract_date": CONTRACT_DATE,
         "lease_start_date": LEASE_START,
         "lease_end_date": LEASE_END,
+        "planned_completion_date": COMPLETION_DATE,
         "tractor_brand": TRACTOR_BRAND,
         "tractor_plate": TRACTOR_PLATE,
         "tractor_type": TRACTOR_TYPE,
@@ -1230,6 +1258,151 @@ def test_contract_number_date_and_lease_dates(full_tabs):
     assert cd.contract["date"] == CONTRACT_DATE
     assert cd.contract["lease_start_date"] == LEASE_START
     assert cd.contract["lease_end_date"] == LEASE_END
+
+
+# ─────────────────────────────────────────────────────────────
+# Три даты рейса (FIX-1): п. 2.5 и п. 3.3.2 — разные плейсхолдеры
+# ─────────────────────────────────────────────────────────────
+
+def test_planned_completion_date_is_collected(full_tabs):
+    """Планируемая дата завершения рейса (п. 3.3.2) доходит до contract."""
+    cd = collect_arenda_ts_data(full_tabs)
+
+    assert cd.contract["planned_completion_date"] == COMPLETION_DATE
+
+
+def test_planned_completion_date_from_contract_block():
+    """Дата может прийти и внутри блока contract вкладки «ТС»."""
+    cd = collect_arenda_ts_data({"vehicle": {
+        "contract": {"planned_completion_date": COMPLETION_DATE},
+    }})
+
+    assert cd.contract["planned_completion_date"] == COMPLETION_DATE
+
+
+def test_three_dates_are_collected_independently(full_tabs):
+    """Сборщик не связывает даты: каждая читается своим ключом."""
+    cd = collect_arenda_ts_data(full_tabs)
+    only_start = collect_arenda_ts_data({"vehicle": {
+        "lease_start_date": LEASE_START,
+    }})
+    only_end = collect_arenda_ts_data({"vehicle": {
+        "lease_end_date": LEASE_END,
+    }})
+    only_completion = collect_arenda_ts_data({"vehicle": {
+        "planned_completion_date": COMPLETION_DATE,
+    }})
+
+    assert cd.contract["lease_start_date"] == LEASE_START
+    assert cd.contract["lease_end_date"] == LEASE_END
+    assert cd.contract["planned_completion_date"] == COMPLETION_DATE
+
+    # Только своя дата: остальных ключей в contract нет. Пустые массивы точек
+    # сборщик кладёт всегда («точек нет» и «раздел не собирался» — разное).
+    assert only_start.contract["lease_start_date"] == LEASE_START
+    assert only_end.contract["lease_end_date"] == LEASE_END
+    assert only_completion.contract["planned_completion_date"] == COMPLETION_DATE
+    assert set(only_start.contract) == {"lease_start_date", "loadings", "unloadings"}
+    assert set(only_end.contract) == {"lease_end_date", "loadings", "unloadings"}
+    assert set(only_completion.contract) == {
+        "planned_completion_date", "loadings", "unloadings",
+    }
+
+
+def test_equal_and_different_dates_are_kept_as_entered():
+    """Совпали даты или нет — в contract уходит то, что ввели."""
+    same = collect_arenda_ts_data({"vehicle": {
+        "lease_end_date": COMPLETION_DATE,
+        "planned_completion_date": COMPLETION_DATE,
+    }})
+    different = collect_arenda_ts_data({"vehicle": {
+        "lease_end_date": LEASE_END,
+        "planned_completion_date": COMPLETION_DATE,
+    }})
+
+    assert same.contract["lease_end_date"] == COMPLETION_DATE
+    assert same.contract["planned_completion_date"] == COMPLETION_DATE
+    assert different.contract["lease_end_date"] == LEASE_END
+    assert different.contract["planned_completion_date"] == COMPLETION_DATE
+
+
+def test_empty_completion_date_is_not_invented():
+    """Дату рейса не выводим из срока аренды: нет ввода — нет ключа."""
+    cd = collect_arenda_ts_data({"vehicle": {
+        "lease_start_date": LEASE_START,
+        "lease_end_date": LEASE_END,
+    }})
+
+    assert "planned_completion_date" not in cd.contract
+
+
+def test_dates_reach_generated_document_in_their_clauses(
+        full_tabs, templates_dir, work_dir):
+    """
+    Три даты стоят в договоре каждая на своём месте и не путаются.
+
+    П. 2.5 — плановый период аренды (начало и конец), п. 3.3.2 — плановая дата
+    завершения рейса у последней точки выгрузки. В образце ТЛ-574 это разные
+    даты (28.09.2026 и 26.09.2026), поэтому проверяются обе формулировки.
+    """
+    from docx import Document
+
+    from core.contracts.arenda_ts.generator import ArendaTsGenerator
+
+    data = _tabs_of_variant()
+    data["vehicle"]["lease_start_date"] = LEASE_START
+    data["vehicle"]["lease_end_date"] = LEASE_END
+    data["vehicle"]["planned_completion_date"] = COMPLETION_DATE
+    # В бланке плановая дата завершения стоит у ВТОРОЙ точки выгрузки
+    # (п. 3.3.2): у первой точки своя дата, у последней — дата завершения рейса.
+    data["route"]["unloadings"] = [
+        {"name": UNLOADING_NAME_1, "address": UNLOADING_ADDRESS_1,
+         "date": UNLOADING_DATE_1},
+        {"name": UNLOADING_NAME_2, "address": UNLOADING_ADDRESS_2,
+         "date": COMPLETION_DATE},
+    ]
+
+    generator = ArendaTsGenerator(templates_dir=str(templates_dir))
+    path = generator.generate(
+        collect_arenda_ts_data(data), output_dir=str(work_dir)
+    )
+
+    doc = Document(path)
+    text = _flatten("\n".join(
+        [p.text for p in doc.paragraphs]
+        + [cell.text for t in doc.tables for r in t.rows for cell in r.cells]
+    ))
+    start_text = _format_date(LEASE_START)
+    end_text = _format_date(LEASE_END)
+    completion_text = _format_date(COMPLETION_DATE)
+
+    assert start_text != end_text != completion_text
+    assert f"с {start_text} г. по {end_text} г. включительно" in text
+    assert f"Плановая дата завершения: {completion_text} г." in text
+
+
+def test_completion_date_is_not_printed_as_lease_end(
+        templates_dir, work_dir):
+    """Дата завершения рейса не подменяет собой окончание аренды."""
+    from docx import Document
+
+    from core.contracts.arenda_ts.generator import ArendaTsGenerator
+
+    data = _tabs_of_variant()
+    data["vehicle"]["lease_end_date"] = LEASE_END
+    data["vehicle"]["planned_completion_date"] = COMPLETION_DATE
+
+    generator = ArendaTsGenerator(templates_dir=str(templates_dir))
+    path = generator.generate(
+        collect_arenda_ts_data(data), output_dir=str(work_dir / "clause_2_5")
+    )
+
+    doc = Document(path)
+    lines = [p.text for p in doc.paragraphs]
+    period = next(line for line in lines if line.strip().startswith("2.5."))
+
+    assert _format_date(LEASE_END) in period
+    assert _format_date(COMPLETION_DATE) not in period
 
 
 def test_vehicle_tractor_and_trailer_are_mapped(full_tabs):

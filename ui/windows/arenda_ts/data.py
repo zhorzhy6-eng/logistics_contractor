@@ -20,6 +20,7 @@ ui/windows/logistiks_rus/data.py.
                    carrier.full_name / carrier.short_name
     vehicle_tab  → contract.number, contract.date,
                    contract.lease_start_date, contract.lease_end_date,
+                   contract.planned_completion_date,
                    tractor.brand_model / plate_number / vehicle_type,
                    trailer.brand_model / plate_number
     route_tab    → contract.route, contract.loadings / contract.unloadings,
@@ -31,6 +32,7 @@ ui/windows/logistiks_rus/data.py.
     price_tab    → contract.sum_wo_vat / sum_vat / sum_total,
                    contract.price_without_vat / price_with_vat,
                    contract.vat_rate / vat_rate_num,
+                   contract.payment_days,
                    contract.special_conditions
 
 Арендатор в этом типе — НАША сторона (в заявке на перевозку наша сторона
@@ -98,6 +100,27 @@ ArendaTsGenerator._party_block и ArendaTsValidator._party_block.
        lessee («ООО» / «ИП») и ставки НДС (у ИП «0%» → ИП без НДС, иначе
        ИП с НДС) — ровно так же, как в ArendaTsGenerator._resolve_carrier_type;
      * иначе ООО — бланк и расчёт по умолчанию.
+
+Три даты и срок оплаты (FIX-1)
+------------------------------
+
+Сборщик знает ТРИ РАЗНЫЕ даты и не связывает их между собой:
+
+  * contract.lease_start_date / contract.lease_end_date — плановый период
+    аренды (п. 2.5 бланка), приходит с вкладки «ТС» и из корня ответа
+    распознавания;
+  * contract.planned_completion_date — планируемая дата завершения рейса
+    (п. 3.3.2 бланка), отдельное поле вкладки «ТС».
+
+Автоподстановки между ними нет: в образце ТЛ-574 окончание аренды
+(28.09.2026) и плановая дата завершения рейса (26.09.2026) — разные даты,
+и любая из трёх может совпасть с другой или отличаться. Одна и та же дата
+в двух полях — это выбор пользователя, а не признак ошибки.
+
+contract.payment_days — срок оплаты из п. 4.5 бланка целым числом банковских
+дней. Его даёт вкладка «Стоимость» (по умолчанию 30); ноль и отрицательное
+значение означают «срок не задан» и в contract не попадают — о незаполненном
+сроке скажет валидатор.
 
 Две точки входа
 ---------------
@@ -697,12 +720,18 @@ def _build_lessor(data: Mapping[str, Any]) -> Dict[str, Any]:
 
 def _build_vehicle(data: Mapping[str, Any]) -> Dict[str, Any]:
     """
-    Договор и объект аренды: номер, дата, срок аренды, тягач и прицеп.
+    Договор и объект аренды: номер, дата, три даты рейса, тягач и прицеп.
 
-    Возвращает две части: поля шапки (contract) и сам автопоезд. Срок аренды
-    (п. 2.5) лежит в корне ответа распознавания, поэтому читается и оттуда
-    (см. маппинг 1). Тип ТС тягача обязателен: без него валидатор не пропустит
-    договор.
+    Возвращает две части: поля шапки (contract) и сам автопоезд. Читаются
+    ТРИ РАЗНЫЕ даты (FIX-1) — каждая своим полем, без вывода одной из другой:
+
+      * lease_start_date — начало планового периода аренды (п. 2.5);
+      * lease_end_date — конец планового периода аренды (п. 2.5);
+      * planned_completion_date — планируемая дата завершения рейса (п. 3.3.2).
+
+    Срок аренды (lease_start_date / lease_end_date) лежит в корне ответа
+    распознавания, поэтому читается и оттуда (см. маппинг 1). Тип ТС тягача
+    обязателен: без него валидатор не пропустит договор.
     """
     contract: Dict[str, Any] = {}
     _set_if_filled(
@@ -720,6 +749,10 @@ def _build_vehicle(data: Mapping[str, Any]) -> Dict[str, Any]:
     _set_if_filled(
         contract, "lease_end_date",
         _find_field(data, _CONTRACT_BLOCK, "lease_end_date"),
+    )
+    _set_if_filled(
+        contract, "planned_completion_date",
+        _find_field(data, _CONTRACT_BLOCK, "planned_completion_date"),
     )
 
     tractor: Dict[str, Any] = {}
@@ -954,12 +987,31 @@ def _build_crew(data: Mapping[str, Any]) -> Dict[str, Any]:
     return driver
 
 
+def _payment_days_value(value: Any) -> Optional[int]:
+    """
+    Срок оплаты целым числом банковских дней: 45, «45», «45 дн.» → 45.
+
+    Ноль и отрицательное значение читаются как «срок не задан» (None): в бланке
+    п. 4.5 печатается число банковских дней, и ноль там смысла не имеет — о
+    незаполненном сроке скажет валидатор. Разобрать число не удалось — тоже
+    None: мусор в бланк не попадает.
+    """
+    number = _to_float(value)
+    if number is None:
+        return None
+    days = int(number)
+    if days <= 0:
+        return None
+    return days
+
+
 def _build_price(
     data: Mapping[str, Any],
     carrier_type: str,
 ) -> Dict[str, Any]:
     """
-    Арендная плата (п. 4.1): суммы, ставка НДС и особые условия.
+    Арендная плата (п. 4.1) и порядок оплаты (п. 4.5): суммы, ставка НДС,
+    срок оплаты в банковских днях и особые условия.
 
     Суммы документа (sum_wo_vat / sum_vat / sum_total) раскладываются по виду
     Арендатора — маппинг 3. Генератор считает плату от contract.price_without_vat
@@ -1013,6 +1065,16 @@ def _build_price(
     _set_if_filled(
         contract, "special_conditions",
         _find_field(data, _CONTRACT_BLOCK, "special_conditions"),
+    )
+
+    # Срок оплаты (п. 4.5): целое число банковских дней. Плейсхолдера
+    # {payment_days} в бланке пока нет (см. STATE.md, FIX-1) — ключ собирается
+    # для бланка и валидатора, значение по умолчанию даёт вкладка (30 дней).
+    _set_if_filled(
+        contract, "payment_days",
+        _payment_days_value(
+            _find_number(data, _CONTRACT_BLOCK, "payment_days")
+        ),
     )
 
     if _has_any_value(data):

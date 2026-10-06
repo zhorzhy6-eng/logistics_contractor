@@ -36,7 +36,7 @@ from PyQt5.QtCore import QDate  # noqa: E402
 from PyQt5.QtTest import QSignalSpy  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QApplication, QComboBox, QDoubleSpinBox, QFrame, QGroupBox, QLineEdit,
-    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QWidget,
+    QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QWidget,
 )
 
 from core.contract_data import ContractData  # noqa: E402
@@ -95,7 +95,8 @@ EXPECTED_KEYS = {
     },
     VehicleTab: {
         "contract_number", "contract_date", "lease_start_date",
-        "lease_end_date", "tractor_brand", "tractor_plate", "tractor_type",
+        "lease_end_date", "planned_completion_date",
+        "tractor_brand", "tractor_plate", "tractor_type",
         "trailer_brand", "trailer_plate",
     },
     RouteTab: {"route", "loadings", "unloadings"},
@@ -108,7 +109,7 @@ EXPECTED_KEYS = {
     },
     PriceTab: {
         "sum_wo_vat", "sum_vat", "sum_total", "vat_rate", "vat_rate_num",
-        "special_conditions",
+        "payment_days", "special_conditions",
     },
 }
 
@@ -153,6 +154,9 @@ SAMPLE_DATA = {
         "contract_date": "2026-09-23",
         "lease_start_date": "2026-09-24",
         "lease_end_date": "2027-09-24",
+        # Плановая дата завершения рейса (п. 3.3.2) — НЕ окончание аренды:
+        # рейс завершается раньше, чем истекает срок аренды.
+        "planned_completion_date": "2026-09-26",
         "tractor_brand": "DAF XF 95.430",
         "tractor_plate": "М342СА761",
         "tractor_type": "Седельный тягач",
@@ -192,16 +196,20 @@ SAMPLE_DATA = {
     PriceTab: {
         "sum_wo_vat": SUM_WITHOUT_VAT,
         "vat_rate": "22%",
+        "payment_days": 45,
         "special_conditions": "Простой не более 24 часов",
     },
 }
 
 #: Поля-значения по умолчанию: их clear() не обнуляет, а возвращает к норме.
-#: Даты показывают сегодняшний день (окончание аренды — с запасом в год),
-#: вид Арендатора — ООО, ставка НДС — 22%, основание полномочий — устав.
+#: Даты показывают сегодняшний день (окончание аренды — с запасом в год,
+#: плановое завершение рейса — через несколько дней), вид Арендатора — ООО,
+#: ставка НДС — 22%, режим ввода суммы — «Без НДС», срок оплаты — 30 дней,
+#: основание полномочий — устав.
 DEFAULT_VALUE_KEYS = {
-    "carrier_type", "basis", "vat_rate", "vat_rate_num",
+    "carrier_type", "basis", "vat_rate", "vat_rate_num", "payment_days",
     "contract_date", "lease_start_date", "lease_end_date",
+    "planned_completion_date",
     "driver_birth_date", "driver_passport_issue_date", "driver_license_issue_date",
 }
 
@@ -683,8 +691,9 @@ def test_lessor_fill_and_read_back(qt_app):
 # «ТС»
 # ─────────────────────────────────────────────────────────────
 
-def test_vehicle_has_nine_keys(qt_app):
-    assert len(VehicleTab().get_data()) == 9
+def test_vehicle_has_ten_keys(qt_app):
+    """Десять полей: договор, три даты, тягач (марка, номер, тип) и прицеп."""
+    assert len(VehicleTab().get_data()) == 10
 
 
 def test_vehicle_has_contract_and_lease_groups(qt_app):
@@ -707,11 +716,87 @@ def test_vehicle_dates_are_iso(qt_app):
     assert tab.get_data()["lease_start_date"] == "2026-09-24"
 
 
+def test_vehicle_has_three_editable_dates(qt_app):
+    """Три РАЗНЫЕ даты (FIX-1): начало и конец аренды и завершение рейса."""
+    tab = VehicleTab()
+
+    tab.fill_data({
+        "lease_start_date": "2026-09-21",
+        "lease_end_date": "2026-09-28",
+        "planned_completion_date": "2026-09-26",
+    })
+    data = tab.get_data()
+
+    assert data["lease_start_date"] == "2026-09-21"
+    assert data["lease_end_date"] == "2026-09-28"
+    assert data["planned_completion_date"] == "2026-09-26"
+
+
+def test_vehicle_lease_end_does_not_change_completion_date(qt_app):
+    """Окончание аренды и завершение рейса — независимые даты."""
+    tab = VehicleTab()
+    tab.fill_data(SAMPLE_DATA[VehicleTab])
+    before = tab.get_data()["planned_completion_date"]
+
+    tab.fill_data({"lease_end_date": "2027-01-31"})
+
+    assert tab.get_data()["lease_end_date"] == "2027-01-31"
+    assert tab.get_data()["planned_completion_date"] == before
+
+
+def test_vehicle_completion_date_does_not_change_lease_dates(qt_app):
+    """Обратная проверка: дата рейса не трогает срок аренды."""
+    tab = VehicleTab()
+    tab.fill_data(SAMPLE_DATA[VehicleTab])
+    before = tab.get_data()
+
+    tab.fill_data({"planned_completion_date": "2026-10-05"})
+    after = tab.get_data()
+
+    assert after["planned_completion_date"] == "2026-10-05"
+    assert after["lease_start_date"] == before["lease_start_date"]
+    assert after["lease_end_date"] == before["lease_end_date"]
+
+
+def test_vehicle_equal_dates_are_kept_as_entered(qt_app):
+    """Одинаковые даты — выбор пользователя, а не ошибка: так и остаётся."""
+    tab = VehicleTab()
+
+    tab.fill_data({
+        "lease_end_date": "2026-09-26",
+        "planned_completion_date": "2026-09-26",
+    })
+    data = tab.get_data()
+
+    assert data["lease_end_date"] == data["planned_completion_date"] == "2026-09-26"
+
+
+def test_vehicle_default_completion_date_is_independent(qt_app):
+    """По умолчанию дата рейса не равна окончанию аренды."""
+    data = VehicleTab().get_data()
+
+    assert data["planned_completion_date"] != data["lease_end_date"]
+
+
 def test_vehicle_default_lease_end_is_after_start(qt_app):
     """Срок аренды по умолчанию — год: окончание позже начала."""
     data = VehicleTab().get_data()
 
     assert data["lease_end_date"] > data["lease_start_date"]
+
+
+def test_vehicle_date_labels_name_the_contract_clauses(qt_app):
+    """Подписи полей дат повторяют формулировки бланка (п. 2.5 и 3.3.2)."""
+    from PyQt5.QtWidgets import QLabel
+
+    tab = VehicleTab()
+    joined = " | ".join(
+        label.text() for label in tab.findChildren(QLabel)
+    )
+
+    assert "Плановый период аренды, с" in joined
+    assert "Плановый период аренды, по" in joined
+    assert "Планируемая дата завершения рейса" in joined
 
 
 def test_vehicle_accepts_number_key(qt_app):
@@ -1301,6 +1386,388 @@ def test_price_vat_rates_match_logistiks_rus():
     """Ставки НДС те же, что в остальных окнах проекта."""
     assert price_tab_module.VAT_RATES == ("22%", "20%", "10%", "0%")
     assert price_tab_module.MAX_AMOUNT == 100_000_000
+
+
+# ─────────────────────────────────────────────────────────────
+# «Стоимость»: режим ввода суммы (FIX-1, БАГ 1)
+# ─────────────────────────────────────────────────────────────
+
+#: Сумма «с НДС» из задания: 230 000,00 при ставке 22% —
+#: база 188 524,59, НДС 41 475,41.
+SUM_WITH_VAT_230K = 230000.00
+BASE_230K = 188524.59
+VAT_230K = 41475.41
+
+
+def test_price_has_amount_mode_switch(qt_app):
+    """Переключатель «Считать от»: «Без НДС» (по умолчанию) и «С НДС»."""
+    tab = PriceTab()
+
+    assert isinstance(tab.amount_mode, QComboBox)
+    assert [tab.amount_mode.itemText(i) for i in range(tab.amount_mode.count())] \
+        == list(price_tab_module.AMOUNT_MODES)
+    assert tab.amount_mode_text() == price_tab_module.DEFAULT_AMOUNT_MODE
+    assert tab.amount_mode_text() == price_tab_module.MODE_WITHOUT_VAT
+    assert tab.calculates_from_total() is False
+
+
+def test_price_input_field_is_always_editable(qt_app):
+    """Поле суммы — одно и то же, редактируемое в обоих режимах."""
+    tab = PriceTab()
+
+    assert tab.sum_wo_vat.isReadOnly() is False
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+    assert tab.sum_wo_vat.isReadOnly() is False
+
+
+def test_price_sum_label_follows_mode(qt_app):
+    """Подпись поля суммы объясняет, что означает введённое число."""
+    tab = PriceTab()
+
+    assert price_tab_module.BASE_LABEL in tab._sum_edit_label.text()
+
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+    assert price_tab_module.TOTAL_LABEL in tab._sum_edit_label.text()
+
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITHOUT_VAT)
+    assert price_tab_module.BASE_LABEL in tab._sum_edit_label.text()
+
+
+def test_price_mode_without_vat_adds_vat_on_top(qt_app):
+    """Ввод «без НДС»: итог = база × (1 + ставка/100)."""
+    tab = PriceTab()
+    tab.sum_wo_vat.setValue(SUM_WITHOUT_VAT)
+
+    data = tab.get_data()
+
+    assert data["sum_wo_vat"] == pytest.approx(SUM_WITHOUT_VAT)
+    assert data["sum_total"] == pytest.approx(
+        round(SUM_WITHOUT_VAT * (1 + 22 / 100), 2)
+    )
+    assert data["sum_vat"] == pytest.approx(
+        round(data["sum_total"] - data["sum_wo_vat"], 2)
+    )
+
+
+def test_price_mode_with_vat_extracts_vat(qt_app):
+    """Ввод «с НДС»: база = итог / (1 + ставка/100), НДС = итог − база."""
+    tab = PriceTab()
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+
+    tab.sum_wo_vat.setValue(SUM_WITH_VAT_230K)
+    data = tab.get_data()
+
+    assert data["sum_total"] == pytest.approx(SUM_WITH_VAT_230K)
+    assert data["sum_wo_vat"] == pytest.approx(BASE_230K)
+    assert data["sum_vat"] == pytest.approx(VAT_230K)
+
+
+def test_price_mode_with_vat_rounding_matches_task(qt_app):
+    """230 000,00 с НДС 22% → 188 524,59 без НДС и 41 475,41 НДС."""
+    tab = PriceTab()
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+    tab.sum_wo_vat.setValue(230000.00)
+
+    data = tab.get_data()
+
+    assert data["sum_wo_vat"] == 188524.59
+    assert data["sum_vat"] == 41475.41
+    assert data["sum_total"] == 230000.00
+
+
+def test_price_mode_switch_keeps_value(qt_app):
+    """Смена режима не сбрасывает и не меняет введённое число."""
+    tab = PriceTab()
+    tab.sum_wo_vat.setValue(SUM_WITH_VAT_230K)
+
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+
+    assert tab.input_amount() == pytest.approx(SUM_WITH_VAT_230K)
+
+
+def test_price_mode_switch_recalculates_the_other_side(qt_app):
+    """Переключение режима пересчитывает вторую сумму, не теряя число."""
+    tab = PriceTab()
+    tab.sum_wo_vat.setValue(SUM_WITH_VAT_230K)
+    base_mode_total = tab.get_data()["sum_total"]
+
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+
+    assert tab.get_data()["sum_total"] == pytest.approx(SUM_WITH_VAT_230K)
+    assert tab.get_data()["sum_wo_vat"] == pytest.approx(BASE_230K)
+    assert base_mode_total != pytest.approx(tab.get_data()["sum_total"])
+
+
+def test_price_mode_switch_back_restores_amounts(qt_app):
+    """Туда и обратно: суммы возвращаются к исходным."""
+    tab = PriceTab()
+    tab.sum_wo_vat.setValue(SUM_WITH_VAT_230K)
+    before = tab.get_data()
+
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITHOUT_VAT)
+
+    after = tab.get_data()
+    assert after["sum_wo_vat"] == pytest.approx(before["sum_wo_vat"])
+    assert after["sum_vat"] == pytest.approx(before["sum_vat"])
+    assert after["sum_total"] == pytest.approx(before["sum_total"])
+
+
+def test_price_both_modes_give_the_same_total(qt_app):
+    """
+    Оба режима дают один и тот же итог — это и есть смысл переключателя.
+
+    «Без НДС»: база 188 524,59 → итог 230 000,00.
+    «С НДС»:   итог 230 000,00 → база 188 524,59.
+    """
+    without_vat = PriceTab()
+    without_vat.sum_wo_vat.setValue(BASE_230K)
+
+    with_vat = PriceTab()
+    with_vat.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+    with_vat.sum_wo_vat.setValue(SUM_WITH_VAT_230K)
+
+    left = without_vat.get_data()
+    right = with_vat.get_data()
+
+    assert left["sum_wo_vat"] == right["sum_wo_vat"] == pytest.approx(BASE_230K)
+    assert left["sum_vat"] == right["sum_vat"] == pytest.approx(VAT_230K)
+    assert left["sum_total"] == right["sum_total"] == pytest.approx(SUM_WITH_VAT_230K)
+
+
+def test_price_words_are_about_total_in_both_modes(qt_app):
+    """Сумма прописью — от итога и от режима не зависит."""
+    without_vat = PriceTab()
+    without_vat.sum_wo_vat.setValue(BASE_230K)
+
+    with_vat = PriceTab()
+    with_vat.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+    with_vat.sum_wo_vat.setValue(SUM_WITH_VAT_230K)
+
+    assert without_vat.sum_total_words.text() == with_vat.sum_total_words.text()
+    assert without_vat.sum_total_words.text().startswith("Двести тридцать тысяч")
+
+
+def test_price_zero_rate_in_both_modes_gives_equal_sums(qt_app):
+    """«0%»: НДС нет, итог равен введённому числу в обоих режимах."""
+    for mode in price_tab_module.AMOUNT_MODES:
+        tab = PriceTab()
+        tab.vat_rate.setCurrentText("0%")
+        tab.amount_mode.setCurrentText(mode)
+        tab.sum_wo_vat.setValue(IP_SUM)
+
+        data = tab.get_data()
+        assert data["sum_vat"] == 0.0, mode
+        assert data["sum_wo_vat"] == pytest.approx(IP_SUM), mode
+        assert data["sum_total"] == pytest.approx(IP_SUM), mode
+
+
+def test_price_fill_data_base_uses_without_vat_mode(qt_app):
+    """Документ с суммой без НДС заполняет вкладку в режиме «Без НДС»."""
+    tab = PriceTab()
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+
+    tab.fill_data({"price_without_vat": SUM_WITHOUT_VAT, "vat_rate": "22%"})
+
+    assert tab.amount_mode_text() == price_tab_module.MODE_WITHOUT_VAT
+    assert tab.get_data()["sum_wo_vat"] == pytest.approx(SUM_WITHOUT_VAT)
+
+
+def test_price_fill_data_total_only_uses_with_vat_mode(qt_app):
+    """
+    Документ, где есть только итог, заполняется в режиме «С НДС».
+
+    Иначе единственная сумма документа получила бы НДС сверху и итог
+    разошёлся бы с бумагой.
+    """
+    tab = PriceTab()
+
+    tab.fill_data({"sum_total": 135833.0, "vat_rate": "0%", "vat_rate_num": 0.0})
+
+    assert tab.amount_mode_text() == price_tab_module.MODE_WITH_VAT
+    data = tab.get_data()
+    assert data["sum_wo_vat"] == pytest.approx(135833.0)
+    assert data["sum_total"] == pytest.approx(135833.0)
+
+
+def test_price_fill_data_restores_with_vat_sums(qt_app):
+    """
+    Восстановление сохранённых сумм: числа не теряются и не сдвигаются.
+
+    Режим ввода в данных не хранится — хранятся три суммы. Пара «база 188 524,59
+    + итог 230 000,00» одинаково верна для режима «С НДС» и для режима
+    «Без НДС» с той же базой, поэтому вкладка восстанавливает сумму БЕЗ НДС
+    (так эта пара читается из документа) — а итог, НДС и прописью выходят те же.
+    """
+    tab = PriceTab()
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+    tab.sum_wo_vat.setValue(SUM_WITH_VAT_230K)
+    saved = tab.get_data()
+
+    restored = PriceTab()
+    restored.fill_data(saved)
+    data = restored.get_data()
+
+    assert restored.amount_mode_text() == price_tab_module.MODE_WITHOUT_VAT
+    assert data["sum_wo_vat"] == pytest.approx(BASE_230K)
+    assert data["sum_vat"] == pytest.approx(VAT_230K)
+    assert data["sum_total"] == pytest.approx(SUM_WITH_VAT_230K)
+    assert restored.sum_total_words.text() == tab.sum_total_words.text()
+
+
+def test_price_fill_data_restores_without_vat_sums(qt_app):
+    """Восстановление сумм, сохранённых в режиме «Без НДС»."""
+    tab = PriceTab()
+    tab.sum_wo_vat.setValue(SUM_WITHOUT_VAT)
+    saved = tab.get_data()
+
+    restored = PriceTab()
+    restored.fill_data(saved)
+    data = restored.get_data()
+
+    assert restored.amount_mode_text() == price_tab_module.MODE_WITHOUT_VAT
+    assert data["sum_wo_vat"] == pytest.approx(SUM_WITHOUT_VAT)
+    assert data["sum_vat"] == pytest.approx(SUM_VAT)
+    assert data["sum_total"] == pytest.approx(SUM_TOTAL)
+
+
+def test_price_fill_data_restores_total_only_as_with_vat(qt_app):
+    """Единственная сумма документа восстанавливается как итог, а не база."""
+    tab = PriceTab()
+
+    tab.fill_data({"sum_total": SUM_WITH_VAT_230K, "vat_rate": "22%"})
+
+    assert tab.amount_mode_text() == price_tab_module.MODE_WITH_VAT
+    data = tab.get_data()
+    assert data["sum_total"] == pytest.approx(SUM_WITH_VAT_230K)
+    assert data["sum_wo_vat"] == pytest.approx(BASE_230K)
+
+
+def test_price_fill_data_round_trip_is_stable(qt_app):
+    """Повторное заполнение теми же данными ничего не сдвигает."""
+    tab = PriceTab()
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+    tab.sum_wo_vat.setValue(SUM_WITH_VAT_230K)
+
+    first = tab.get_data()
+    tab.fill_data(first)
+    second = tab.get_data()
+
+    assert second == pytest.approx(first)
+
+
+def test_price_clear_returns_default_mode(qt_app):
+    """clear() возвращает режим по умолчанию, а не оставляет «С НДС»."""
+    tab = PriceTab()
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+
+    tab.clear()
+
+    assert tab.amount_mode_text() == price_tab_module.DEFAULT_AMOUNT_MODE
+    assert tab.get_data()["sum_wo_vat"] == 0.0
+    assert price_tab_module.BASE_LABEL in tab._sum_edit_label.text()
+
+
+def test_price_vat_amount_plus_base_equals_total(qt_app):
+    """База и НДС в сумме дают ровно итог — ни копейки мимо."""
+    for mode in price_tab_module.AMOUNT_MODES:
+        tab = PriceTab()
+        tab.amount_mode.setCurrentText(mode)
+        tab.sum_wo_vat.setValue(SUM_WITH_VAT_230K)
+
+        data = tab.get_data()
+        assert round(data["sum_wo_vat"] + data["sum_vat"], 2) \
+            == pytest.approx(data["sum_total"]), mode
+
+
+# ─────────────────────────────────────────────────────────────
+# «Стоимость»: срок оплаты (FIX-1, БАГ 3)
+# ─────────────────────────────────────────────────────────────
+
+def test_price_has_payment_days_field(qt_app):
+    """Поле «Срок оплаты, банковских дней» — целое число, по умолчанию 30."""
+    tab = PriceTab()
+
+    assert isinstance(tab.payment_days, QSpinBox)
+    assert not isinstance(tab.payment_days, QDoubleSpinBox)
+    assert tab.payment_days.value() == price_tab_module.DEFAULT_PAYMENT_DAYS
+    assert tab.payment_days.value() == 30
+    assert tab.get_data()["payment_days"] == 30
+
+
+def test_price_payment_days_range(qt_app):
+    """Границы срока: 0 — «срок не задан», больше 365 банковских дней нет."""
+    tab = PriceTab()
+
+    assert tab.payment_days.minimum() == price_tab_module.MIN_PAYMENT_DAYS == 0
+    assert tab.payment_days.maximum() == price_tab_module.MAX_PAYMENT_DAYS == 365
+
+
+def test_price_payment_days_accepts_value(qt_app):
+    tab = PriceTab()
+
+    tab.payment_days.setValue(45)
+
+    assert tab.get_data()["payment_days"] == 45
+
+
+def test_price_payment_days_rejects_negative(qt_app):
+    """Отрицательного срока оплаты не бывает: поле не принимает минус."""
+    tab = PriceTab()
+
+    tab.payment_days.setValue(-5)
+
+    assert tab.get_data()["payment_days"] == 0
+
+
+def test_price_payment_days_fill_and_read_back(qt_app):
+    tab = PriceTab()
+
+    tab.fill_data({"sum_wo_vat": SUM_WITHOUT_VAT, "payment_days": 45})
+
+    assert tab.get_data()["payment_days"] == 45
+
+
+def test_price_payment_days_ignores_empty_value(qt_app):
+    """Пустое значение не сбрасывает срок: у промпта пусто — «не было»."""
+    tab = PriceTab()
+    tab.payment_days.setValue(45)
+
+    tab.fill_data({"payment_days": ""})
+    tab.fill_data({"payment_days": None})
+
+    assert tab.get_data()["payment_days"] == 45
+
+
+def test_price_payment_days_ignores_garbage(qt_app):
+    """Мусор вместо числа оставляет поле как есть, а не превращает в 0."""
+    tab = PriceTab()
+    tab.payment_days.setValue(45)
+
+    tab.fill_data({"payment_days": "мусор"})
+
+    assert tab.get_data()["payment_days"] == 45
+
+
+def test_price_payment_days_is_independent_of_amount(qt_app):
+    """Срок оплаты не зависит ни от суммы, ни от режима ввода."""
+    tab = PriceTab()
+    tab.payment_days.setValue(45)
+    tab.sum_wo_vat.setValue(SUM_WITHOUT_VAT)
+
+    before = tab.get_data()["payment_days"]
+    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
+
+    assert before == 45
+    assert tab.get_data()["payment_days"] == 45
+
+
+def test_price_payment_days_is_integer(qt_app):
+    """В бланке печатается целое число банковских дней."""
+    tab = PriceTab()
+    tab.payment_days.setValue(45)
+
+    assert isinstance(tab.get_data()["payment_days"], int)
 
 
 # ─────────────────────────────────────────────────────────────

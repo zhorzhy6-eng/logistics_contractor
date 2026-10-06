@@ -1,21 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Вкладка «ТС» окна типа «Разовая аренда» (ЭТАП 3.1.D.B.2).
+Вкладка «ТС» окна типа «Разовая аренда» (ЭТАП 3.1.D.B.2, FIX-1).
 
 Объект аренды — автопоезд: тягач и полуприцеп, и договор, по которому он
 передан. В бланке это шапка (номер и дата договора, п. 2.5 — срок аренды)
 и раздел 2.1 (марка, госномер и тип ТС тягача, марка и госномер прицепа).
 
+ТРИ разные даты (FIX-1, БАГ 2) — это отдельные поля, автоподстановки между
+ними нет:
+
+  * «Плановый период аренды, с»  → lease_start_date   (п. 2.5 бланка);
+  * «Плановый период аренды, по» → lease_end_date     (п. 2.5 бланка);
+  * «Планируемая дата завершения рейса» →
+    planned_completion_date (п. 3.3.2 бланка).
+
+Даты не связаны: рейс может завершиться раньше окончания аренды (в образце
+ТЛ-574 окончание аренды 28.09.2026, а плановая дата завершения — 26.09.2026)
+или позже неё. Заполняются обе руками; изменение одной не трогает другие.
+
 Отличие от вкладки «ТС» Логистикс Рус (ui/windows/logistiks_rus/tabs/
-vehicle_tab.py): там четыре поля, здесь пять — добавлен тип ТС тягача, он
-обязателен, иначе валидатор не пропустит договор
-(ArendaTsValidator._check_vehicle). Номер и дата договора живут на этой же
-вкладке: в бланке это шапка, и отдельной вкладки «Договор» нет.
+vehicle_tab.py): там четыре поля, здесь шесть — добавлены тип ТС тягача (он
+обязателен, иначе валидатор не пропустит договор) и плановая дата завершения
+рейса. Номер и дата договора живут на этой же вкладке: в бланке это шапка,
+и отдельной вкладки «Договор» нет.
 
 Ключи get_data() — contract_number, contract_date, lease_start_date,
-lease_end_date, tractor_brand, tractor_plate, tractor_type, trailer_brand,
-trailer_plate — читает ui/windows/arenda_ts/data.py::_build_vehicle.
+lease_end_date, planned_completion_date, tractor_brand, tractor_plate,
+tractor_type, trailer_brand, trailer_plate — читает
+ui/windows/arenda_ts/data.py::_build_vehicle.
 """
 
 import logging
@@ -32,6 +45,11 @@ logger = logging.getLogger("ui.windows.arenda_ts.tabs.vehicle_tab")
 
 #: Сколько лет аренды показывать по умолчанию (п. 2.5 бланка — срок аренды).
 DEFAULT_LEASE_YEARS = 1
+
+#: Через сколько дней после начала аренды планируется завершение рейса.
+#: Это ПЛАНОВАЯ дата п. 3.3.2, она не равна окончанию аренды: рейс обычно
+#: завершается раньше, чем истекает срок аренды.
+DEFAULT_COMPLETION_DAYS = 3
 
 #: Дата в поле ввода — «дд.мм.гггг», как в остальных вкладках проекта.
 DATE_FORMAT = "dd.MM.yyyy"
@@ -62,8 +80,13 @@ class VehicleTab(TabMixin, QWidget):
         "trailer_brand", "trailer_plate",
     )
 
-    #: Поля-даты вкладки.
-    DATE_FIELDS = ("contract_date", "lease_start_date", "lease_end_date")
+    #: Поля-даты вкладки: три РАЗНЫЕ даты, связи между ними нет (FIX-1).
+    DATE_FIELDS = (
+        "contract_date",
+        "lease_start_date",
+        "lease_end_date",
+        "planned_completion_date",
+    )
 
     def __init__(self):
         super().__init__()
@@ -103,14 +126,27 @@ class VehicleTab(TabMixin, QWidget):
 
         self.lease_start_date = self._make_date_edit(QDate.currentDate())
         lease_layout.addRow(
-            theme.required_label("Начало аренды"), self.lease_start_date
+            theme.required_label("Плановый период аренды, с"),
+            self.lease_start_date,
         )
 
         self.lease_end_date = self._make_date_edit(
             QDate.currentDate().addYears(DEFAULT_LEASE_YEARS)
         )
         lease_layout.addRow(
-            theme.required_label("Окончание аренды"), self.lease_end_date
+            theme.required_label("Плановый период аренды, по"),
+            self.lease_end_date,
+        )
+
+        # Плановая дата завершения рейса (п. 3.3.2) — НЕ то же самое, что
+        # окончание аренды: рейс может завершиться раньше или позже.
+        # Поле самостоятельное, из соседних дат не подставляется.
+        self.planned_completion_date = self._make_date_edit(
+            QDate.currentDate().addDays(DEFAULT_COMPLETION_DAYS)
+        )
+        lease_layout.addRow(
+            theme.required_label("Планируемая дата завершения рейса"),
+            self.planned_completion_date,
         )
 
         layout.addWidget(lease_group)
@@ -207,6 +243,10 @@ class VehicleTab(TabMixin, QWidget):
         Пустые значения игнорируются: частичное распознавание не должно
         сбрасывать уже введённые данные. Даты принимаются в любом формате,
         который понимает общий разбор (core.dates.parse_date).
+
+        Три даты заполняются КАЖДАЯ СВОИМ ключом: lease_start_date,
+        lease_end_date и planned_completion_date. Ни одна из них не выводится
+        из других — в документе это разные даты (FIX-1).
         """
         if not data:
             return
@@ -237,14 +277,22 @@ class VehicleTab(TabMixin, QWidget):
         """Очищает поля договора, тягача и прицепа, возвращает даты к норме."""
         for field in self.FIELDS:
             getattr(self, field).clear()
-        self.contract_date.setDate(QDate.currentDate())
-        self.lease_start_date.setDate(QDate.currentDate())
-        self.lease_end_date.setDate(
-            QDate.currentDate().addYears(DEFAULT_LEASE_YEARS)
+        today = QDate.currentDate()
+        self.contract_date.setDate(today)
+        self.lease_start_date.setDate(today)
+        self.lease_end_date.setDate(today.addYears(DEFAULT_LEASE_YEARS))
+        self.planned_completion_date.setDate(
+            today.addDays(DEFAULT_COMPLETION_DAYS)
         )
         self.recognition_panel.clear()
 
         logger.debug("Разовая аренда: поля ТС очищены")
 
 
-__all__ = ["VehicleTab", "NoWheelDateEdit", "DEFAULT_LEASE_YEARS", "DATE_FORMAT"]
+__all__ = [
+    "VehicleTab",
+    "NoWheelDateEdit",
+    "DEFAULT_LEASE_YEARS",
+    "DEFAULT_COMPLETION_DAYS",
+    "DATE_FORMAT",
+]
