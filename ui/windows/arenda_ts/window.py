@@ -1090,6 +1090,10 @@ class ArendaTsWindow(BaseContractWindow):
         Ставка НДС и особые условия уходят как есть: вкладка сама решает,
         что с ними делать (ставит пункт списка, пишет в поле), а пустое
         значение в словарь не попадает.
+
+        Срок оплаты (payment_days) передаётся только положительным: ноль у
+        промпта значит «срока в документе нет», а вкладка приняла бы его за
+        введённое значение и сбросила своё «по умолчанию» в ноль.
         """
         filled = filled_only(contract)
         if not filled:
@@ -1104,8 +1108,14 @@ class ArendaTsWindow(BaseContractWindow):
 
         for key in cls._PRICE_KEYS:
             value = filled.get(key)
-            if value not in (None, ""):
-                data[key] = value
+            if value in (None, ""):
+                continue
+            if key == "payment_days":
+                days = cls._amount_value(value)
+                if days is not None:
+                    data[key] = int(days)
+                continue
+            data[key] = value
 
         return data
 

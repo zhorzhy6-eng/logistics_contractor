@@ -145,6 +145,10 @@ VAT_RATE_TEXT = "22%"
 
 SPECIAL_CONDITIONS = "Простой не более 24 часов"
 
+#: Срок оплаты (п. 4.5) из блока contract: столько же банковских дней, сколько
+#: в распознанном документе (значение по умолчанию у вкладки — 30).
+PAYMENT_DAYS = 45
+
 
 # ─────────────────────────────────────────────────────────────
 # Фикстуры и помощники
@@ -290,6 +294,7 @@ def _fill_all_tabs(win, cars=1):
         "vat_rate": VAT_RATE_TEXT,
         "vat_rate_num": 22.0,
         "special_conditions": SPECIAL_CONDITIONS,
+        "payment_days": PAYMENT_DAYS,
     })
 
 
@@ -419,6 +424,7 @@ def _recognized_answer() -> dict:
             "vat_rate": "22%",
             "vat_rate_num": 22.0,
             "special_conditions": "Без дозагрузки",
+            "payment_days": PAYMENT_DAYS,
         },
     }
 
@@ -1317,12 +1323,15 @@ def test_recognition_fills_tabs(window, quiet_messages):
     assert crew["driver_registration_address"] == "г. Тверь, ул. Новая, д. 7"
     assert crew["driver_phone"] == "+7 (999) 000-11-22"
 
-    # Стоимость: суммы, ставка и особые условия — из блока contract.
+    # Стоимость: суммы, ставка, срок оплаты и особые условия — из contract.
     price = window.price_tab.get_data()
     assert price["sum_wo_vat"] == 200000.0
     assert price["vat_rate"] == "22%"
     assert price["vat_rate_num"] == 22.0
     assert price["special_conditions"] == "Без дозагрузки"
+    # Срок оплаты из документа (п. 4.5) доходит до вкладки: раньше он не
+    # передавался и в бланк уходило значение по умолчанию (шаг FIX-1-T).
+    assert price["payment_days"] == PAYMENT_DAYS
 
     assert window.recognition_task is None
     assert window.statusBar().currentMessage() == "Готово"
@@ -1410,7 +1419,8 @@ def test_recognition_does_not_overwrite_manual_input(window, quiet_messages):
         "lease_end_date": "",
         "driver": {"full_name": "", "passport": "", "phone": ""},
         "contract": {"number": "", "date": "", "sum_wo_vat": 0.0, "sum_vat": 0.0,
-                     "sum_total": 0.0, "vat_rate": "", "special_conditions": ""},
+                     "sum_total": 0.0, "vat_rate": "", "special_conditions": "",
+                     "payment_days": 0},
     })
 
     assert window.lessee_tab.get_data()["full_name"] == LESSEE_NAME
@@ -1426,6 +1436,7 @@ def test_recognition_does_not_overwrite_manual_input(window, quiet_messages):
     assert window.crew_tab.get_data()["driver_full_name"] == DRIVER_NAME
     assert window.price_tab.get_data()["sum_wo_vat"] == FORM_AMOUNT
     assert window.price_tab.get_data()["special_conditions"] == SPECIAL_CONDITIONS
+    assert window.price_tab.get_data()["payment_days"] == PAYMENT_DAYS
 
 
 def test_recognition_keeps_carrier_type_chosen_by_hand(window, quiet_messages):
@@ -1923,11 +1934,12 @@ def test_crew_tab_data_keeps_separate_document_parts():
 
 
 def test_price_tab_data_maps_sums_and_rate():
-    """Суммы, ставка и особые условия уходят во вкладку «Стоимость»."""
+    """Суммы, ставка, срок оплаты и особые условия уходят во вкладку «Стоимость»."""
     data = ArendaTsWindow._price_tab_data({
         "sum_wo_vat": FORM_AMOUNT, "sum_vat": VAT_AMOUNT,
         "sum_total": TOTAL_AMOUNT, "vat_rate": VAT_RATE_TEXT,
         "vat_rate_num": 22.0, "special_conditions": SPECIAL_CONDITIONS,
+        "payment_days": PAYMENT_DAYS,
     })
 
     assert data == {
@@ -1937,6 +1949,7 @@ def test_price_tab_data_maps_sums_and_rate():
         "vat_rate": VAT_RATE_TEXT,
         "vat_rate_num": 22.0,
         "special_conditions": SPECIAL_CONDITIONS,
+        "payment_days": PAYMENT_DAYS,
     }
 
 
@@ -1945,12 +1958,16 @@ def test_price_tab_data_skips_zero_and_empty():
     Ноль и пустота — «суммы не было»: они не занимают место в словаре.
 
     У ИП без НДС единственная сумма лежит в sum_total: нулевая sum_wo_vat
-    не должна встать первой в списке приоритетов вкладки.
+    не должна встать первой в списке приоритетов вкладки. Так же и ноль
+    в payment_days: промпт ставит его, когда срока оплаты в документе нет,
+    и вкладка такой ключ получать не должна — иначе срок сбросился бы
+    в ноль вместо значения по умолчанию.
     """
     assert ArendaTsWindow._price_tab_data({}) == {}
     assert ArendaTsWindow._price_tab_data(None) == {}
     assert ArendaTsWindow._price_tab_data({
         "sum_wo_vat": 0.0, "sum_vat": 0.0, "sum_total": 0.0, "vat_rate": "",
+        "payment_days": 0,
     }) == {}
 
     data = ArendaTsWindow._price_tab_data({
