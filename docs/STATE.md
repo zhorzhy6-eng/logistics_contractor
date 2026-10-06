@@ -4,7 +4,7 @@
 > шага. Архитектура — в [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **Обновлено:** 2026-10-06
-**HEAD:** `cde8143` (docs: AGENTS.md — путь E:\Programmy + грабля STATE.md HEAD)
+**HEAD:** `2821180` (docs: STATE.md — два упоминания Хавалов приведены к состоянию B.2)
 **Тестов:** 4299 passed, exit 0 (было 4102; шаг 3.1.E.B.2 добавил 197 новых
 тестов — `tests/test_ui_havaly_tabs.py`)
 **Upstream:** `## main...origin/main` (синхронизировано)
