@@ -92,6 +92,7 @@ git status -sb: ## main...origin/main / [ahead N]
 - Не выходить из offscreen `main.py` через `app.quit()` — только через
   `main._do_exit`.
 - Не запускать `tools/make_*.py` после фиксации SHA256 в тестах.
+- Не править `AGENTS.md` и `docs/STATE.md` — их ведёт пользователь.
 
 ## 5. Грабли (проверено на практике)
 
