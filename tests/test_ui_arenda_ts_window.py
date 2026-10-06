@@ -75,6 +75,11 @@ CONTRACT_NUMBER = "ТЛ-574"
 CONTRACT_DATE = "2026-09-19"
 LEASE_START = "2026-09-21"
 LEASE_END = "2026-09-27"
+
+#: Плановая дата завершения рейса (п. 3.3.2, шаг FIX-1-T2) — НЕ окончание
+#: аренды: в образце это разные даты, и промпт отдаёт её отдельным полем
+#: contract.planned_completion_date.
+PLANNED_COMPLETION_DATE = "2026-09-26"
 ROUTE = "г. Москва — г. Калуга"
 
 #: Арендатор-ООО — наша сторона в варианте по умолчанию.
@@ -255,6 +260,7 @@ def _fill_all_tabs(win, cars=1):
         "contract_date": CONTRACT_DATE,
         "lease_start_date": LEASE_START,
         "lease_end_date": LEASE_END,
+        "planned_completion_date": PLANNED_COMPLETION_DATE,
         "tractor_brand": TRACTOR_BRAND,
         "tractor_plate": TRACTOR_PLATE,
         "tractor_type": TRACTOR_TYPE,
@@ -425,6 +431,9 @@ def _recognized_answer() -> dict:
             "vat_rate_num": 22.0,
             "special_conditions": "Без дозагрузки",
             "payment_days": PAYMENT_DAYS,
+            # Плановая дата завершения рейса (п. 3.3.2) — в блоке contract,
+            # как её отдаёт схема промпта после шага FIX-1-T2.
+            "planned_completion_date": PLANNED_COMPLETION_DATE,
         },
     }
 
@@ -1289,6 +1298,9 @@ def test_recognition_fills_tabs(window, quiet_messages):
     assert vehicle["contract_date"] == "2026-10-01"
     assert vehicle["lease_start_date"] == LEASE_START
     assert vehicle["lease_end_date"] == LEASE_END
+    # Плановая дата завершения рейса (п. 3.3.2) — своё поле, не выводится
+    # из срока аренды: lease_end_date у неё свой (шаг FIX-1-T2).
+    assert vehicle["planned_completion_date"] == PLANNED_COMPLETION_DATE
     assert vehicle["tractor_brand"] == "Volvo FH"
     assert vehicle["tractor_plate"] == "А001АА77"
     assert vehicle["tractor_type"] == "грузовой тягач седельный"
@@ -1420,7 +1432,7 @@ def test_recognition_does_not_overwrite_manual_input(window, quiet_messages):
         "driver": {"full_name": "", "passport": "", "phone": ""},
         "contract": {"number": "", "date": "", "sum_wo_vat": 0.0, "sum_vat": 0.0,
                      "sum_total": 0.0, "vat_rate": "", "special_conditions": "",
-                     "payment_days": 0},
+                     "payment_days": 0, "planned_completion_date": ""},
     })
 
     assert window.lessee_tab.get_data()["full_name"] == LESSEE_NAME
@@ -1430,6 +1442,9 @@ def test_recognition_does_not_overwrite_manual_input(window, quiet_messages):
     assert window.vehicle_tab.get_data()["contract_number"] == CONTRACT_NUMBER
     assert window.vehicle_tab.get_data()["tractor_brand"] == TRACTOR_BRAND
     assert window.vehicle_tab.get_data()["lease_start_date"] == LEASE_START
+    assert window.vehicle_tab.get_data()["planned_completion_date"] == (
+        PLANNED_COMPLETION_DATE
+    ), "дата, введённая на вкладке, не должна сбрасываться пустым полем ответа"
     assert window.route_tab.get_data()["route"] == ROUTE
     assert window.route_tab.get_data()["loadings"][0]["address"] == LOADING_ADDRESS
     assert window.cargo_tab.get_data()["vehicles"][0]["vin"] == VIN_1
@@ -1437,6 +1452,38 @@ def test_recognition_does_not_overwrite_manual_input(window, quiet_messages):
     assert window.price_tab.get_data()["sum_wo_vat"] == FORM_AMOUNT
     assert window.price_tab.get_data()["special_conditions"] == SPECIAL_CONDITIONS
     assert window.price_tab.get_data()["payment_days"] == PAYMENT_DAYS
+
+
+def test_recognition_fills_planned_completion_date(window, quiet_messages):
+    """
+    Плановая дата завершения рейса из ответа модели (п. 3.3.2) доходит
+    до вкладки «ТС» — отдельным полем, а не из срока аренды.
+
+    Шаг FIX-1-T2: поле добавлено в схему промпта аренды
+    (contract.planned_completion_date), и вкладка «ТС» его уже читает.
+    """
+    _answer_recognition(window, {
+        "contract": {"planned_completion_date": "26.09.2026"},
+    })
+
+    vehicle = window.vehicle_tab.get_data()
+    assert vehicle["planned_completion_date"] == PLANNED_COMPLETION_DATE
+    # Срок аренды этой датой не трогается: в ответе его не было.
+    assert vehicle["lease_start_date"] != PLANNED_COMPLETION_DATE
+    assert vehicle["lease_end_date"] != PLANNED_COMPLETION_DATE
+
+
+def test_recognition_keeps_manual_planned_completion_date(window, quiet_messages):
+    """Пустое поле в ответе не сбрасывает дату, введённую на вкладке."""
+    window.vehicle_tab.fill_data(
+        {"planned_completion_date": PLANNED_COMPLETION_DATE}
+    )
+    manual = window.vehicle_tab.get_data()["planned_completion_date"]
+    assert manual == PLANNED_COMPLETION_DATE
+
+    _answer_recognition(window, {"contract": {"planned_completion_date": ""}})
+
+    assert window.vehicle_tab.get_data()["planned_completion_date"] == manual
 
 
 def test_recognition_keeps_carrier_type_chosen_by_hand(window, quiet_messages):

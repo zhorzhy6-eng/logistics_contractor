@@ -914,12 +914,14 @@ class ArendaTsWindow(BaseContractWindow):
         """
         Блоки «vehicle» / «tractor» / «trailer» / «contract» → вкладка «ТС».
 
-        Номер и дата договора лежат в contract, срок аренды (п. 2.5) промпт
-        отдаёт в КОРНЕ ответа — вкладка ждёт их одним словарём, поэтому они
-        приходят отдельными аргументами. Тягач и прицеп принимаются и
-        вложенными в vehicle, и отдельными блоками (схема промпта кладёт их
-        в корень). Ключи вкладки (tractor_brand) важнее кратких имён схемы
-        (brand_model): раскладку делает _TRACTOR_KEYS / _TRAILER_KEYS.
+        Номер и дата договора лежат в contract, плановая дата завершения рейса
+        (п. 3.3.2, шаг FIX-1-T2) — тоже в contract (planned_completion_date),
+        а срок аренды (п. 2.5) промпт отдаёт в КОРНЕ ответа: вкладка ждёт их
+        одним словарём, поэтому корневые приходят отдельными аргументами.
+        Тягач и прицеп принимаются и вложенными в vehicle, и отдельными
+        блоками (схема промпта кладёт их в корень). Ключи вкладки
+        (tractor_brand) важнее кратких имён схемы (brand_model): раскладку
+        делает _TRACTOR_KEYS / _TRAILER_KEYS.
         """
         container = filled_only(vehicle)
         header = filled_only(contract)
@@ -939,16 +941,21 @@ class ArendaTsWindow(BaseContractWindow):
             if value is not None:
                 data[key] = value
 
-        # Срок аренды: корень ответа, затем contract, затем блок vehicle.
-        for key, root_value in (
-            ("lease_start_date", lease_start_date),
-            ("lease_end_date", lease_end_date),
+        # Даты: плановая дата завершения рейса (п. 3.3.2) лежит в блоке
+        # contract, срок аренды (п. 2.5) — в КОРНЕ ответа. Каждая дата
+        # читается своим ключом и НЕ выводится из соседних (FIX-1).
+        for key, root_value, names in (
+            ("planned_completion_date", None, ("planned_completion_date",)),
+            ("lease_start_date", lease_start_date,
+             ("lease_start_date", "start_date")),
+            ("lease_end_date", lease_end_date,
+             ("lease_end_date", "end_date")),
         ):
             value = root_value
             if value in (None, ""):
-                value = cls._first_value(header, (key,))
+                value = cls._first_value(header, names)
             if value in (None, ""):
-                value = cls._first_value(container, (key,))
+                value = cls._first_value(container, names)
             if value not in (None, ""):
                 data[key] = value
 

@@ -82,6 +82,8 @@ TAB_FACTORIES = [
 ]
 
 #: Ключи get_data() каждой вкладки — ровно те, что читает сборка данных.
+#: У Арендатора ключ phone появляется только заполненным (телефон приходит
+#: из справочника организаций, поля формы у вкладки нет — ШАГ FIX-1-T2).
 EXPECTED_KEYS = {
     LesseeTab: {
         "carrier_type", "full_name", "short_name", "inn", "kpp", "ogrn",
@@ -977,6 +979,85 @@ def test_route_empty_route_keeps_manual_input(qt_app):
     tab.fill_data({"route": "  "})
 
     assert tab.get_data()["route"] == "Москва - Казань"
+
+
+# ── Подсказка у колонки «Дата» точек выгрузки (ШАГ FIX-1-T2) ──
+
+def test_unloading_date_tooltip_text():
+    """Текст подсказки — тот, что согласован в задании."""
+    assert route_tab_module.UNLOADING_DATE_TOOLTIP == (
+        "Справочно. В договор идёт планируемая дата завершения рейса "
+        "(вкладка ТС)"
+    )
+
+
+def test_unloading_date_cells_have_tooltip(qt_app):
+    """У ячейки «Дата» точек выгрузки есть пояснение."""
+    tab = RouteTab()
+    table = tab.unloadings_table
+
+    for row in range(table.rowCount()):
+        item = table.item(row, route_tab_module.COL_DATE)
+        assert item is not None
+        assert item.toolTip() == route_tab_module.UNLOADING_DATE_TOOLTIP
+
+
+def test_loading_date_cells_have_no_tooltip(qt_app):
+    """У погрузки подсказки нет: её дата печатается в бланке (п. 3.2)."""
+    tab = RouteTab()
+    table = tab.loadings_table
+
+    for row in range(table.rowCount()):
+        item = table.item(row, route_tab_module.COL_DATE)
+        assert item is not None
+        assert item.toolTip() == ""
+
+
+def test_unloading_date_header_has_tooltip(qt_app):
+    """Пояснение стоит и на заголовке колонки «Дата» у выгрузки."""
+    tab = RouteTab()
+    date_column = route_tab_module.COL_DATE
+
+    header = tab.unloadings_table.horizontalHeaderItem(date_column)
+    assert header is not None
+    assert header.toolTip() == route_tab_module.UNLOADING_DATE_TOOLTIP
+
+    loading_header = tab.loadings_table.horizontalHeaderItem(date_column)
+    assert loading_header is not None
+    assert loading_header.toolTip() == ""
+
+
+def test_unloading_tooltip_survives_fill_add_and_clear(qt_app):
+    """Подсказка возвращается после перерисовки таблицы, добавления и очистки."""
+    tab = RouteTab()
+    date_column = route_tab_module.COL_DATE
+
+    tab.fill_data(SAMPLE_DATA[RouteTab])
+    for row in range(tab.unloadings_table.rowCount()):
+        assert tab.unloadings_table.item(row, date_column).toolTip() == (
+            route_tab_module.UNLOADING_DATE_TOOLTIP
+        )
+
+    tab._on_add_unloading()
+    last = tab.unloadings_table.rowCount() - 1
+    assert tab.unloadings_table.item(last, date_column).toolTip() == (
+        route_tab_module.UNLOADING_DATE_TOOLTIP
+    )
+
+    tab.clear()
+    for row in range(tab.unloadings_table.rowCount()):
+        assert tab.unloadings_table.item(row, date_column).toolTip() == (
+            route_tab_module.UNLOADING_DATE_TOOLTIP
+        )
+
+
+def test_unloading_tooltip_does_not_change_data(qt_app):
+    """Подсказка не меняет ни значение даты, ни поведение вкладки."""
+    tab = RouteTab()
+
+    tab.fill_data(SAMPLE_DATA[RouteTab])
+
+    assert tab.get_data()["unloadings"] == SAMPLE_DATA[RouteTab]["unloadings"]
 
 
 # ─────────────────────────────────────────────────────────────

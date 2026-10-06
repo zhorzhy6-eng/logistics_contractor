@@ -26,22 +26,37 @@ ui/windows/arenda_ts/data.py::_build_lessee (имена полей вкладк�
 Кнопки «🔎» (только по нажатию, без автозаполнения при вводе):
   * у поля ИНН — реквизиты организации (DadataFillMixin);
   * у поля БИК — банк и корр. счёт (DadataBankMixin).
+
+Справочник организаций (ШАГ FIX-1-T2): кнопки «Из справочника» и «Сохранить
+в базу» стоят сверху вкладки, рядом с панелью распознавания. База ОБЩАЯ с
+«Экспедиторством» — Арендатор хранится в таблице customers (у заказчика
+та же таблица, save_organization(..., is_carrier=False)); отдельной таблицы
+для аренды нет. Раскладка полей и обработка дубля по ИНН —
+в ui/windows/arenda_ts/contacts.py.
 """
 
 import logging
 from typing import Any, Dict
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import QSize, pyqtSignal
 from PyQt5.QtWidgets import (
-    QComboBox, QScrollArea, QVBoxLayout, QWidget,
+    QComboBox, QFrame, QHBoxLayout, QMessageBox, QScrollArea, QVBoxLayout,
+    QWidget,
 )
 
 from core.dadata_client import bank_status_warning
 from ui import theme
+from ui.db_manager_dialog import (
+    OPEN_TAB_CUSTOMERS,
+    DbManagerDialog,
+)
+from ui.icons import action_icon
 from ui.tabs.base_tab import DadataBankMixin, DadataFillMixin
 from ui.widgets import (
     PasteableLineEdit, PasteableTextEdit, RecognitionPanel,
 )
+from ui.windows.arenda_ts import contacts as _contacts
+from ui.windows.arenda_ts.contacts import SaveResult
 
 logger = logging.getLogger("ui.windows.arenda_ts.tabs.lessee_tab")
 
@@ -89,13 +104,19 @@ class LesseeTab(DadataFillMixin, DadataBankMixin, QWidget):
     #: Название вкладки для сообщений и логов DaData
     DADATA_TAB_TITLE = "Арендатор"
 
+    #: Телефон стороны: поля формы у вкладки нет (в бланке аренды он есть),
+    #: значение приходит из справочника организаций и уходит в get_data().
+    phone = ""
+
     #: Текстовые поля вкладки, которые заполняются одним setText: ровно те
     #: ключи, которые читает сборка данных (_LESSEE_FIELDS в data.py).
     #: Адреса — отдельно: они QTextEdit и заполняются через setPlainText.
+    #: phone — не поле формы, а значение, которое приходит из справочника
+    #: организаций: оно уходит в сборку данных (телефон стороны в бланке есть).
     FIELDS = (
         "full_name", "short_name", "inn", "kpp", "ogrn",
         "account", "bik", "bank", "corr_account", "email", "edo",
-        "director_position", "director_name", "basis",
+        "director_position", "director_name", "basis", "phone",
     )
 
     #: Поля, которые заполняет DaData, → поля формы вкладки: слева имена из
@@ -132,6 +153,12 @@ class LesseeTab(DadataFillMixin, DadataBankMixin, QWidget):
         )
         self.recognition_panel.recognize_requested.connect(self._on_recognize_requested)
         layout.addWidget(self.recognition_panel)
+
+        # ── Справочник организаций (ШАГ FIX-1-T2) ──
+        # Кнопки стоят сверху, рядом с панелью распознавания: у вкладки три
+        # источника реквизитов (вручную, распознаванием и из базы), и видно
+        # их должно быть сразу. База общая с «Экспедиторством».
+        layout.addWidget(self._build_directory_panel())
 
         # ── Блок 1. Вид Арендатора ──
         type_group, type_layout = theme.section_box("Вид Арендатора")
@@ -374,6 +401,78 @@ class LesseeTab(DadataFillMixin, DadataBankMixin, QWidget):
             self.carrier_type.setCurrentIndex(index)
 
     # ─────────────────────────────────────────────────────────
+    # Справочник организаций (ШАГ FIX-1-T2)
+    # ─────────────────────────────────────────────────────────
+
+    def _build_directory_panel(self) -> QFrame:
+        """
+        Панель «Из справочника» / «Сохранить в базу» для этой вкладки.
+
+        Кнопки привязаны к вкладке, а не к «текущей стороне» окна: Арендатор
+        всегда читает и пишет таблицу customers, Арендодатель — carriers.
+        Поэтому роли не могут перепутаться, даже если открыты обе вкладки.
+        """
+        frame = QFrame()
+        frame.setObjectName("directoryBar")
+        panel = QHBoxLayout(frame)
+        panel.setContentsMargins(12, 8, 12, 8)
+        panel.setSpacing(8)
+
+        self.btn_load_organization = theme.secondary_button(
+            "Из справочника",
+            tooltip="Выбрать Арендатора из общего справочника организаций",
+        )
+        self.btn_load_organization.setIcon(action_icon("database.svg"))
+        self.btn_load_organization.setIconSize(QSize(18, 18))
+        # Слот — метод вкладки, без lambda: в connect она захватывалась бы
+        # замыканием (цикл ссылок Python ↔ Qt).
+        self.btn_load_organization.clicked.connect(self.load_from_directory)
+        panel.addWidget(self.btn_load_organization)
+
+        self.btn_save_organization = theme.secondary_button(
+            "Сохранить в базу",
+            tooltip="Сохранить реквизиты этой вкладки в общий справочник "
+                    "организаций (дубль по ИНН обновляется)",
+        )
+        self.btn_save_organization.setIcon(action_icon("save.svg"))
+        self.btn_save_organization.setIconSize(QSize(18, 18))
+        self.btn_save_organization.clicked.connect(self.on_save_clicked)
+        panel.addWidget(self.btn_save_organization)
+
+        panel.addStretch()
+        return frame
+
+    def load_from_directory(self) -> None:
+        """
+        «Из справочника»: выбор Арендатора в базе организаций.
+
+        Открывается тот же диалог справочника, что кнопка «База данных» в
+        «Экспедиторстве» (ui/db_manager_dialog.py), но в режиме выбора: видна
+        одна вкладка — заказчики (у Арендатора с ними общая таблица), запись
+        уходит в _fill_organization, а не в чужую форму.
+        """
+        dialog = DbManagerDialog(
+            self,
+            open_tab=OPEN_TAB_CUSTOMERS,
+            on_pick=self._fill_organization,
+        )
+        if dialog.exec_():
+            logger.info("Арендатор: запись выбрана в справочнике организаций")
+
+    def on_save_clicked(self) -> None:
+        """Нажатие «Сохранить в базу»: сохраняет и рассказывает об итоге."""
+        result = self.save_to_directory()
+        if result.ok:
+            QMessageBox.information(
+                self, "Справочник организаций", result.message("Арендатор")
+            )
+            return
+
+        QMessageBox.warning(
+            self, "Справочник организаций", result.message("Арендатор")
+        )
+
+    # ─────────────────────────────────────────────────────────
     # Данные вкладки
     # ─────────────────────────────────────────────────────────
 
@@ -437,7 +536,7 @@ class LesseeTab(DadataFillMixin, DadataBankMixin, QWidget):
         Адрес вкладки — это юридический адрес бланка (сборка переводит его в
         lessee.legal_address), счёт — bank_account, банк — bank_name.
         """
-        return {
+        data = {
             "carrier_type": self.carrier_type.currentText(),
             "full_name": self.full_name.text().strip(),
             "short_name": self.short_name.text().strip(),
@@ -456,8 +555,15 @@ class LesseeTab(DadataFillMixin, DadataBankMixin, QWidget):
             "director_name": self.director_name.text().strip(),
             "basis": self.basis.text().strip(),
         }
+        # Телефон приходит из справочника организаций (поля формы у вкладки
+        # нет). Ключ добавляется только заполненным: пустой телефон не должен
+        # появляться в данных вкладки.
+        phone = str(getattr(self, "phone", "") or "").strip()
+        if phone:
+            data["phone"] = phone
+        return data
 
-    def fill_data(self, data: Dict[str, Any]) -> None:
+    def fill_data(self, data: Dict[str, Any], replace: bool = False) -> None:
         """
         Заполняет реквизиты Арендатора.
 
@@ -465,9 +571,17 @@ class LesseeTab(DadataFillMixin, DadataBankMixin, QWidget):
         введённые вручную реквизиты не должны исчезать. Вид Арендатора
         принимается и как carrier_type, и как entity_type («ООО» / «ИП») —
         промпт отдаёт блок lessee целиком.
+
+        replace=True — полная замена формы (загрузка записи из справочника):
+        сначала форма очищается, поэтому незаполненные в записи поля
+        остаются пустыми, а не от прошлой организации (как в Expediting,
+        где _load_customer_from_db делает clear() перед fill_data).
         """
         if not data:
             return
+
+        if replace:
+            self.clear()
 
         self._apply_carrier_type(
             data.get("carrier_type") or data.get("entity_type")
@@ -476,6 +590,11 @@ class LesseeTab(DadataFillMixin, DadataBankMixin, QWidget):
         for field in self.FIELDS:
             value = str(data.get(field) or "").strip()
             if value:
+                # phone поля формы не имеет: значение живёт атрибутом вкладки
+                # и уходит в get_data (телефон стороны в бланке есть).
+                if field == "phone":
+                    setattr(self, "phone", value)
+                    continue
                 getattr(self, field).setText(value)
 
         # Юридический адрес распознавания лежит и в address, и в legal_address.
@@ -490,6 +609,35 @@ class LesseeTab(DadataFillMixin, DadataBankMixin, QWidget):
             self.actual_address.setPlainText(actual_address)
 
         logger.info("Разовая аренда: данные Арендатора заполнены")
+
+    def _fill_organization(self, record: Dict[str, Any]) -> None:
+        """
+        Заполняет форму записью из справочника организаций (ШАГ FIX-1-T2).
+
+        Запись приходит из общей базы («Экспедиторство» и аренда работают
+        с одними таблицами: customers у Арендатора, carriers у Арендодателя).
+        Раскладка имён полей — в ui/windows/arenda_ts/contacts.py, здесь
+        только замена формы: пустые поля записи обнуляют поле вкладки, иначе
+        на ней остались бы реквизиты предыдущей организации.
+        """
+        values = _contacts.organization_to_form(record)
+        if not values:
+            return
+
+        self.fill_data(values, replace=True)
+        logger.info("Арендатор: реквизиты загружены из справочника")
+
+    def save_to_directory(self) -> SaveResult:
+        """
+        «Сохранить в базу»: пишет реквизиты вкладки в общий справочник.
+
+        Роль этой вкладки — Арендатор, поэтому запись уходит в таблицу
+        customers: та же, что у заказчика в «Экспедиторстве». Дубль по ИНН
+        обновляется, а не создаётся заново.
+        """
+        return _contacts.save_organization_record(
+            self.get_data(), _contacts.ROLE_LESSEE
+        )
 
     def clear(self) -> None:
         """Очищает реквизиты и возвращает вид Арендатора к ООО."""
@@ -510,6 +658,8 @@ class LesseeTab(DadataFillMixin, DadataBankMixin, QWidget):
         self.director_position.clear()
         self.director_name.clear()
         self.basis.setText(BASIS_OOO)
+        # Телефон приходит только из справочника — очистка формы убирает и его.
+        setattr(self, "phone", "")
         self.recognition_panel.clear()
 
         logger.debug("Разовая аренда: поля Арендатора очищены")
@@ -527,4 +677,5 @@ __all__ = [
     "OGRN_MAX_LENGTH",
     "ACCOUNT_MAX_LENGTH",
     "BIK_LENGTH",
+    "SaveResult",
 ]

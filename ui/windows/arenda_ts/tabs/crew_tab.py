@@ -26,19 +26,36 @@ driver_license_issue_date, driver_registration_address, driver_phone —
 подразделение ФМС по коду подразделения — только по явному нажатию. Сам код
 для поиска нужен, поэтому в форме есть поле «Код подразделения»; в данные
 вкладки оно не попадает: в бланке его печатает строка «Кем выдан».
+
+Справочник водителей (ШАГ FIX-1-T2): кнопки «Из справочника» и «Сохранить
+в базу» стоят сверху вкладки, рядом с панелью распознавания. База ОБЩАЯ с
+«Экспедиторством» — таблица drivers (db/database.py); отдельной таблицы для
+аренды нет. Раскладка полей (паспорт и ВУ в справочнике лежат серией и
+номером, а здесь — одной строкой) и обработка дубля —
+в ui/windows/arenda_ts/contacts.py.
 """
 
 import logging
 from typing import Any, Dict
 
-from PyQt5.QtCore import QDate, pyqtSignal
-from PyQt5.QtWidgets import QDateEdit, QScrollArea, QVBoxLayout, QWidget
+from PyQt5.QtCore import QDate, QSize, pyqtSignal
+from PyQt5.QtWidgets import (
+    QDateEdit, QFrame, QHBoxLayout, QMessageBox, QScrollArea, QVBoxLayout,
+    QWidget,
+)
 
 from ui import theme
+from ui.db_manager_dialog import (
+    OPEN_TAB_DRIVERS,
+    DbManagerDialog,
+)
+from ui.icons import action_icon
 from ui.tabs.base_tab import DadataDriverMixin
 from ui.widgets import (
     PasteableDateEdit, PasteableLineEdit, PasteableTextEdit, RecognitionPanel,
 )
+from ui.windows.arenda_ts import contacts as _contacts
+from ui.windows.arenda_ts.contacts import SaveResult
 
 logger = logging.getLogger("ui.windows.arenda_ts.tabs.crew_tab")
 
@@ -108,6 +125,11 @@ class CrewTab(DadataDriverMixin, QWidget):
         )
         self.recognition_panel.recognize_requested.connect(self._on_recognize_requested)
         layout.addWidget(self.recognition_panel)
+
+        # ── Справочник водителей (ШАГ FIX-1-T2) ──
+        # Кнопки стоят сверху, рядом с панелью распознавания — единообразно
+        # с вкладками сторон. База общая с «Экспедиторством».
+        layout.addWidget(self._build_directory_panel())
 
         # ── Группа «Водитель» ──
         driver_group, driver_layout = theme.section_box("Водитель")
@@ -215,6 +237,76 @@ class CrewTab(DadataDriverMixin, QWidget):
         logger.debug("Разовая аренда CrewTab инициализирована")
 
     # ─────────────────────────────────────────────────────────
+    # Справочник водителей (ШАГ FIX-1-T2)
+    # ─────────────────────────────────────────────────────────
+
+    def _build_directory_panel(self) -> QFrame:
+        """
+        Панель «Из справочника» / «Сохранить в базу» вкладки «Экипаж».
+
+        Та же пара кнопок, что на вкладках сторон: у экипажа источник данных
+        тоже не один (вручную, распознаванием, из базы водителей).
+        """
+        frame = QFrame()
+        frame.setObjectName("directoryBar")
+        panel = QHBoxLayout(frame)
+        panel.setContentsMargins(12, 8, 12, 8)
+        panel.setSpacing(8)
+
+        self.btn_load_driver = theme.secondary_button(
+            "Из справочника",
+            tooltip="Выбрать водителя из общего справочника водителей",
+        )
+        self.btn_load_driver.setIcon(action_icon("database.svg"))
+        self.btn_load_driver.setIconSize(QSize(18, 18))
+        # Слот — метод вкладки, без lambda: в connect вкладка захватывалась бы
+        # замыканием (цикл ссылок Python ↔ Qt).
+        self.btn_load_driver.clicked.connect(self.load_from_directory)
+        panel.addWidget(self.btn_load_driver)
+
+        self.btn_save_driver = theme.secondary_button(
+            "Сохранить в базу",
+            tooltip="Сохранить данные экипажа в общий справочник водителей "
+                    "(дубль по водительскому удостоверению обновляется)",
+        )
+        self.btn_save_driver.setIcon(action_icon("save.svg"))
+        self.btn_save_driver.setIconSize(QSize(18, 18))
+        self.btn_save_driver.clicked.connect(self.on_save_clicked)
+        panel.addWidget(self.btn_save_driver)
+
+        panel.addStretch()
+        return frame
+
+    def load_from_directory(self) -> None:
+        """
+        «Из справочника»: выбор водителя в общей базе водителей.
+
+        Тот же диалог, что кнопка «База данных» в «Экспедиторстве»
+        (ui/db_manager_dialog.py), но в режиме выбора: видна одна вкладка —
+        водители, выбранная запись уходит в _fill_driver.
+        """
+        dialog = DbManagerDialog(
+            self,
+            open_tab=OPEN_TAB_DRIVERS,
+            on_pick=self._fill_driver,
+        )
+        if dialog.exec_():
+            logger.info("Экипаж: запись выбрана в справочнике водителей")
+
+    def on_save_clicked(self) -> None:
+        """Нажатие «Сохранить в базу»: сохраняет и рассказывает об итоге."""
+        result = self.save_to_directory()
+        if result.ok:
+            QMessageBox.information(
+                self, "Справочник водителей", result.message("Экипаж")
+            )
+            return
+
+        QMessageBox.warning(
+            self, "Справочник водителей", result.message("Экипаж")
+        )
+
+    # ─────────────────────────────────────────────────────────
     # Виджеты вкладки
     # ─────────────────────────────────────────────────────────
 
@@ -257,7 +349,7 @@ class CrewTab(DadataDriverMixin, QWidget):
             data[field] = getattr(self, field).date().toString("yyyy-MM-dd")
         return data
 
-    def fill_data(self, data: Dict[str, Any]) -> None:
+    def fill_data(self, data: Dict[str, Any], replace: bool = False) -> None:
         """
         Заполняет данные экипажа.
 
@@ -266,9 +358,16 @@ class CrewTab(DadataDriverMixin, QWidget):
         вкладки (driver_full_name), и ключи ContractData (full_name,
         birth_date, registration_address): распознавание отдаёт блок driver
         целиком (core/prompts/arenda_ts.py).
+
+        replace=True — полная замена формы (загрузка водителя из справочника):
+        сначала форма очищается, поэтому незаполненные в записи поля остаются
+        пустыми, а не от предыдущего водителя.
         """
         if not data:
             return
+
+        if replace:
+            self.clear()
 
         for field in self.FIELDS:
             value = self._text_value(data, field)
@@ -326,6 +425,40 @@ class CrewTab(DadataDriverMixin, QWidget):
         getattr(self, field).setText(" ".join(part for part in (series, number) if part))
         logger.debug("Разовая аренда: %s собран из серии и номера", document)
 
+    def _fill_driver(self, record: Dict[str, Any]) -> None:
+        """
+        Заполняет форму записью из справочника водителей (ШАГ FIX-1-T2).
+
+        Запись приходит из общей базы («Экспедиторство» и аренда работают
+        с одной таблицей drivers). Паспорт и ВУ справочник хранит серией и
+        номером, а вкладка — одной строкой: склейка и раскладка полей живут
+        в ui/windows/arenda_ts/contacts.py. Форма заменяется целиком, иначе
+        на ней остались бы данные предыдущего водителя.
+        """
+        values = _contacts.driver_to_form(record)
+        if not values:
+            return
+
+        self.fill_data(values, replace=True)
+
+        # Код подразделения в данные вкладки не входит, но кнопке «🔎» он
+        # нужен: из справочника его взять можно — он там есть.
+        code = str(record.get("passport_code") or "").strip()
+        if code:
+            self.passport_code.setText(code)
+
+        logger.info("Экипаж: данные водителя загружены из справочника")
+
+    def save_to_directory(self) -> SaveResult:
+        """
+        «Сохранить в базу»: пишет данные вкладки в общий справочник водителей.
+
+        Дубль ищется по водительскому удостоверению, затем по паспорту, затем
+        по ФИО и дате рождения (см. contacts.py) — найденная запись
+        обновляется, а не создаётся заново.
+        """
+        return _contacts.save_driver_record(self.get_data())
+
     def clear(self) -> None:
         """Очищает поля экипажа и возвращает даты к значениям по умолчанию."""
         self.driver_full_name.clear()
@@ -350,4 +483,5 @@ __all__ = [
     "NoWheelDateEdit",
     "DEFAULT_BIRTH_YEARS_AGO",
     "DATE_FORMAT",
+    "SaveResult",
 ]

@@ -19,6 +19,12 @@
 ui/windows/arenda_ts/data.py::_build_route. Точка — словарь
 {name, address, date, time_from, time_to} у погрузки и
 {name, address, date} у выгрузки; пустые строки таблиц в данные не попадают.
+
+Колонка «Дата» таблицы точек выгрузки в договор не идёт: п. 3.3.2 бланка
+печатает планируемую дату завершения рейса — отдельное поле вкладки «ТС»
+(planned_completion_date). Колонка остаётся справочной, и об этом
+пользователю говорит подсказка ячейки (UNLOADING_DATE_TOOLTIP, шаг
+FIX-1-T2): значение и поведение вкладки не меняются.
 """
 
 import logging
@@ -54,6 +60,16 @@ COL_TIME_TO = 4
 #: Заголовки колонок: у погрузки есть время подачи ТС, у выгрузки — нет.
 LOADING_HEADERS = ["Наименование", "Адрес", "Дата", "Время с", "Время по"]
 UNLOADING_HEADERS = ["Наименование", "Адрес", "Дата"]
+
+#: Пояснение к колонке «Дата» таблицы точек ВЫГРУЗКИ (шаг FIX-1-T2).
+#: В договор эта колонка не идёт: п. 3.3.2 бланка печатает планируемую дату
+#: завершения рейса — отдельное поле вкладки «ТС» (planned_completion_date).
+#: Колонка остаётся справочной: по ней видно, к какой точке относится дата
+#: завершения, а поведение вкладки не меняется.
+UNLOADING_DATE_TOOLTIP = (
+    "Справочно. В договор идёт планируемая дата завершения рейса "
+    "(вкладка ТС)"
+)
 
 
 class RouteTab(TabMixin, QWidget):
@@ -164,7 +180,9 @@ class RouteTab(TabMixin, QWidget):
         Пустая таблица точек маршрута с одной строкой.
 
         Наименование и адрес тянутся по ширине, дата и время — по содержимому:
-        в них всегда 10 и 5 символов.
+        в них всегда 10 и 5 символов. У таблицы точек выгрузки колонка «Дата»
+        получает пояснение (UNLOADING_DATE_TOOLTIP): в договор эта колонка
+        не идёт, а молчащее поле выглядело бы ошибкой.
         """
         table = QTableWidget(MIN_ROWS, len(headers))
         table.setHorizontalHeaderLabels(headers)
@@ -177,15 +195,40 @@ class RouteTab(TabMixin, QWidget):
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setMinimumHeight(90)
         table.setMaximumHeight(180 if width_for_time else 160)
+        # Колонка «Дата» есть и у погрузки, и у выгрузки, но пояснение нужно
+        # только выгрузке: дата погрузки — это плановая дата подачи ТС, она
+        # печатается в бланке (п. 3.2).
+        tooltip = "" if width_for_time else UNLOADING_DATE_TOOLTIP
+        if tooltip:
+            # Подсказка стоит и на заголовке: пользователь ведёт мышь к шапке
+            # колонки, а не к пустой ячейке.
+            header_item = table.horizontalHeaderItem(COL_DATE)
+            if header_item is not None:
+                header_item.setToolTip(tooltip)
         for row in range(MIN_ROWS):
-            self._init_row(table, len(headers), row)
+            self._init_row(table, len(headers), row, date_tooltip=tooltip)
         return table
 
     @staticmethod
-    def _init_row(table: QTableWidget, columns: int, row: int) -> None:
-        """Пустая строка точки маршрута."""
+    def _init_row(
+        table: QTableWidget,
+        columns: int,
+        row: int,
+        *,
+        date_tooltip: str = "",
+    ) -> None:
+        """
+        Пустая строка точки маршрута.
+
+        date_tooltip — пояснение к ячейке «Дата» (у выгрузки — «справочно»);
+        пустая строка оставляет ячейку без подсказки.
+        """
         for column in range(columns):
-            table.setItem(row, column, QTableWidgetItem(""))
+            tooltip = date_tooltip if column == COL_DATE else ""
+            item = QTableWidgetItem("")
+            if tooltip:
+                item.setToolTip(tooltip)
+            table.setItem(row, column, item)
 
     @staticmethod
     def _cell_text(table: QTableWidget, row: int, column: int) -> str:
@@ -195,6 +238,17 @@ class RouteTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
     # Строки таблиц
     # ─────────────────────────────────────────────────────────
+
+    def _date_tooltip_for(self, table: QTableWidget) -> str:
+        """
+        Пояснение к колонке «Дата» для конкретной таблицы точек.
+
+        У выгрузки дата в договор не идёт (её печатает п. 3.3.2 из вкладки
+        «ТС»), поэтому ячейка получает UNLOADING_DATE_TOOLTIP; у погрузки
+        дата — плановая дата подачи ТС, она печатается в бланке (п. 3.2),
+        и подсказка там не нужна.
+        """
+        return UNLOADING_DATE_TOOLTIP if table is self.unloadings_table else ""
 
     def _on_add_loading(self) -> None:
         """Добавляет строку погрузки; сверх 10 не пускает."""
@@ -227,7 +281,10 @@ class RouteTab(TabMixin, QWidget):
             return
 
         table.insertRow(row_count)
-        self._init_row(table, table.columnCount(), row_count)
+        self._init_row(
+            table, table.columnCount(), row_count,
+            date_tooltip=self._date_tooltip_for(table),
+        )
         logger.debug("Разовая аренда: добавлена строка (%s)", title)
 
     def _remove_point_row(self, table: QTableWidget, title: str) -> None:
@@ -351,12 +408,13 @@ class RouteTab(TabMixin, QWidget):
             points = points[:MAX_POINTS]
 
         columns = table.columnCount()
+        tooltip = self._date_tooltip_for(table)
         table.blockSignals(True)
         try:
             table.setRowCount(0)
             table.setRowCount(len(points))
             for row, point in enumerate(points):
-                self._init_row(table, columns, row)
+                self._init_row(table, columns, row, date_tooltip=tooltip)
                 table.setItem(
                     row, COL_NAME, QTableWidgetItem(str(point.get("name") or ""))
                 )
@@ -366,6 +424,9 @@ class RouteTab(TabMixin, QWidget):
                 table.setItem(
                     row, COL_DATE, QTableWidgetItem(self._date_cell(point.get("date")))
                 )
+                if tooltip:
+                    # Ячейка пересоздана — пояснение к колонке «Дата» возвращаем.
+                    table.item(row, COL_DATE).setToolTip(tooltip)
                 if with_time:
                     table.setItem(
                         row, COL_TIME_FROM,
@@ -397,12 +458,13 @@ class RouteTab(TabMixin, QWidget):
 
         for table in (self.loadings_table, self.unloadings_table):
             columns = table.columnCount()
+            tooltip = self._date_tooltip_for(table)
             table.blockSignals(True)
             try:
                 table.setRowCount(0)
                 table.setRowCount(MIN_ROWS)
                 for row in range(MIN_ROWS):
-                    self._init_row(table, columns, row)
+                    self._init_row(table, columns, row, date_tooltip=tooltip)
                 table.clearSelection()
             finally:
                 table.blockSignals(False)
@@ -418,4 +480,5 @@ __all__ = [
     "MIN_ROWS",
     "LOADING_HEADERS",
     "UNLOADING_HEADERS",
+    "UNLOADING_DATE_TOOLTIP",
 ]

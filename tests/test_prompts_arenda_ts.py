@@ -64,9 +64,17 @@ LESSEE_KEYS = {
 #: и плейсхолдера КПП у него нет).
 LESSOR_EXTRA_KEYS = {"entity_type", "kpp"}
 
-#: Ключи стоимости в блоке contract: суммы, ставка НДС и срок оплаты
-#: в банковских днях (п. 4.5, шаг FIX-1-T).
+#: Ключи стоимости в блоке contract: суммы, ставка НДС, срок оплаты
+#: в банковских днях (п. 4.5, шаг FIX-1-T) и плановая дата завершения рейса
+#: (п. 3.3.2, шаг FIX-1-T2).
 SUM_KEYS = ("sum_wo_vat", "sum_vat", "sum_total", "vat_rate", "payment_days")
+
+#: Полный набор ключей блока contract: реквизиты договора, суммы, срок оплаты
+#: и плановая дата завершения рейса.
+CONTRACT_KEYS = (
+    "number", "date", "sum_wo_vat", "sum_vat", "sum_total", "vat_rate",
+    "payment_days", "planned_completion_date",
+)
 
 #: Блоки и поля чужих схем (перевозка, заявка), которых здесь быть не должно.
 FOREIGN_KEYS = (
@@ -292,10 +300,11 @@ def test_prompt_splits_loading_window(prompt):
 def test_prompt_binds_unloading_date_to_last_point(prompt):
     """Плановая дата завершения относится к ПОСЛЕДНЕЙ точке выгрузки."""
     assert "Плановая дата завершения" in prompt
-    assert "ПОСЛЕДНЕЙ точке выгрузки" in prompt
+    assert "ПОСЛЕДНЕЙ точки" in prompt
     assert 'date = ""' in prompt, (
         "промпт должен запрещать размножение даты по всем точкам"
     )
+    assert "точек выгрузки в документе нет, верни пустой массив []" in prompt
 
 
 def test_prompt_skips_section_headings(prompt):
@@ -525,20 +534,16 @@ def test_schema_driver_has_key(schema):
     }
 
 
-@pytest.mark.parametrize("key", [
-    "number", "date", "sum_wo_vat", "sum_vat", "sum_total", "vat_rate",
-    "payment_days",
-])
+@pytest.mark.parametrize("key", CONTRACT_KEYS)
 def test_schema_contract_has_key(schema, key):
-    """Блок contract содержит реквизиты договора, суммы и срок оплаты."""
+    """Блок contract содержит реквизиты договора, суммы, срок оплаты
+    и плановую дату завершения рейса."""
     assert key in schema["contract"], f"в contract нет ключа {key}"
 
 
 def test_schema_contract_has_no_extra_keys(schema):
     """В contract нет ничего лишнего сверх оговорённого набора."""
-    expected = {"number", "date", "sum_wo_vat", "sum_vat", "sum_total",
-                "vat_rate", "payment_days"}
-    assert set(schema["contract"]) == expected
+    assert set(schema["contract"]) == set(CONTRACT_KEYS)
 
 
 def test_prompt_reads_payment_days_from_clause_4_5(prompt):
@@ -570,3 +575,40 @@ def test_schema_defaults_are_typed(schema):
     assert not isinstance(contract["payment_days"], bool)
     assert schema["lessee"]["entity_type"] == "ООО"
     assert schema["route"] == ""
+
+
+# ─────────────────────────────────────────────────────────────
+# Плановая дата завершения рейса (п. 3.3.2, шаг FIX-1-T2)
+# ─────────────────────────────────────────────────────────────
+
+def test_schema_has_planned_completion_date(schema):
+    """В схеме есть ключ planned_completion_date — строкой и пустым."""
+    assert "planned_completion_date" in schema["contract"]
+    assert schema["contract"]["planned_completion_date"] == ""
+
+
+def test_prompt_extracts_planned_completion_date(prompt):
+    """Плановая дата завершения рейса извлекается из строки 3.3.2."""
+    assert "planned_completion_date" in prompt
+    assert "3.3.2. Плановая дата завершения" in prompt
+    assert "ПЛАНОВАЯ ДАТА ЗАВЕРШЕНИЯ РЕЙСА" in prompt
+
+
+def test_prompt_keeps_planned_completion_date_in_document_format(prompt):
+    """Формат даты — как у остальных дат промпта (ДД.ММ.ГГГГ)."""
+    section = prompt[prompt.index("ПЛАНОВАЯ ДАТА ЗАВЕРШЕНИЯ РЕЙСА"):]
+    section = section[:section.index("НОМЕР И ДАТА ДОГОВОРА")]
+    assert "planned_completion_date" in section
+    assert "в формате документа (ДД.ММ.ГГГГ)" in section
+
+
+def test_prompt_does_not_derive_planned_date_from_other_dates(prompt):
+    """Дата берётся из документа, а не выводится из срока аренды."""
+    assert "НЕ дата" in prompt
+    assert "НЕ срок аренды из п. 2.5" in prompt
+    assert "ничего не выводи из других дат" in prompt
+
+
+def test_prompt_planned_date_missing_gives_empty_string(prompt):
+    """Даты в документе нет → пустая строка, а не выдуманное значение."""
+    assert 'если дата в документе не указана — пустая строка ""' in prompt
