@@ -10,6 +10,28 @@
 Двойной клик по строке = загрузить запись в форму и закрыть диалог.
 
 Сортировка: включена по клику на заголовок, при загрузке — по алфавиту.
+
+Два режима работы
+-----------------
+Режим выбирается аргументом `open_tab` (шаг FIX-1-T2):
+
+  * без него — прежний менеджер базы (кнопка «База данных» в
+    «Экспедиторстве»): видны все три вкладки, запись уходит в форму
+    по «📂 Загрузить в форму» или двойному клику и вызывается один из
+    обработчиков on_load_driver / on_load_customer / on_load_carrier;
+  * с ним — режим ВЫБОРА записи для конкретной вкладки: открывается одна
+    вкладка (OPEN_TAB_*), кнопки создания, правки и удаления скрыты —
+    диалог не меняет справочник, а только отдаёт выбранную запись в
+    on_pick(record). Так справочник переиспользуют вкладки аренды, не
+    обзаводясь собственной базой и не путая роли сторон.
+
+Роли аренды и таблицы справочника (см. db/database.py)
+-----------------------------------------------------
+  * Арендатор — НАША сторона договора аренды, её реквизиты лежат там же,
+    где реквизиты заказчика: таблица customers (save_organization(...,
+    is_carrier=False));
+  * Арендодатель — вторая сторона, таблица carriers (is_carrier=True).
+Отдельной таблицы для аренды нет и не заводится.
 """
 
 import logging
@@ -46,6 +68,20 @@ from db.database import (
 from ui import theme
 
 logger = logging.getLogger("ui.db_manager_dialog")
+
+#: Значения аргумента open_tab: какую вкладку открыть в режиме выбора.
+#: Совпадают с индексами вкладок QTabWidget в __init__ (перевозчики, водители,
+#: заказчики) — по ним же выбирается таблица и обработчик.
+OPEN_TAB_CARRIERS = "carriers"
+OPEN_TAB_DRIVERS = "drivers"
+OPEN_TAB_CUSTOMERS = "customers"
+
+#: Вкладка QTabWidget по имени режима выбора.
+OPEN_TAB_INDEX = {
+    OPEN_TAB_CARRIERS: 0,
+    OPEN_TAB_DRIVERS: 1,
+    OPEN_TAB_CUSTOMERS: 2,
+}
 
 
 # ═════════════════════════════════════════════════════════════
@@ -365,7 +401,7 @@ class EditDriverDialog(QDialog):
 # ═════════════════════════════════════════════════════════════
 
 class DbManagerDialog(QDialog):
-    """Диалог управления базой данных."""
+    """Диалог управления базой данных (менеджер записей или режим выбора)."""
 
     # Сколько строк максимум показывать при поиске
     # (защита от вывода тысяч строк в таблицу)
@@ -377,29 +413,60 @@ class DbManagerDialog(QDialog):
         on_load_driver: Optional[Callable] = None,
         on_load_customer: Optional[Callable] = None,
         on_load_carrier: Optional[Callable] = None,
+        *,
+        open_tab: str = "",
+        show_deleted: bool = False,
+        on_pick: Optional[Callable] = None,
     ):
+        """
+        :param open_tab: "" — прежний менеджер базы (три вкладки, правка и
+            удаление записей); "carriers" / "drivers" / "customers" — режим
+            выбора записи: одна вкладка, кнопки правки скрыты, выбранная
+            запись уходит в on_pick(record).
+        :param show_deleted: показывать ли мягко удалённые записи. В режиме
+            выбора по умолчанию скрыты: выбирать убранное из справочника
+            незачем (переключатель на вкладке остаётся доступен).
+        :param on_pick: обработчик выбранной записи в режиме выбора.
+        """
         super().__init__(parent)
+
+        #: Режим выбора записи ("" — менеджер базы, как раньше).
+        self.picker_tab = open_tab if open_tab in OPEN_TAB_INDEX else ""
+        self.on_pick = on_pick
 
         self.on_load_driver = on_load_driver
         self.on_load_customer = on_load_customer
         self.on_load_carrier = on_load_carrier
 
-        self.setWindowTitle("🗄 Управление базой данных")
+        self.setWindowTitle(
+            "🗄 Управление базой данных" if not self.picker_tab
+            else "🗄 Выбор записи из справочника"
+        )
         self.setMinimumSize(1100, 650)
 
         layout = QVBoxLayout(self)
 
-        layout.addWidget(theme.page_title(
-            "Управление сохранёнными записями",
-            "💡 Двойной клик по строке — загрузить запись в форму\n"
-            "💡 Клик по заголовку столбца — сортировка\n"
-            "💡 «➕ Добавить» создаёт новую запись вручную\n"
-            "💡 Удаление мягкое: запись скрывается из справочника и её можно "
-            "вернуть кнопкой «♻ Восстановить»",
-        ))
+        if self.picker_tab:
+            layout.addWidget(theme.page_title(
+                "Выбор записи из справочника",
+                "💡 Двойной клик по строке — выбрать запись и заполнить вкладку\n"
+                "💡 Клик по заголовку столбца — сортировка\n"
+                "💡 Справочник общий: то, что сохранено здесь, видно и в других "
+                "окнах программы",
+            ))
+        else:
+            layout.addWidget(theme.page_title(
+                "Управление сохранёнными записями",
+                "💡 Двойной клик по строке — загрузить запись в форму\n"
+                "💡 Клик по заголовку столбца — сортировка\n"
+                "💡 «➕ Добавить» создаёт новую запись вручную\n"
+                "💡 Удаление мягкое: запись скрывается из справочника и её можно "
+                "вернуть кнопкой «♻ Восстановить»",
+            ))
 
         # ── Показ мягко удалённых записей (вариант В) ──
         self.chk_deleted = QCheckBox("Показывать удалённые")
+        self.chk_deleted.setChecked(bool(show_deleted))
         self.chk_deleted.setToolTip(
             "Показать записи, убранные из справочника. Их можно восстановить."
         )
@@ -416,6 +483,15 @@ class DbManagerDialog(QDialog):
 
         self.customers_tab = self._create_org_tab(is_carrier=False)
         self.tabs.addTab(self.customers_tab, "🏢 Заказчики")
+
+        if self.picker_tab:
+            # Оставляем одну вкладку: выбор идёт по нужной роли, и спутать
+            # перевозчика с заказчиком (а в аренде — арендодателя с
+            # арендатором) нельзя.
+            for name in (OPEN_TAB_CARRIERS, OPEN_TAB_DRIVERS, OPEN_TAB_CUSTOMERS):
+                if name != self.picker_tab:
+                    self.tabs.setTabVisible(OPEN_TAB_INDEX[name], False)
+            self.tabs.setCurrentIndex(OPEN_TAB_INDEX[self.picker_tab])
 
         layout.addWidget(self.tabs)
 
@@ -446,7 +522,10 @@ class DbManagerDialog(QDialog):
 
         self._load_all()
 
-        logger.debug("DbManagerDialog инициализирован")
+        logger.debug(
+            f"DbManagerDialog инициализирован (режим выбора: "
+            f"{self.picker_tab or 'нет'})"
+        )
 
     # ─────────────────────────────────────────────────────────
     # Вкладки
@@ -493,6 +572,10 @@ class DbManagerDialog(QDialog):
         # ── Двойной клик = загрузить в форму ──
         table.doubleClicked.connect(lambda: self._on_load_org(is_carrier))
 
+        #: Роль таблицы: по этому признаку выбирается таблица-источник и
+        #: обработчик записи (в аренде — арендатор / арендодатель).
+        table.setProperty("is_carrier", is_carrier)
+
         if is_carrier:
             self.carriers_table = table
         else:
@@ -534,6 +617,13 @@ class DbManagerDialog(QDialog):
 
         button_layout.addStretch()
         layout.addLayout(button_layout)
+
+        # В режиме выбора справочник только читают: кнопки, которые его
+        # меняют, прячем — оставляем «Загрузить в форму».
+        if self.picker_tab:
+            self._apply_picker_mode(
+                (btn_add, btn_load, btn_edit, btn_delete, btn_restore)
+            )
 
         search_input.textChanged.connect(lambda text, c=is_carrier: self._schedule_org_filter(c, text))
         btn_reset.clicked.connect(lambda: search_input.clear())
@@ -615,10 +705,33 @@ class DbManagerDialog(QDialog):
         button_layout.addStretch()
         layout.addLayout(button_layout)
 
+        if self.picker_tab:
+            self._apply_picker_mode(
+                (btn_add, btn_load, btn_edit, btn_delete, btn_restore)
+            )
+
         search_input.textChanged.connect(self._schedule_driver_filter)
         btn_reset.clicked.connect(lambda: search_input.clear())
 
         return widget
+
+    def _apply_picker_mode(self, buttons: tuple) -> None:
+        """
+        Настраивает кнопки вкладки для режима выбора записи.
+
+        Справочник в этом режиме только читают: «Добавить», «Редактировать»,
+        «Удалить» и «Восстановить» скрываются, а кнопка загрузки называется
+        «Выбрать» — по ней видно, что запись уйдёт в форму, а не откроется
+        здесь. Нажатие на неё по-прежнему идёт в _on_load_org /
+        _on_load_driver: логика выбора одна и та же.
+        """
+        add_btn, load_btn, edit_btn, delete_btn, restore_btn = buttons
+        add_btn.setVisible(False)
+        edit_btn.setVisible(False)
+        delete_btn.setVisible(False)
+        restore_btn.setVisible(False)
+        load_btn.setText("📂 Выбрать")
+        load_btn.setToolTip("Заполнить вкладку выбранной записью")
 
     # ─────────────────────────────────────────────────────────
     # Загрузка данных
@@ -658,7 +771,7 @@ class DbManagerDialog(QDialog):
             logger.error(f"Ошибка загрузки организаций: {e}")
             orgs = []
 
-        table = self.carriers_table if is_carrier else self.customers_table
+        table = self._org_table(is_carrier)
         self._fill_org_table(table, orgs)
         logger.info(f"Загружено организаций: {len(orgs)} (is_carrier={is_carrier})")
 
@@ -764,7 +877,7 @@ class DbManagerDialog(QDialog):
             logger.error(f"Ошибка поиска организаций: {e}")
             orgs = []
 
-        table = self.carriers_table if is_carrier else self.customers_table
+        table = self._org_table(is_carrier)
         self._fill_org_table(table, orgs)
         logger.info(f"Поиск организаций: запрос {len(text)} симв., найдено {len(orgs)}")
 
@@ -804,9 +917,55 @@ class DbManagerDialog(QDialog):
     # Действия
     # ─────────────────────────────────────────────────────────
 
+    def _org_table(self, is_carrier: bool) -> QTableWidget:
+        """
+        Таблица организаций нужной роли.
+
+        Основной путь — именованные атрибуты вкладок (carriers_table /
+        customers_table): они создаются в __init__ и всегда соответствуют
+        своей роли. Признак is_carrier на таблице — запасной вариант и метка
+        для тестов: у QVariant пустое значение и False неразличимы, поэтому
+        сравнение идёт по exact-значению, а не по приведению к bool.
+        """
+        attribute = "carriers_table" if is_carrier else "customers_table"
+        table = getattr(self, attribute, None)
+        if table is not None:
+            return table
+
+        for candidate in self.findChildren(QTableWidget):
+            if candidate.property("is_carrier") is is_carrier:
+                return candidate
+
+        logger.error(f"Таблица организаций не найдена (is_carrier={is_carrier})")
+        return None
+
+    def _picker_load(self, is_carrier: bool, record: Dict[str, Any]) -> bool:
+        """
+        Отдаёт выбранную запись в режиме выбора (on_pick).
+
+        Обработчик записи один: вкладка, открывшая диалог, сама знает, куда
+        её положить. Поэтому роль (is_carrier) здесь только в логе — она
+        говорит, из какой таблицы пришла запись.
+
+        :return: True — запись передана; False — диалог работает менеджером
+            базы и обработчика выбора у него нет.
+        """
+        if not self.picker_tab:
+            return False
+        if self.on_pick is None:
+            logger.warning("Режим выбора открыт без обработчика записи")
+            return False
+
+        logger.info(
+            f"Выбор записи из справочника: таблица "
+            f"{'carriers' if is_carrier else 'customers'}"
+        )
+        self.on_pick(record)
+        return True
+
     def _on_load_org(self, is_carrier: bool) -> None:
-        table = self.carriers_table if is_carrier else self.customers_table
-        row = table.currentRow()
+        table = self._org_table(is_carrier)
+        row = -1 if table is None else table.currentRow()
 
         if row < 0:
             QMessageBox.warning(self, "Загрузка", "Выберите запись из списка.")
@@ -820,6 +979,12 @@ class DbManagerDialog(QDialog):
             return
 
         try:
+            # Режим выбора: запись уходит во вкладку, которая открыла диалог
+            # (в аренде — «Арендатор» или «Арендодатель»).
+            if self._picker_load(is_carrier, org):
+                self.accept()
+                return
+
             if is_carrier and self.on_load_carrier:
                 self.on_load_carrier(org)
             elif not is_carrier and self.on_load_customer:
@@ -865,6 +1030,10 @@ class DbManagerDialog(QDialog):
                 except Exception as e:
                     logger.warning(f"Не удалось подгрузить ТС водителя: {e}")
 
+            if self._picker_load(False, driver):
+                self.accept()
+                return
+
             if self.on_load_driver:
                 self.on_load_driver(driver)
             self.accept()
@@ -873,7 +1042,7 @@ class DbManagerDialog(QDialog):
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить запись:\n\n{e}")
 
     def _on_edit_org(self, is_carrier: bool) -> None:
-        table = self.carriers_table if is_carrier else self.customers_table
+        table = self._org_table(is_carrier)
         row = table.currentRow()
 
         if row < 0:
@@ -1000,7 +1169,7 @@ class DbManagerDialog(QDialog):
             )
 
     def _on_delete_org(self, is_carrier: bool) -> None:
-        table = self.carriers_table if is_carrier else self.customers_table
+        table = self._org_table(is_carrier)
         row = table.currentRow()
 
         if row < 0:
@@ -1048,7 +1217,7 @@ class DbManagerDialog(QDialog):
 
     def _on_restore_org(self, is_carrier: bool) -> None:
         """Возвращает мягко удалённую организацию в справочник."""
-        table = self.carriers_table if is_carrier else self.customers_table
+        table = self._org_table(is_carrier)
         row = table.currentRow()
 
         if row < 0:
