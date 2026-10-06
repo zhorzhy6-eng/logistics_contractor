@@ -38,12 +38,15 @@ SCHEMA_HEADING = "СХЕМА ОТВЕТА"
 
 #: Блоки верхнего уровня схемы ответа (блока "carrier" среди них нет).
 SCHEMA_BLOCKS = (
-    "customer", "shippers", "consignees", "vehicles",
+    "customer", "shipper_name", "loading_addresses", "consignees", "vehicles",
     "tractor", "trailer", "driver", "contract",
 )
 
 #: Ключи стоимости в блоке contract.
 SUM_KEYS = ("sum_wo_vat", "sum_vat", "sum_total", "vat_rate")
+
+#: Маркер, на место которого GigaChatClient подставляет справочник салонов.
+SALONS_MARKER = "{{SALONS_DIRECTORY}}"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -119,9 +122,15 @@ def test_prompt_mentions_key_blocks(prompt, keyword):
     assert keyword in prompt.lower()
 
 
-@pytest.mark.parametrize("keyword", ["Грузоотправитель", "Грузополучатель"])
+@pytest.mark.parametrize("keyword", ["ГРУЗООТПРАВИТЕЛЬ", "Грузополучатель"])
 def test_prompt_names_document_labels(prompt, keyword):
-    """В промпте есть ярлыки строк документа, по которым идёт извлечение."""
+    """
+    В промпте есть ярлыки строк документа, по которым идёт извлечение.
+
+    Грузоотправитель назван заголовком правила («ГРУЗООТПРАВИТЕЛЬ (один)»):
+    строка «Грузоотправитель:» в бланке одна, и значение у неё непусто
+    по построению (FIX-2.2).
+    """
     assert keyword in prompt
 
 
@@ -146,7 +155,7 @@ def test_prompt_has_no_carrier_names(prompt, fragment):
 
 @pytest.mark.parametrize("fragment", [
     "Соин Сергей", "Скрынник Иван", "JETOUR", "DASHING", "X70PLUS",
-    "EC3DLUFD9TC017082", "EC3DCUFD3TC018180", "ВОТУР МОТОР РУС",
+    "EC3DLUFD9TC017082", "EC3DCUFD3TC018180",
     "АВТОРИТЭЙЛ", "НОВОКАР", "Гао Фанфан", "221 099,18", "135 833,00",
 ])
 def test_prompt_has_no_sample_data(prompt, fragment):
@@ -158,11 +167,36 @@ def test_prompt_has_no_sample_data(prompt, fragment):
 # Грузоотправители, грузополучатели, автомобили
 # ─────────────────────────────────────────────────────────────
 
-def test_prompt_allows_multiple_shippers(prompt):
-    """Грузоотправителей может быть несколько — до 10."""
-    assert "shippers" in prompt
-    assert "от 1" in prompt
-    assert "до 10" in prompt
+def test_prompt_has_single_shipper(prompt, schema):
+    """Грузоотправитель ОДИН: его имя идёт в shipper_name, а не в массив."""
+    assert "shipper_name" in prompt
+    assert "ГРУЗООТПРАВИТЕЛЬ (один)" in prompt
+    assert "shippers" not in schema, "в схеме остался старый массив shippers"
+    assert "shippers" not in prompt.split(SCHEMA_HEADING)[0], (
+        "в правилах извлечения остался старый блок shippers"
+    )
+
+
+def test_prompt_names_default_shipper(prompt):
+    """По умолчанию грузоотправитель — ООО «ВОТУР МОТОР РУС» (FIX-2.2)."""
+    assert "ООО «ВОТУР МОТОР РУС»" in prompt
+    assert "если в тексте указан другой" in prompt
+
+
+def test_prompt_loading_addresses_are_plain_strings(prompt):
+    """Адреса погрузки — массив строк, без наименований."""
+    assert "loading_addresses" in prompt
+    assert "АДРЕСА ПОГРУЗКИ" in prompt
+    assert "только адрес, без наименования" in prompt
+
+
+def test_prompt_has_salons_directory_section(prompt):
+    """Есть секция сверки со справочником салонов и маркер подстановки."""
+    assert SALONS_MARKER in prompt
+    assert "СПРАВОЧНИК САЛОНОВ" in prompt
+    assert "КОД | Юр. Лицо | Город | Адрес доставки" in prompt
+    assert "Юр. Лицо" in prompt and "Адрес доставки автомобилей" in prompt
+    assert "JMR-Axxx" in prompt, "код салона — признак совпадения"
 
 
 def test_prompt_allows_multiple_consignees(prompt):
@@ -297,9 +331,15 @@ def test_schema_customer_is_ooo_dzhisisi(schema):
 
 def test_schema_lists_are_arrays_of_objects(schema):
     """Списки сторон и авто — массивы объектов с нужными полями."""
-    assert schema["shippers"] == [{"name": "", "address": ""}]
+    assert schema["shipper_name"] == ""
+    assert schema["loading_addresses"] == [""]
     assert schema["consignees"] == [{"name": "", "address": ""}]
     assert schema["vehicles"] == [{"brand_model": "", "vin": ""}]
+
+
+def test_schema_has_no_shippers_array(schema):
+    """Массива shippers в схеме больше нет: грузоотправитель один."""
+    assert "shippers" not in schema
 
 
 def test_schema_tractor_trailer_driver(schema):

@@ -139,15 +139,24 @@ def _vehicle(number: int) -> dict:
     }
 
 
-def _point(kind: str, number: int) -> dict:
-    """Точка маршрута: грузоотправитель (1. ПОГРУЗКА) или грузополучатель."""
+def _point(kind: str, number: int, name: str = None) -> dict:
+    """
+    Точка маршрута: адрес погрузки (1. ПОГРУЗКА) или грузополучатель.
+
+    name можно подменить: в заявке грузоотправитель ОДИН, поэтому у всех
+    адресов погрузки имя одно и то же (см. _contract).
+    """
     label = "Грузоотправитель" if kind == "shipper" else "Грузополучатель"
     return {
-        "name": f"ООО «{label} {number}»",
+        "name": f"ООО «{label} {number}»" if name is None else name,
         "address": f"г. Тестоград, ул. Складская, д. {number}",
         "date": "2026-09-26" if kind == "shipper" else "2026-10-01",
         "time_window": "08:00-20:00",
     }
+
+
+#: Имя единственного грузоотправителя заявки (раздел 1).
+SHIPPER_NAME = "ООО «Грузоотправитель 1»"
 
 
 def _contract(carrier_type: str, price_without_vat: float, vat_rate_num: int,
@@ -161,6 +170,11 @@ def _contract(carrier_type: str, price_without_vat: float, vat_rate_num: int,
     (core.contract_data._as_point_list), см. докстринг
     core/contracts/logistiks_rus/generator.py. Так же раскладывает данные и
     сборщик вкладок окна «Логистикс Рус».
+
+    Раздел 1 — ОДИН грузоотправитель и `shippers` адресов погрузки: имя
+    у всех точек одно (SHIPPER_NAME), различаются только адреса. Так
+    выглядит заявка в жизни: у ООО «ВОТУР МОТОР РУС» несколько площадок
+    погрузки.
 
     cargo_count печатается в бланке как есть и поэтому всегда согласован с
     числом машин: иначе валидатор справедливо выдаст замечание.
@@ -179,7 +193,10 @@ def _contract(carrier_type: str, price_without_vat: float, vat_rate_num: int,
         "unloading_date": "2026-10-01",
         "unloading_time_from": "08:00",
         "unloading_time_to": "20:00",
-        "loadings": [_point("shipper", n) for n in range(1, shippers + 1)],
+        "loadings": [
+            _point("shipper", n, name=SHIPPER_NAME)
+            for n in range(1, shippers + 1)
+        ],
         "unloadings": [_point("consignee", n) for n in range(1, consignees + 1)],
     }
 
@@ -586,29 +603,32 @@ def test_empty_vehicle_rows_removed(generator, work_dir, valid_ooo_data):
         path.unlink(missing_ok=True)
 
 
-def test_empty_shipper_blocks_removed(generator, work_dir, valid_ooo_data):
+def test_empty_shipper_addresses_removed(generator, work_dir, valid_ooo_data):
     """
-    2 грузоотправителя из 10: в готовом документе нет блоков 3..10.
+    2 адреса погрузки из 10: в готовом документе нет строк 3..10.
 
-    Проверяются именно МЕТКИ бланка («Грузоотправитель: ООО «Грузоотправитель
-    3»»), а не подстрока shipper_3: имени плейсхолдера в готовом документе уже
-    нет, и такая проверка была бы всегда истинной.
+    Проверяются именно МЕТКИ бланка («Адрес погрузки №3:»), а не подстрока
+    shipper_3: имени плейсхолдера в готовом документе уже нет, и такая
+    проверка была бы всегда истинной. Метка «Грузоотправитель:» одна и не
+    удаляется никогда: грузоотправитель в заявке один.
     """
     path = _generate(generator, valid_ooo_data, work_dir, "e2e_empty_shippers")
     try:
         doc = Document(str(path))
         texts = _body_texts(doc)
 
-        assert texts.count("Грузоотправитель: ООО «Грузоотправитель 1»") == 1
-        assert texts.count("Грузоотправитель: ООО «Грузоотправитель 2»") == 1
-        assert sum(1 for t in texts if t.startswith("Грузоотправитель:")) == FILLED_SHIPPERS
-        assert sum(1 for t in texts if t.startswith("Адрес погрузки:")) == FILLED_SHIPPERS
+        assert texts.count(f"Грузоотправитель: {SHIPPER_NAME}") == 1
+        assert sum(1 for t in texts if t.startswith("Грузоотправитель:")) == 1
+        assert sum(1 for t in texts if t.startswith("Адрес погрузки №")) == FILLED_SHIPPERS
+        for number in range(1, FILLED_SHIPPERS + 1):
+            address = f"Адрес погрузки №{number}: г. Тестоград, ул. Складская, д. {number}"
+            assert address in texts, f"потерян адрес погрузки {number}"
 
         for number in range(FILLED_SHIPPERS + 1, TEMPLATE_POINTS + 1):
-            label = f"Грузоотправитель: ООО «Грузоотправитель {number}»"
-            assert label not in texts, f"в документе остался пустой блок {number}"
+            label = f"Адрес погрузки №{number}:"
+            assert label not in texts, f"в документе остался пустой адрес {number}"
 
-        # Строки плана и раздел 2 при удалении блоков не задеты.
+        # Строки плана и раздел 2 при удалении адресов не задеты.
         assert [t for t in texts if t.startswith("Дата / время погрузки:")]
         assert sum(1 for t in texts if t.startswith("Грузополучатель №")) == FILLED_CONSIGNEES
         assert sum(1 for t in texts if t.startswith("Адрес выгрузки:")) == FILLED_CONSIGNEES
@@ -715,12 +735,12 @@ def test_data_without_route_names_does_not_break_chain(generator, validator,
     try:
         texts = _body_texts(Document(str(path)))
 
-        # Оба адреса на месте: безымянный блок с адресом не выброшен.
+        # Оба адреса на месте: строка адреса без имени не выброшена.
         for number in range(1, FILLED_SHIPPERS + 1):
-            address = f"Адрес погрузки: г. Тестоград, ул. Складская, д. {number}"
+            address = f"Адрес погрузки №{number}: г. Тестоград, ул. Складская, д. {number}"
             assert address in texts, f"потерян адрес точки {number}"
-        assert sum(1 for t in texts if t.startswith("Грузоотправитель:")) == FILLED_SHIPPERS
-        assert sum(1 for t in texts if t.startswith("Адрес погрузки:")) == FILLED_SHIPPERS
+        assert sum(1 for t in texts if t.startswith("Грузоотправитель:")) == 1
+        assert sum(1 for t in texts if t.startswith("Адрес погрузки №")) == FILLED_SHIPPERS
 
         # Выгрузка (имя есть) не пострадала от соседних пустых имён.
         assert "Грузополучатель №1: ООО «Грузополучатель 1»" in texts
@@ -889,7 +909,10 @@ def test_recognition_point_names_shippers_are_not_read_by_generator(
     assert "Укажите хотя бы одного грузополучателя с адресом" in report.errors
 
     replacements = generator.build_replacements(payload)
-    assert replacements["shipper_1_name"] == ""
+    # Грузоотправителя в таком ответе нет вовсе: строка «Грузоотправитель:»
+    # пустая, прежних {{shipper_N_name}} в бланке больше не существует.
+    assert replacements["shipper_name"] == ""
+    assert "shipper_1_name" not in replacements
     assert replacements["shipper_1_address"] == ""
     assert replacements["consignee_1_name"] == ""
 

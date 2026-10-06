@@ -91,10 +91,12 @@ def _vehicle(number: int) -> dict:
 
 def _point(kind: str, number: int, name=None, address=None) -> dict:
     """
-    Точка маршрута: грузоотправитель (kind="shipper") или грузополучатель.
+    Точка маршрута: грузополучатель (kind="consignee") или адрес погрузки.
 
     name/address можно подменить (в том числе пустой строкой) — так
-    проверяются частично заполненные блоки.
+    проверяются частично заполненные блоки. Точки погрузки собираются
+    helper-ом _loadings(): в заявке грузоотправитель ОДИН, поэтому имя
+    у всех адресов погрузки одно.
     """
     labels = {"shipper": "Грузоотправитель", "consignee": "Грузополучатель"}
     return {
@@ -103,6 +105,23 @@ def _point(kind: str, number: int, name=None, address=None) -> dict:
         "date": "2026-09-26" if kind == "shipper" else "2026-10-01",
         "time_window": "08:00-20:00",
     }
+
+
+#: Имя единственного грузоотправителя синтетической заявки.
+SHIPPER_NAME = "ООО «Грузоотправитель 1»"
+
+
+def _loadings(count: int) -> list:
+    """
+    Адреса погрузки: ОДИН грузоотправитель и `count` разных адресов.
+
+    Так выглядит раздел 1 заявки (FIX-2.2): имя у всех точек одно, адреса
+    различаются. Лишние адреса (сверх 10) срезает генератор.
+    """
+    return [
+        _point("shipper", number, name=SHIPPER_NAME)
+        for number in range(1, count + 1)
+    ]
 
 
 def _payload(
@@ -129,7 +148,7 @@ def _payload(
         "unloading_time_from": "08:00",
         "unloading_time_to": "20:00",
         "loadings": (
-            [_point("shipper", n) for n in range(1, shippers + 1)]
+            _loadings(shippers)
             if loadings is None else loadings
         ),
         "unloadings": (
@@ -323,9 +342,10 @@ def test_all_fields_are_substituted(generator, work_dir, variant):
     assert "Дата Заявки: «24» сентября 2026 года." in text
     assert "Заказчик: ООО «Заказчик Тест»" in text
 
-    # Грузоотправители и грузополучатели.
+    # Грузоотправитель (один) и грузополучатели.
     assert "Грузоотправитель: ООО «Грузоотправитель 1»" in texts
-    assert "Адрес погрузки: Адрес shipper 1" in texts
+    assert "Адрес погрузки №1: Адрес shipper 1" in texts
+    assert "Адрес погрузки №2: Адрес shipper 2" in texts
     assert "Грузополучатель №1: ООО «Грузополучатель 1»" in texts
     assert "Адрес выгрузки: Адрес consignee 1" in texts
 
@@ -606,7 +626,7 @@ def test_more_than_twelve_cars_are_truncated(generator, caplog):
 # ─────────────────────────────────────────────────────────────
 
 def test_empty_blocks_removed_in_generated_document(generator, work_dir):
-    """В готовом документе остаются только фактически заполненные блоки."""
+    """В готовом документе остаются только фактически заполненные строки."""
     output_dir = work_dir / "lr_points"
     output_dir.mkdir(parents=True, exist_ok=True)
     path = _generate(
@@ -614,15 +634,16 @@ def test_empty_blocks_removed_in_generated_document(generator, work_dir):
     )
     doc = Document(path)
 
-    assert _count_lines(doc, "Грузоотправитель:") == 2
-    assert _count_lines(doc, "Адрес погрузки:") == 2
+    # Грузоотправитель один, адресов погрузки — по числу точек.
+    assert _count_lines(doc, "Грузоотправитель:") == 1
+    assert _count_lines(doc, "Адрес погрузки №") == 2
     assert _count_lines(doc, "Грузополучатель №") == 3
     assert _count_lines(doc, "Адрес выгрузки:") == 3
 
     texts = _body_texts(doc)
     assert "Грузополучатель №3: ООО «Грузополучатель 3»" in texts
     assert not [t for t in texts if t.startswith("Грузополучатель №4")]
-    # Строки дат остаются на месте: удаляются только блоки точек.
+    # Строки дат остаются на месте: удаляются только строки точек.
     assert [t for t in texts if t.startswith("Дата / время погрузки:")]
     assert [t for t in texts if t.startswith("Плановая дата / время завершения выгрузки:")]
 
@@ -631,12 +652,14 @@ def test_points_from_top_level_still_render_addresses(generator, work_dir):
     """
     Точки верхнего уровня: адреса доходят до бланка.
 
-    Название точки при этом теряется — ContractData хранит точки как
+    Имя грузоотправителя при этом теряется — ContractData хранит точки как
     {address, date, time_window} (core.contract_data._as_point_list), и по
     пути generate() исходный словарь с name до генератора не доживает.
     Чтобы имя доживало и здесь, нужно расширить _as_point_list; на этом шаге
     core/contract_data.py не трогаем и фиксируем фактическое поведение:
-    блок с одним адресом остаётся.
+    строка «Грузоотправитель:» пустая, адреса — на месте. Так выглядит
+    только чужой (верхнеуровневый) формат данных; вкладка и распознавание
+    кладут точки в contract["loadings"], где имя сохраняется.
     """
     output_dir = work_dir / "lr_top_level"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -646,22 +669,30 @@ def test_points_from_top_level_still_render_addresses(generator, work_dir):
 
     path = _generate(generator, payload, output_dir)
     doc = Document(path)
+    texts = _body_texts(doc)
 
-    assert _count_lines(doc, "Грузоотправитель:") == 2
-    assert "Адрес погрузки: Адрес shipper 1" in _body_texts(doc)
+    assert _count_lines(doc, "Грузоотправитель:") == 1
+    assert "Грузоотправитель:" in texts
+    assert "Адрес погрузки №1: Адрес shipper 1" in texts
+    assert "Адрес погрузки №2: Адрес shipper 2" in texts
 
 
 def test_route_points_use_names_from_raw_data(generator):
     """При прямом вызове карты замен название берётся из исходных точек."""
+    # Точки кладутся ТОЛЬКО в contract (иначе ContractData заберёт их
+    # в loadings и «сырых» данных для имён не останется): так проверяется
+    # путь _raw_point_names → name.
     payload = _payload(shippers=1, consignees=1)
-    loadings = payload["contract"].pop("loadings")
-    unloadings = payload["contract"].pop("unloadings")
-    payload["loadings"] = loadings
-    payload["unloadings"] = unloadings
+    loadings = payload["contract"]["loadings"]
+    unloadings = payload["contract"]["unloadings"]
+    loadings[0].pop("date")
+    loadings[0].pop("time_window")
+    unloadings[0].pop("date")
+    unloadings[0].pop("time_window")
 
     replacements = generator._build_replacements_map(payload)
 
-    assert replacements["shipper_1_name"] == "ООО «Грузоотправитель 1»"
+    assert replacements["shipper_name"] == SHIPPER_NAME
     assert replacements["shipper_1_address"] == "Адрес shipper 1"
     assert replacements["consignee_1_name"] == "ООО «Грузополучатель 1»"
     assert replacements["consignee_1_address"] == "Адрес consignee 1"
@@ -673,8 +704,10 @@ def test_more_than_ten_points_are_truncated(generator, caplog):
             _payload(shippers=12, consignees=12)
         )
 
-    assert replacements["shipper_10_name"] == "ООО «Грузоотправитель 10»"
-    assert "shipper_11_name" not in replacements
+    assert replacements["shipper_name"] == SHIPPER_NAME
+    assert replacements["shipper_10_address"] == "Адрес shipper 10"
+    assert "shipper_10_name" not in replacements
+    assert "shipper_11_address" not in replacements
     assert "в бланк помещается 10" in caplog.text
 
 
@@ -689,8 +722,9 @@ def test_route_points_fall_back_to_legacy_contract_addresses(generator):
 
     replacements = generator._build_replacements_map(payload)
 
-    assert replacements["shipper_1_name"] == ""
+    assert replacements["shipper_name"] == ""
     assert replacements["shipper_1_address"] == "Легаси адрес погрузки"
+    assert "shipper_1_name" not in replacements
     assert replacements["consignee_1_address"] == "Легаси адрес выгрузки 1"
     assert replacements["consignee_2_address"] == "Легаси адрес выгрузки 2"
     assert replacements["consignee_3_address"] == ""

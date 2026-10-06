@@ -9,9 +9,11 @@
   * RemoveEmptyVehicleRowsStep — таблица на 12 машин: пустые строки данных
     удаляются, заполненные хотя бы одним значением остаются, чужие таблицы
     (другая шапка, шапки нет) не трогаются;
-  * RemoveEmptyShipperConsigneeBlocksStep — по 10 блоков погрузки и выгрузки:
-    пары «название + адрес» без обоих значений удаляются, частично
-    заполненный блок сохраняется.
+  * RemoveEmptyShipperConsigneeBlocksStep — раздел 1 (ОДИН грузоотправитель
+    и до 10 строк «Адрес погрузки №N:») и раздел 2 (до 10 пар «название +
+    адрес»): незаполненные строки адресов погрузки удаляются поодиночке,
+    метка «Грузоотправитель:» не удаляется никогда, пара грузополучателя
+    без обоих значений удаляется, частично заполненная — сохраняется.
 
 Интеграционные проверки (тот же результат в готовом документе после
 generate()) остаются в tests/test_logistiks_rus_generator.py.
@@ -40,14 +42,19 @@ CARGO_HEADERS = ("№", "Марка, модель", "VIN-номер")
 #: Шапка таблицы Формики: слэш вместо запятой — для этого бланка чужая.
 FOREIGN_CARGO_HEADERS = ("№", "Марка/Модель", "VIN-номер")
 
-#: Метки блоков точек: (начало строки названия, начало строки адреса).
+#: Метки строк точек: (начало строки названия, начало строки адреса).
+#: У грузополучателя название — с номером блока, у адреса погрузки —
+#: с номером адреса (в разделе 1 грузоотправитель ОДИН).
 POINT_PREFIXES = {
-    "shipper": ("Грузоотправитель:", "Адрес погрузки:"),
+    "shipper": ("Грузоотправитель:", "Адрес погрузки №"),
     "consignee": ("Грузополучатель №", "Адрес выгрузки:"),
 }
 
 #: Заголовки разделов точек — остаются в документе при любом числе точек.
 POINT_SECTION_TITLES = {"shipper": "1. ПОГРУЗКА", "consignee": "2. ВЫГРУЗКА"}
+
+#: Имя единственного грузоотправителя в собранном документе (раздел 1).
+SHIPPER_NAME = "ООО «Грузоотправитель 1»"
 
 #: Абзац-«хвост» после блоков точек: проверяем, что он не задет.
 POINT_SECTION_TAIL = "ОСОБЫЕ УСЛОВИЯ РЕЙСА"
@@ -225,28 +232,41 @@ def test_remove_empty_vehicle_rows_step_keeps_header_only_table(generator):
 # ─────────────────────────────────────────────────────────────
 
 def _point_block(kind: str, number: int, name: str, address: str):
-    """Две строки блока точки: название (у выгрузки — с номером) и адрес."""
+    """Строки блока точки: название и адрес.
+
+    Раздел 1 (shipper): грузоотправитель ОДИН — имя без номера, а адрес
+    погрузки нумерован («Адрес погрузки №N»). Раздел 2 (consignee): пара
+    «Грузополучатель №N» + «Адрес выгрузки».
+    """
     if kind == "shipper":
-        return f"Грузоотправитель: {name}", f"Адрес погрузки: {address}"
+        return f"Грузоотправитель: {name}", f"Адрес погрузки №{number}: {address}"
     return f"Грузополучатель №{number}: {name}", f"Адрес выгрузки: {address}"
 
 
 def _points_doc(kind: str, filled: int, total: int = MAX_POINTS):
     """
-    Документ с `total` блоками точек, из которых заполнены первые `filled`.
+    Документ с `total` строками точек, из которых заполнены первые `filled`.
 
-    Незаполненный блок — это строки «Грузоотправитель:» и «Адрес погрузки:»
-    без значений: ровно так выглядит бланк после docxtpl.
+    Для грузополучателей незаполненный блок — это строки «Грузополучатель
+    №N:» и «Адрес выгрузки:» без значений: ровно так выглядит бланк после
+    docxtpl. Для адресов погрузки пустая строка — «Адрес погрузки №N:»;
+    метка «Грузоотправитель:» в разделе 1 стоит одна и печатается всегда.
     """
     doc = Document()
     doc.add_paragraph(POINT_SECTION_TITLES[kind])
+
+    if kind == "shipper":
+        doc.add_paragraph(f"Грузоотправитель: {SHIPPER_NAME}")
 
     for number in range(1, total + 1):
         is_filled = number <= filled
         name = f"ООО «Точка {number}»" if is_filled else ""
         address = f"Адрес точки {number}" if is_filled else ""
-        for text in _point_block(kind, number, name, address):
-            doc.add_paragraph(text)
+        if kind == "shipper":
+            doc.add_paragraph(_point_block(kind, number, name, address)[1])
+        else:
+            for text in _point_block(kind, number, name, address):
+                doc.add_paragraph(text)
 
     doc.add_paragraph(POINT_SECTION_TAIL)
     return doc
@@ -265,49 +285,73 @@ def _count(doc, prefix: str) -> int:
 @pytest.mark.parametrize("kind", ["shipper", "consignee"])
 @pytest.mark.parametrize("filled", [1, 2, 5, MAX_POINTS])
 def test_remove_empty_point_blocks_keeps_only_filled_blocks(generator, kind, filled):
-    """Сколько блоков заполнено, столько и остаётся (обоих видов)."""
+    """Сколько строк заполнено, столько и остаётся (обоих видов)."""
     doc = _points_doc(kind, filled=filled)
 
     RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
 
     name_prefix, address_prefix = POINT_PREFIXES[kind]
-    assert _count(doc, name_prefix) == filled
     assert _count(doc, address_prefix) == filled
+    if kind == "consignee":
+        assert _count(doc, name_prefix) == filled
+    else:
+        # Грузоотправитель один и печатается всегда — от числа адресов
+        # он не зависит.
+        assert _count(doc, name_prefix) == 1
+        assert _texts(doc)[1] == f"Грузоотправитель: {SHIPPER_NAME}"
+
     # Шапка раздела и хвост документа остаются на месте.
     assert _texts(doc)[0] == POINT_SECTION_TITLES[kind]
     assert _texts(doc)[-1] == POINT_SECTION_TAIL
-    assert len(doc.paragraphs) == filled * 2 + 2
 
 
 def test_remove_empty_point_blocks_removes_all_ten_when_empty(generator):
-    """0 заполненных: все 10 блоков удалены, раздел остаётся."""
+    """0 заполненных: все 10 адресов погрузки удалены, раздел и метка остаются."""
     doc = _points_doc("shipper", filled=0)
 
     RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
 
-    assert _texts(doc) == [POINT_SECTION_TITLES["shipper"], POINT_SECTION_TAIL]
-    assert len(doc.paragraphs) == 2
+    assert _texts(doc) == [
+        POINT_SECTION_TITLES["shipper"],
+        f"Грузоотправитель: {SHIPPER_NAME}",
+        POINT_SECTION_TAIL,
+    ]
 
 
 def test_remove_empty_point_blocks_removes_eight_of_ten_shippers(generator):
-    """2 заполненных блока из 10: удаляются 8 пустых, данные остаются."""
+    """2 заполненных адреса из 10: удаляются 8 пустых, метка остаётся."""
     doc = _points_doc("shipper", filled=2)
 
     RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
 
     assert _texts(doc) == [
         "1. ПОГРУЗКА",
-        "Грузоотправитель: ООО «Точка 1»",
-        "Адрес погрузки: Адрес точки 1",
-        "Грузоотправитель: ООО «Точка 2»",
-        "Адрес погрузки: Адрес точки 2",
+        f"Грузоотправитель: {SHIPPER_NAME}",
+        "Адрес погрузки №1: Адрес точки 1",
+        "Адрес погрузки №2: Адрес точки 2",
         "ОСОБЫЕ УСЛОВИЯ РЕЙСА",
+    ]
+
+
+def test_shipper_label_is_never_removed(generator):
+    """Метка «Грузоотправитель:» не удаляется никогда, даже без адресов."""
+    doc = Document()
+    doc.add_paragraph("Грузоотправитель:")
+    doc.add_paragraph("Адрес погрузки №1: ")
+    doc.add_paragraph("Адрес погрузки №2:")
+    doc.add_paragraph("Адрес погрузки: старый формат без номера")
+
+    RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
+
+    assert _texts(doc) == [
+        "Грузоотправитель:",
+        "Адрес погрузки: старый формат без номера",
     ]
 
 
 def test_remove_empty_point_blocks_removes_nothing_when_all_filled(generator):
     """Все 10 блоков заполнены: документ не меняется."""
-    doc = _points_doc("shipper", filled=MAX_POINTS)
+    doc = _points_doc("consignee", filled=MAX_POINTS)
     before = _texts(doc)
 
     RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
@@ -316,33 +360,60 @@ def test_remove_empty_point_blocks_removes_nothing_when_all_filled(generator):
     assert len(doc.paragraphs) == MAX_POINTS * 2 + 2
 
 
-@pytest.mark.parametrize("kind", ["shipper", "consignee"])
 @pytest.mark.parametrize(
     "name, address",
     [("ООО «Только имя»", ""), ("", "Только адрес")],
 )
-def test_remove_empty_point_blocks_keeps_partially_filled(
-    generator, kind, name, address
+def test_remove_empty_point_blocks_keeps_partially_filled_consignee(
+    generator, name, address
 ):
-    """Блок с одним заполненным полем сохраняется целиком: данные не теряем."""
+    """Блок грузополучателя с одним заполненным полем сохраняется целиком."""
     doc = Document()
-    for text in _point_block(kind, 1, name, address):
+    for text in _point_block("consignee", 1, name, address):
         doc.add_paragraph(text)
 
     RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
 
     assert _texts(doc) == [
-        text.strip() for text in _point_block(kind, 1, name, address)
+        text.strip() for text in _point_block("consignee", 1, name, address)
+    ]
+
+
+def test_remove_empty_shipper_address_keeps_filled_one(generator):
+    """Адрес погрузки с заполненным значением сохраняется."""
+    doc = Document()
+    doc.add_paragraph("Грузоотправитель: ООО «Первый»")
+    doc.add_paragraph("Адрес погрузки №1: Адрес первый")
+
+    RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
+
+    assert _texts(doc) == [
+        "Грузоотправитель: ООО «Первый»",
+        "Адрес погрузки №1: Адрес первый",
+    ]
+
+
+def test_shipper_address_with_only_label_is_removed_but_name_stays(generator):
+    """Строка «Адрес погрузки №N:» без значения уходит, метка имени — нет."""
+    doc = Document()
+    doc.add_paragraph("Грузоотправитель: ООО «Первый»")
+    doc.add_paragraph("Адрес погрузки №1: ")
+    doc.add_paragraph("Адрес погрузки №2: Адрес второй")
+
+    RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
+
+    assert _texts(doc) == [
+        "Грузоотправитель: ООО «Первый»",
+        "Адрес погрузки №2: Адрес второй",
     ]
 
 
 def test_remove_empty_point_blocks_handles_both_kinds_in_one_document(generator):
-    """Грузоотправители и грузополучатели разбираются независимо."""
+    """Адреса погрузки и грузополучатели разбираются независимо."""
     doc = Document()
-    for text in _point_block("shipper", 1, "ООО «Первый»", "Адрес первый"):
-        doc.add_paragraph(text)
-    for text in _point_block("shipper", 2, "", ""):
-        doc.add_paragraph(text)
+    doc.add_paragraph(f"Грузоотправитель: {SHIPPER_NAME}")
+    doc.add_paragraph("Адрес погрузки №1: Адрес первый")
+    doc.add_paragraph("Адрес погрузки №2:")
     for number in (1, 2):
         for text in _point_block("consignee", number, "", ""):
             doc.add_paragraph(text)
@@ -350,8 +421,8 @@ def test_remove_empty_point_blocks_handles_both_kinds_in_one_document(generator)
     RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
 
     assert _texts(doc) == [
-        "Грузоотправитель: ООО «Первый»",
-        "Адрес погрузки: Адрес первый",
+        f"Грузоотправитель: {SHIPPER_NAME}",
+        "Адрес погрузки №1: Адрес первый",
     ]
 
 
@@ -360,23 +431,25 @@ def test_remove_empty_point_blocks_ignores_foreign_paragraphs(generator):
     Чужие абзацы не удаляются.
 
     Метка грузополучателя — только с номером блока («Грузополучатель №1:»),
+    метка адреса погрузки — только с номером адреса («Адрес погрузки №1:»),
     строки дат и других разделов под метки не подходят.
     """
     doc = Document()
     doc.add_paragraph("Дата / время погрузки: 26.09.2026 г. Время с 08:00 по 20:00")
     doc.add_paragraph("Плановая дата / время завершения выгрузки: 01.10.2026 г.")
     doc.add_paragraph("Грузополучатель: ООО «Без номера»")
+    doc.add_paragraph("Адрес погрузки: старый формат")
     doc.add_paragraph("Общее количество: 3 шт.")
 
     RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
 
-    assert len(doc.paragraphs) == 4
+    assert len(doc.paragraphs) == 5
 
 
 def test_remove_empty_point_blocks_does_not_swallow_next_paragraph(generator):
     """Одиночная пустая метка удаляется одна: следующий абзац — не её адрес."""
     doc = Document()
-    doc.add_paragraph("Грузоотправитель:")
+    doc.add_paragraph("Грузополучатель №1:")
     doc.add_paragraph("Дата / время погрузки: 26.09.2026 г.")
 
     RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
@@ -389,17 +462,16 @@ def test_remove_empty_point_blocks_does_not_swallow_next_paragraph(generator):
 # ─────────────────────────────────────────────────────────────
 
 def _mixed_doc():
-    """Документ сразу с таблицей автомобилей и блоком пустых точек."""
+    """Документ сразу с таблицей автомобилей и строками точек."""
     doc = _cargo_table_doc(filled=1)
-    for text in _point_block("shipper", 1, "ООО «Первый»", "Адрес первый"):
-        doc.add_paragraph(text)
-    for text in _point_block("shipper", 2, "", ""):
-        doc.add_paragraph(text)
+    doc.add_paragraph(f"Грузоотправитель: {SHIPPER_NAME}")
+    doc.add_paragraph("Адрес погрузки №1: Адрес первый")
+    doc.add_paragraph("Адрес погрузки №2:")
     return doc
 
 
 def test_steps_touch_only_their_own_part_of_document(generator):
-    """Шаги изолированы: строки таблицы и блоки точек друг друга не трогают."""
+    """Шаги изолированы: строки таблицы и строки точек друг друга не трогают."""
     assert RemoveEmptyVehicleRowsStep.name != RemoveEmptyShipperConsigneeBlocksStep.name
 
     doc = _mixed_doc()
@@ -407,12 +479,12 @@ def test_steps_touch_only_their_own_part_of_document(generator):
 
     RemoveEmptyVehicleRowsStep(generator).apply(doc, None)
     assert len(doc.tables[0].rows) == 2  # пустые строки груза убраны
-    assert _texts(doc) == points_before  # блоки точек не тронуты
+    assert _texts(doc) == points_before  # строки точек не тронуты
 
     RemoveEmptyShipperConsigneeBlocksStep(generator).apply(doc, None)
     assert _texts(doc) == [
-        "Грузоотправитель: ООО «Первый»",
-        "Адрес погрузки: Адрес первый",
+        f"Грузоотправитель: {SHIPPER_NAME}",
+        "Адрес погрузки №1: Адрес первый",
     ]
     assert len(doc.tables[0].rows) == 2  # таблица не тронута вторым шагом
 

@@ -5,9 +5,9 @@
 
 Проверяется ui/windows/logistiks_rus/data.py::collect_logistiks_rus_data:
 раскладка полей вкладок по ContractData, три маппинга этого шага (точки
-с name, shippers/consignees → loadings/unloadings, суммы sum_* →
-price_without_vat) и устойчивость сборки (нет вкладки, нет get_data(),
-get_data() упал, вернул не словарь).
+с name, shipper_name + loading_addresses / consignees → loadings и
+unloadings, суммы sum_* → price_without_vat) и устойчивость сборки (нет
+вкладки, нет get_data(), get_data() упал, вернул не словарь).
 
 Qt не нужен: вкладки подменяются простыми объектами-заглушками со своим
 get_data(). Отдельные тесты проверяют, что собранных данных достаточно
@@ -57,6 +57,9 @@ RECOGNIZED_SUM_TOTAL = 269741.00
 
 #: Незаменённый плейсхолдер бланка («{{car_12_brand}}») в готовом документе.
 PLACEHOLDER_RE = re.compile(r"\{\{[^{}]*\}\}")
+
+#: Грузоотправитель заявки: в этом типе он ОДИН (FIX-2.2).
+SHIPPER_NAME = "ООО «ВОТУР МОТОР РУС»"
 
 
 class StubTab:
@@ -268,12 +271,13 @@ def test_vehicles_not_a_list_is_ignored():
 
 @pytest.fixture
 def route_tab() -> dict:
-    """Вкладка «Маршрут»: два грузоотправителя и один грузополучатель."""
+    """Вкладка «Маршрут»: один грузоотправитель, два адреса, грузополучатель."""
     return {
         "route": "Москва - Казань",
-        "shippers": [
-            {"name": "ООО «Склад Север»", "address": "г. Москва, ул. Складская, д. 1"},
-            {"name": "ООО «Склад Юг»", "address": "г. Москва, ул. Южная, д. 2"},
+        "shipper_name": SHIPPER_NAME,
+        "loading_addresses": [
+            "г. Москва, ул. Складская, д. 1",
+            "г. Москва, ул. Южная, д. 2",
         ],
         "consignees": [
             {"name": "ООО «Приёмка»", "address": "г. Казань, ул. Приёмная, д. 3"},
@@ -299,12 +303,12 @@ def test_route_fields_are_collected(route_tab):
     assert cd.contract["unloading_time_to"] == "18:00"
 
 
-def test_shippers_and_consignees_go_to_contract_points(route_tab):
-    """Маппинг 2: shippers / consignees → contract.loadings / unloadings."""
+def test_shipper_name_and_addresses_go_to_contract_loadings(route_tab):
+    """Маппинг 2: shipper_name + loading_addresses → contract.loadings."""
     cd = collect_logistiks_rus_data({"route": route_tab})
 
     assert [p["name"] for p in cd.contract["loadings"]] == [
-        "ООО «Склад Север»", "ООО «Склад Юг»",
+        SHIPPER_NAME, SHIPPER_NAME,
     ]
     assert [p["address"] for p in cd.contract["loadings"]] == [
         "г. Москва, ул. Складская, д. 1", "г. Москва, ул. Южная, д. 2",
@@ -315,12 +319,29 @@ def test_shippers_and_consignees_go_to_contract_points(route_tab):
     ]
 
 
+def test_old_shippers_array_still_goes_to_loadings():
+    """Старый формат вкладки (массив shippers) — fallback, не ошибка."""
+    cd = collect_logistiks_rus_data({"route": {
+        "shippers": [
+            {"name": "ООО «Склад Север»", "address": "г. Москва, ул. Складская, д. 1"},
+            {"name": "ООО «Склад Юг»", "address": "г. Москва, ул. Южная, д. 2"},
+        ],
+    }})
+
+    assert [p["name"] for p in cd.contract["loadings"]] == [
+        "ООО «Склад Север»", "ООО «Склад Юг»",
+    ]
+    assert [p["address"] for p in cd.contract["loadings"]] == [
+        "г. Москва, ул. Складская, д. 1", "г. Москва, ул. Южная, д. 2",
+    ]
+
+
 def test_points_in_contract_keep_name_date_and_time_window(route_tab):
     """Маппинг 1: точки лежат в contract полным набором — с name."""
     cd = collect_logistiks_rus_data({"route": route_tab})
 
     assert cd.contract["loadings"][0] == {
-        "name": "ООО «Склад Север»",
+        "name": SHIPPER_NAME,
         "address": "г. Москва, ул. Складская, д. 1",
         "date": "2026-09-26",
         "time_window": "08:00-20:00",
@@ -356,24 +377,32 @@ def test_top_level_points_stay_without_name(route_tab):
     assert "name" not in cd.loadings[0]
 
 
-def test_points_without_name_or_address_are_dropped():
+def test_address_without_shipper_name_is_kept():
+    """Адрес погрузки — данные сами по себе: имя может не распознаться."""
     cd = collect_logistiks_rus_data({"route": {
-        "shippers": [
-            {"name": "", "address": ""},
-            {"name": "  ", "address": "  "},
-            {"name": "ООО «Склад Север»", "address": ""},
-        ],
+        "loading_addresses": ["г. Москва, ул. Южная, д. 2"],
     }})
 
     assert len(cd.contract["loadings"]) == 1
-    assert cd.contract["loadings"][0]["name"] == "ООО «Склад Север»"
-    assert cd.contract["loadings"][0]["address"] == ""
+    assert cd.contract["loadings"][0]["name"] == ""
+    assert cd.contract["loadings"][0]["address"] == "г. Москва, ул. Южная, д. 2"
+
+
+def test_empty_and_blank_loading_addresses_are_dropped():
+    """Пустые и пробельные строки таблицы адресами не считаются."""
+    cd = collect_logistiks_rus_data({"route": {
+        "shipper_name": SHIPPER_NAME,
+        "loading_addresses": ["", "   ", "г. Москва, ул. Первая, д. 1"],
+    }})
+
+    assert len(cd.contract["loadings"]) == 1
+    assert cd.contract["loadings"][0]["address"] == "г. Москва, ул. Первая, д. 1"
 
 
 def test_points_are_limited_to_max_points():
     route = {
-        "shippers": [{"name": f"ООО «Склад {i}»", "address": f"адрес {i}"}
-                     for i in range(1, 14)],
+        "shipper_name": SHIPPER_NAME,
+        "loading_addresses": [f"адрес {i}" for i in range(1, 14)],
         "consignees": [{"name": f"ООО «Приёмка {i}»", "address": f"адрес {i}"}
                        for i in range(1, 13)],
     }
@@ -383,7 +412,8 @@ def test_points_are_limited_to_max_points():
     assert MAX_POINTS == 10
     assert len(cd.contract["loadings"]) == MAX_POINTS
     assert len(cd.contract["unloadings"]) == MAX_POINTS
-    assert cd.contract["loadings"][-1]["name"] == f"ООО «Склад {MAX_POINTS}»"
+    assert cd.contract["loadings"][-1]["name"] == SHIPPER_NAME
+    assert cd.contract["loadings"][-1]["address"] == f"адрес {MAX_POINTS}"
     assert cd.contract["unloadings"][-1]["name"] == f"ООО «Приёмка {MAX_POINTS}»"
 
 
@@ -398,14 +428,15 @@ def test_route_without_shippers_has_no_loadings():
 
 
 def test_route_points_not_a_list_are_ignored():
-    cd = collect_logistiks_rus_data({"route": {"shippers": "мусор"}})
+    cd = collect_logistiks_rus_data({"route": {"loading_addresses": "мусор"}})
 
     assert cd.contract["loadings"] == []
 
 
 def test_time_window_with_one_boundary():
     cd = collect_logistiks_rus_data({"route": {
-        "shippers": [{"name": "ООО «Склад Север»", "address": "г. Москва"}],
+        "shipper_name": SHIPPER_NAME,
+        "loading_addresses": ["г. Москва"],
         "loading_time_from": "08:00",
     }})
 
@@ -657,10 +688,10 @@ def full_tabs() -> dict:
         ]}),
         "route": StubTab({
             "route": "Москва - Казань",
-            "shippers": [
-                {"name": "ООО «Склад Север»",
-                 "address": "г. Москва, ул. Складская, д. 1"},
-                {"name": "ООО «Склад Юг»", "address": "г. Москва, ул. Южная, д. 2"},
+            "shipper_name": SHIPPER_NAME,
+            "loading_addresses": [
+                "г. Москва, ул. Складская, д. 1",
+                "г. Москва, ул. Южная, д. 2",
             ],
             "consignees": [
                 {"name": "ООО «Приёмка»", "address": "г. Казань, ул. Приёмная, д. 3"},
@@ -750,7 +781,7 @@ def test_logs_do_not_contain_personal_data(full_tabs, caplog):
     for fragment in (
         "ДжейСиСиТиЭс",     # заказчик
         "Иванов",           # ФИО водителя
-        "Склад Север",      # название грузоотправителя
+        "ВОТУР",            # название грузоотправителя
         "Складская",        # адрес точки
         VIN_1,              # VIN
         "МОДЕЛЬ",           # марка машины
@@ -795,11 +826,13 @@ def test_full_scenario_generator_gets_expected_placeholders(full_tabs, templates
     assert replacements["unloading_date"] == "01.10.2026"
     assert replacements["cargo_count"] == "2"
 
-    # Названия грузоотправителей и грузополучателей доходят до бланка:
-    # это и есть маппинг 1 и 2 (contract["loadings"] / ["unloadings"]).
-    assert replacements["shipper_1_name"] == "ООО «Склад Север»"
-    assert replacements["shipper_2_name"] == "ООО «Склад Юг»"
+    # Имя грузоотправителя (одно на весь раздел) и грузополучатели доходят
+    # до бланка: это и есть маппинг 1 и 2 (contract["loadings"] /
+    # ["unloadings"]).
+    assert replacements["shipper_name"] == SHIPPER_NAME
     assert replacements["shipper_1_address"] == "г. Москва, ул. Складская, д. 1"
+    assert replacements["shipper_2_address"] == "г. Москва, ул. Южная, д. 2"
+    assert "shipper_1_name" not in replacements
     assert replacements["consignee_1_name"] == "ООО «Приёмка»"
     assert replacements["consignee_1_address"] == "г. Казань, ул. Приёмная, д. 3"
 
@@ -870,9 +903,9 @@ def test_full_scenario_renders_docx_with_point_names(full_tabs, templates_dir, w
 
         assert PLACEHOLDER_RE.search(text) is None, "в документе остался плейсхолдер"
         assert "ЗАЯВКА № ЛР-2026-17" in text
-        assert "Грузоотправитель: ООО «Склад Север»" in text
-        assert "Адрес погрузки: г. Москва, ул. Складская, д. 1" in text
-        assert "Грузоотправитель: ООО «Склад Юг»" in text
+        assert f"Грузоотправитель: {SHIPPER_NAME}" in text
+        assert "Адрес погрузки №1: г. Москва, ул. Складская, д. 1" in text
+        assert "Адрес погрузки №2: г. Москва, ул. Южная, д. 2" in text
         assert "Грузополучатель №1: ООО «Приёмка»" in text
         assert "Адрес выгрузки: г. Казань, ул. Приёмная, д. 3" in text
         assert "Тягач: DAF XF 95.430 гос. №: М342СА761" in text
@@ -902,7 +935,7 @@ def test_build_uses_same_layout_as_collect(full_tabs):
     assert cd.customer["full_name"] == CUSTOMER_NAME
     assert cd.driver == {"full_name": "Иванов Иван Иванович"}
     assert [p["name"] for p in cd.contract["loadings"]] == [
-        "ООО «Склад Север»", "ООО «Склад Юг»",
+        SHIPPER_NAME, SHIPPER_NAME,
     ]
     assert len(cd.vehicles) == 2
 

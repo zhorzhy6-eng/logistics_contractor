@@ -13,7 +13,9 @@
 
   * файл существует и открывается python-docx;
   * все ключевые плейсхолдеры на месте и ни один не разорван между runs;
-  * блоки погрузки/выгрузки: по 10 пар «грузоотправитель/грузополучатель»;
+  * раздел 1 «Погрузка»: ОДИН грузоотправитель ({{shipper_name}}) и 10
+    нумерованных адресов погрузки ({{shipper_N_address}}); раздел 2
+    «Выгрузка»: по-прежнему 10 пар «грузополучатель + адрес»;
   * таблица автомобилей: шапка «№ / Марка, модель / VIN-номер» и ровно
     12 строк с плейсхолдерами марки и VIN;
   * в ООО-шаблоне три суммы (sum_wo_vat / vat_rate+sum_vat / sum_total)
@@ -49,12 +51,13 @@ TEMPLATE_NAMES = {
 
 CARRIER_TYPES = tuple(TEMPLATE_NAMES)
 
-#: SHA256 собранных шаблонов (ЭТАП 3.1.C.A.1-fix: Arial + суммы прописью).
+#: SHA256 собранных шаблонов (ШАГ FIX-2.2: грузоотправитель ОДИН,
+#: адреса погрузки нумеруются, {{shipper_N_name}} из бланка убран).
 #: Если шаблон пересобрали осознанно (например, поменяли формулировку),
 #: значения нужно обновить — тест ловит ручную правку .docx мимо сборщика.
 TEMPLATE_SHA256 = {
-    "ООО": "f22828c3838d1d53502aa61f529c2671f8a3837c5e085b89f14aeee36bb63fdd",
-    "ИП": "899345da146480b49453f28017f3680f3bf385dd0137f47fc2fc1aa7f6173794",
+    "ООО": "d78fa27185991af236a9f6697e8a4e5fa88859ce9b62e70ca248c0bc52d3a826",
+    "ИП": "fb05c6bbe308668238ce3b254fbb7678842ac2efde020f5ddae66febf3c69b3c",
 }
 
 #: Образцы-источники и их SHA256 на момент сборки шаблонов.
@@ -184,10 +187,11 @@ def template_doc(templates, carrier_type):
 def _expected_placeholders(carrier_type: str) -> set:
     """Полный набор имён плейсхолдеров шаблона этого варианта."""
     names = set(COMMON_PLACEHOLDERS)
+    # Раздел 1: ОДИН грузоотправитель + до 10 нумерованных адресов погрузки.
+    names.add("shipper_name")
     names |= {
-        f"shipper_{number}_{field}"
+        f"shipper_{number}_address"
         for number in range(1, MAX_POINTS + 1)
-        for field in ("name", "address")
     }
     names |= {
         f"consignee_{number}_{field}"
@@ -271,15 +275,21 @@ def test_common_placeholders_present(template_doc, carrier_type):
 
 
 def test_point_placeholders_present(template_doc, carrier_type):
-    """Все 10 блоков погрузки и выгрузки: и название, и адрес."""
+    """Адреса погрузки (10 нумерованных) и блоки выгрузки (10 пар) на месте."""
     text = _document_text(template_doc)
     missing = [
+        f"{{{{shipper_{number}_address}}}}"
+        for number in range(1, MAX_POINTS + 1)
+        if f"{{{{shipper_{number}_address}}}}" not in text
+    ]
+    missing += [
         f"{{{{{prefix}_{number}_{field}}}}}"
-        for prefix in ("shipper", "consignee")
+        for prefix in ("consignee",)
         for number in range(1, MAX_POINTS + 1)
         for field in ("name", "address")
         if f"{{{{{prefix}_{number}_{field}}}}}" not in text
     ]
+    assert "{{shipper_name}}" in text, "нет плейсхолдера грузоотправителя"
     assert not missing, f"нет плейсхолдеров точек маршрута: {missing}"
 
 
@@ -426,20 +436,40 @@ def test_cargo_column_widths_match_sample(template_doc, carrier_type):
 
 
 # ─────────────────────────────────────────────────────────────
-# Блоки погрузки и выгрузки
+# Раздел 1 (погрузка) и раздел 2 (выгрузка)
 # ─────────────────────────────────────────────────────────────
 
-def test_shipper_blocks_are_ten(template_doc, carrier_type):
-    """В бланке 10 блоков грузоотправителя; лишние срежет постобработка."""
+def test_shipper_name_appears_once(template_doc, carrier_type):
+    """Грузоотправитель в бланке ОДИН: метка «Грузоотправитель:» одна."""
     texts = _body_texts(template_doc)
-    assert texts.count("Грузоотправитель: {{shipper_1_name}}") == 1
+    labels = [t for t in texts if t.startswith("Грузоотправитель:")]
+
+    assert len(labels) == 1, f"строк «Грузоотправитель:» — {len(labels)}"
+    assert labels[0] == "Грузоотправитель: {{shipper_name}}"
+
+
+def test_shipper_addresses_are_numbered(template_doc, carrier_type):
+    """Адреса погрузки пронумерованы: «Адрес погрузки №N: {{shipper_N_address}}»."""
+    texts = _body_texts(template_doc)
     for number in range(1, MAX_POINTS + 1):
-        assert f"Грузоотправитель: {{{{shipper_{number}_name}}}}" in texts
-        assert f"Адрес погрузки: {{{{shipper_{number}_address}}}}" in texts
+        assert (f"Адрес погрузки №{number}: "
+                f"{{{{shipper_{number}_address}}}}") in texts
 
 
-def test_consignee_blocks_are_numbered_up_to_ten(template_doc, carrier_type):
-    """Грузополучатели пронумерованы, как в образце: «Грузополучатель №N»."""
+def test_no_old_shipper_name_placeholders(template_doc, carrier_type):
+    """Прежних {{shipper_N_name}} в бланке нет: грузоотправитель один."""
+    text = _document_text(template_doc)
+    leftovers = [
+        f"{{{{shipper_{number}_name}}}}"
+        for number in range(1, MAX_POINTS + 1)
+        if f"{{{{shipper_{number}_name}}}}" in text
+    ]
+    assert not leftovers, f"в бланке остались старые плейсхолдеры: {leftovers}"
+    assert "{{shipper_name}}" in text, "нет нового плейсхолдера грузоотправителя"
+
+
+def test_consignee_blocks_are_still_numbered(template_doc, carrier_type):
+    """Раздел 2 не изменился: 10 пронумерованных пар грузополучателей."""
     texts = _body_texts(template_doc)
     for number in range(1, MAX_POINTS + 1):
         assert f"Грузополучатель №{number}: {{{{consignee_{number}_name}}}}" in texts

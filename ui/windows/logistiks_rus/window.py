@@ -20,12 +20,13 @@ ui/windows/base_window.py. Здесь — только то, что у этог�
   * «Очистить форму»: чистит ТОЛЬКО ту вкладку, из которой пришёл сигнал.
 
 Раскладка ответа модели — своя у каждого типа. Промпт Логистикс Рус
-(core/prompts/logistiks_rus.py) отдаёт блоки customer / shippers /
-consignees / vehicles / tractor / trailer / driver / contract, а вкладки
-ждут СВОИ имена полей (см. docstring ui/windows/logistiks_rus/data.py).
-Перекладывают блоки в ключи вкладок методы _*_tab_data: окно не лезет во
-внутренности вкладок и не повторяет раскладку сборщика данных — оно
-только передаёт вкладке словарь с теми именами, которые та читает.
+(core/prompts/logistiks_rus.py) отдаёт блоки customer / shipper_name /
+loading_addresses / consignees / vehicles / tractor / trailer / driver /
+contract, а вкладки ждут СВОИ имена полей (см. docstring
+ui/windows/logistiks_rus/data.py). Перекладывают блоки в ключи вкладок
+методы _*_tab_data: окно не лезет во внутренности вкладок и не повторяет
+раскладку сборщика данных — оно только передаёт вкладке словарь с теми
+именами, которые та читает.
 
 Две особенности, которые легко потерять при правках:
 
@@ -43,7 +44,7 @@ consignees / vehicles / tractor / trailer / driver / contract, а вкладки
 import logging
 import os
 from functools import partial
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from PyQt5.QtCore import QObject, QRunnable, QSize, QThreadPool, pyqtSignal
 from PyQt5.QtWidgets import QMainWindow, QMessageBox, QWidget
@@ -174,11 +175,13 @@ class LogistiksRusWindow(BaseContractWindow):
     }
 
     #: Разделы ответа модели и подписи для debug-лога.
-    #: Списки (shippers / consignees / vehicles) считаются по количеству
-    #: записей, блоки (customer / tractor / ...) — по заполненным полям.
+    #: Списки (loading_addresses / consignees / vehicles) считаются по
+    #: количеству записей, блоки (customer / tractor / shipper_name / ...) —
+    #: по заполненным полям.
     _RECOGNITION_SECTIONS = (
         ("customer", "заказчик"),
-        ("shippers", "грузоотправители"),
+        ("shipper_name", "грузоотправитель"),
+        ("loading_addresses", "адреса погрузки"),
         ("consignees", "грузополучатели"),
         ("vehicles", "перевозимые автомобили"),
         ("tractor", "тягач"),
@@ -688,6 +691,15 @@ class LogistiksRusWindow(BaseContractWindow):
                     missing.append(title)
                 continue
 
+            if isinstance(value, str):
+                # Строковое поле (shipper_name): значение в лог не пишем —
+                # только факт «распознано / нет».
+                if value.strip():
+                    recognized.append(f"{title}: да")
+                else:
+                    missing.append(title)
+                continue
+
             if isinstance(value, dict) and filled_only(value):
                 recognized.append(f"{title}: {filled_fields_summary(value)}")
             else:
@@ -746,35 +758,63 @@ class LogistiksRusWindow(BaseContractWindow):
         rows = filled_only_list(section)
         return {"vehicles": rows} if rows else {}
 
-    @classmethod
-    def _route_tab_data(cls, shippers: Any, consignees: Any,
-                        contract: Any) -> Dict[str, Any]:
+    @staticmethod
+    def _address_lines(items: Any) -> List[str]:
         """
-        Блоки «shippers» / «consignees» + план из «contract» → вкладка «Маршрут».
+        Адреса погрузки из ответа модели — списком непустых строк.
 
-        Точки отдаются массивами shippers / consignees (как их читает
-        RouteTab.fill_data), а дата и окно времени у раздела общие: в ответе
-        они лежат в блоке contract (loading_date, loading_time_from, ...).
-        Пустой список точек в словарь не попадает — вкладка не должна
-        очищать введённое вручную.
+        Схема промпта отдаёт loading_addresses массивом СТРОК (не словарей),
+        поэтому общий filled_only_list здесь не подходит: он оставляет только
+        словари с заполненными полями. Пустые строки и мусор отбрасываются:
+        распознавание, не нашедшее адресов, не должно стирать ручной ввод.
         """
-        plan = filled_only(contract)
+        if not isinstance(items, (list, tuple)):
+            return []
+        return [
+            str(item).strip()
+            for item in items
+            if item is not None and str(item).strip()
+        ]
+
+    @classmethod
+    def _route_tab_data(cls, answer: Any) -> Dict[str, Any]:
+        """Блоки «shipper_name» / «loading_addresses» / «consignees» + план
+        из «contract» → вкладка «Маршрут». Принимает и старый формат
+        (массив shippers), и новый."""
+        answer = answer if isinstance(answer, Mapping) else {}
+        plan = filled_only(answer.get("contract")) or {}
 
         data: Dict[str, Any] = {}
 
         route = str(plan.get("route") or "").strip()
         if route:
             data["route"] = route
-
         for key in cls._ROUTE_PLAN_KEYS:
             value = plan.get(key)
             if value not in (None, ""):
                 data[key] = value
 
-        for key, source in (("shippers", shippers), ("consignees", consignees)):
-            points = filled_only_list(source)
-            if points:
-                data[key] = points
+        shipper_name = str(answer.get("shipper_name") or "").strip()
+        if shipper_name:
+            data["shipper_name"] = shipper_name
+
+        addresses = cls._address_lines(answer.get("loading_addresses"))
+        if addresses:
+            data["loading_addresses"] = addresses
+
+        if "shipper_name" not in data and "loading_addresses" not in data:
+            old = filled_only_list(answer.get("shippers"))
+            if old:
+                names = [s.get("name", "") for s in old if s.get("name")]
+                addresses = [s.get("address", "") for s in old if s.get("address")]
+                if names:
+                    data["shipper_name"] = str(names[0]).strip()
+                if addresses:
+                    data["loading_addresses"] = [str(a).strip() for a in addresses]
+
+        consignees = filled_only_list(answer.get("consignees"))
+        if consignees:
+            data["consignees"] = consignees
 
         return data
 
@@ -906,9 +946,9 @@ class LogistiksRusWindow(BaseContractWindow):
             len(data["vehicles"]),
         )
 
-    def _fill_route(self, shippers: Any, consignees: Any, contract: Any) -> None:
-        """Точки маршрута и план погрузки/выгрузки."""
-        data = self._route_tab_data(shippers, consignees, contract)
+    def _fill_route(self, answer: Any) -> None:
+        """Грузоотправитель, адреса погрузки, грузополучатели и план."""
+        data = self._route_tab_data(answer)
         if not data:
             logger.info("Логистикс Рус: маршрут не распознан — оставляем как есть")
             return
@@ -964,7 +1004,7 @@ class LogistiksRusWindow(BaseContractWindow):
             contract = data.get("contract")
             self._fill_customer(data.get("customer"), contract)
             self._fill_cargo(data.get("vehicles"))
-            self._fill_route(data.get("shippers"), data.get("consignees"), contract)
+            self._fill_route(data)
             self._fill_driver(data.get("driver"))
             self._fill_vehicle({
                 "tractor": data.get("tractor"),

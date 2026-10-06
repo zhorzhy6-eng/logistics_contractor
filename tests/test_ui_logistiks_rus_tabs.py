@@ -28,7 +28,7 @@ from PyQt5.QtCore import QDate, QTime  # noqa: E402
 from PyQt5.QtTest import QSignalSpy  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QApplication, QComboBox, QDoubleSpinBox, QFrame, QLineEdit, QMessageBox,
-    QPushButton, QTableWidget, QWidget,
+    QPushButton, QTableWidget, QTableWidgetItem, QWidget,
 )
 
 from core.contract_data import ContractData  # noqa: E402
@@ -73,7 +73,7 @@ EXPECTED_KEYS = {
     CustomerTab: {"number", "date", "name"},
     CargoTab: {"vehicles"},
     RouteTab: {
-        "route", "shippers", "consignees",
+        "route", "shipper_name", "loading_addresses", "consignees",
         "loading_date", "loading_time_from", "loading_time_to",
         "unloading_date", "unloading_time_from", "unloading_time_to",
     },
@@ -99,9 +99,11 @@ SAMPLE_DATA = {
     },
     RouteTab: {
         "route": "Москва - Казань",
-        "shippers": [
-            {"name": "ООО «Склад Север»",
-             "address": "г. Москва, ул. Складская, д. 1"},
+        # Раздел 1: ОДИН грузоотправитель и список адресов погрузки.
+        "shipper_name": "ООО «ВОТУР МОТОР РУС»",
+        "loading_addresses": [
+            "г. Москва, ул. Складская, д. 1",
+            "г. Москва, ул. Южная, д. 2",
         ],
         "consignees": [
             {"name": "ООО «Приёмка»", "address": "г. Казань, ул. Приёмная, д. 3"},
@@ -130,9 +132,10 @@ SAMPLE_DATA = {
 
 #: Поля-значения по умолчанию: их clear() не обнуляет, а возвращает к норме.
 #: Даты показывают сегодняшний день (выгрузка — с запасом в несколько дней),
-#: время — окно из бланка, ставка НДС — 22%.
+#: время — окно из бланка, ставка НДС — 22%, грузоотправитель — постоянный
+#: контрагент этого типа заявки.
 DEFAULT_VALUE_KEYS = {
-    "date", "name", "loading_date", "unloading_date",
+    "date", "name", "shipper_name", "loading_date", "unloading_date",
     "loading_time_from", "loading_time_to",
     "unloading_time_from", "unloading_time_to",
     "carrier_type", "vat_rate", "vat_rate_num",
@@ -279,7 +282,13 @@ def test_clear_returns_fresh_state(qt_app, tab):
 
 
 def test_clear_empties_text_fields(tab):
-    """Текстовые поля вкладки после clear() пусты (кроме значений по умолчанию)."""
+    """
+    Текстовые поля вкладки после clear() пусты — кроме значений по умолчанию.
+
+    Грузоотправитель в этот список входит осознанно: он в этом типе заявки
+    постоянный (DEFAULT_SHIPPER_NAME), и clear() возвращает его, а не пустую
+    строку — иначе после «Очистить форму» заявка осталась бы без стороны.
+    """
     tab.fill_data(SAMPLE_DATA[type(tab)])
     tab.clear()
 
@@ -530,25 +539,44 @@ def test_cargo_clear_returns_min_rows(qt_app):
 # «Маршрут»
 # ─────────────────────────────────────────────────────────────
 
-def test_route_tables_have_two_columns(qt_app):
+def test_route_consignees_table_has_two_columns(qt_app):
     tab = RouteTab()
 
-    for table in (tab.shippers_table, tab.consignees_table):
-        assert isinstance(table, QTableWidget)
-        assert table.columnCount() == 2
-        headers = [
-            table.horizontalHeaderItem(i).text()
-            for i in range(table.columnCount())
-        ]
-        assert headers == ["Наименование", "Адрес"]
+    table = tab.consignees_table
+    assert isinstance(table, QTableWidget)
+    assert table.columnCount() == 2
+    headers = [
+        table.horizontalHeaderItem(i).text()
+        for i in range(table.columnCount())
+    ]
+    assert headers == ["Наименование", "Адрес"]
+
+
+def test_route_loading_addresses_table_has_one_column(qt_app):
+    """Адреса погрузки — одна колонка: наименования у них нет."""
+    tab = RouteTab()
+
+    table = tab.loading_addresses_table
+    assert isinstance(table, QTableWidget)
+    assert table.columnCount() == 1
+    assert table.horizontalHeaderItem(0).text() == "Адрес погрузки"
+
+
+def test_route_has_single_shipper_field(qt_app):
+    """Грузоотправитель — ОДНО поле с постоянным контрагентом, а не таблица."""
+    tab = RouteTab()
+
+    assert tab.shipper_name.text() == route_tab_module.DEFAULT_SHIPPER_NAME
+    assert tab.shipper_name.is_required()
+    assert not hasattr(tab, "shippers_table")
 
 
 def test_route_tables_start_with_one_row(qt_app):
     tab = RouteTab()
 
-    assert tab.shippers_table.rowCount() == route_tab_module.MIN_ROWS == 1
+    assert tab.loading_addresses_table.rowCount() == route_tab_module.MIN_ROWS == 1
     assert tab.consignees_table.rowCount() == route_tab_module.MIN_ROWS == 1
-    assert tab.get_data()["shippers"] == []
+    assert tab.get_data()["loading_addresses"] == []
     assert tab.get_data()["consignees"] == []
 
 
@@ -572,20 +600,31 @@ def test_route_fill_and_read_back(qt_app):
     assert data["unloading_time_to"] == "18:00"
 
 
-def test_route_shippers_and_consignees_carry_name_and_address(qt_app):
+def test_route_shipper_name_and_loading_addresses(qt_app):
     tab = RouteTab()
 
     tab.fill_data(SAMPLE_DATA[RouteTab])
     data = tab.get_data()
 
-    assert data["shippers"] == [
-        {"name": "ООО «Склад Север»", "address": "г. Москва, ул. Складская, д. 1"},
+    assert data["shipper_name"] == "ООО «ВОТУР МОТОР РУС»"
+    assert data["loading_addresses"] == [
+        "г. Москва, ул. Складская, д. 1",
+        "г. Москва, ул. Южная, д. 2",
     ]
+    assert tab.loading_addresses_table.rowCount() == 2
+
+
+def test_route_consignees_carry_name_and_address(qt_app):
+    tab = RouteTab()
+
+    tab.fill_data(SAMPLE_DATA[RouteTab])
+    data = tab.get_data()
+
     assert data["consignees"] == [
         {"name": "ООО «Приёмка»", "address": "г. Казань, ул. Приёмная, д. 3"},
     ]
     # Ключи точки — ровно те, что читает сборка данных.
-    assert set(data["shippers"][0]) == {"name", "address"}
+    assert set(data["consignees"][0]) == {"name", "address"}
 
 
 def test_route_empty_rows_are_not_returned(qt_app):
@@ -593,30 +632,54 @@ def test_route_empty_rows_are_not_returned(qt_app):
     tab = RouteTab()
     tab.fill_data(SAMPLE_DATA[RouteTab])
 
-    tab.btn_add_shipper.click()
+    tab.btn_add_loading_address.click()
     tab.btn_add_consignee.click()
 
-    assert len(tab.get_data()["shippers"]) == 1
+    assert len(tab.get_data()["loading_addresses"]) == 2
     assert len(tab.get_data()["consignees"]) == 1
 
 
-def test_route_row_with_address_only_is_kept(qt_app):
-    """Наименование может не распознаться: адрес всё равно данные."""
+def test_route_loading_addresses_are_squeezed(qt_app):
+    """Пустая строка адреса не съедает номер: в бланке нумерация по порядку."""
     tab = RouteTab()
-    tab.fill_data({"shippers": [{"name": "", "address": "г. Москва, ул. Южная, д. 2"}]})
+    tab.fill_data({"loading_addresses": [
+        "г. Москва, ул. Первая, д. 1",
+        "   ",
+        "г. Москва, ул. Третья, д. 3",
+    ]})
 
-    assert tab.get_data()["shippers"] == [
-        {"name": "", "address": "г. Москва, ул. Южная, д. 2"},
+    data = tab.get_data()
+
+    assert data["loading_addresses"] == [
+        "г. Москва, ул. Первая, д. 1",
+        "г. Москва, ул. Третья, д. 3",
+    ]
+
+
+def test_route_old_shippers_array_is_accepted(qt_app):
+    """Старый формат ответа (массив shippers) раскладывается в новое поле."""
+    tab = RouteTab()
+
+    tab.fill_data({"shippers": [
+        {"name": "ООО «Склад Север»", "address": "г. Москва, ул. Складская, д. 1"},
+        {"name": "ООО «Склад Юг»", "address": "г. Москва, ул. Южная, д. 2"},
+    ]})
+
+    data = tab.get_data()
+    assert data["shipper_name"] == "ООО «Склад Север»"
+    assert data["loading_addresses"] == [
+        "г. Москва, ул. Складская, д. 1",
+        "г. Москва, ул. Южная, д. 2",
     ]
 
 
 def test_route_add_row_in_both_tables(qt_app):
     tab = RouteTab()
 
-    tab.btn_add_shipper.click()
+    tab.btn_add_loading_address.click()
     tab.btn_add_consignee.click()
 
-    assert tab.shippers_table.rowCount() == 2
+    assert tab.loading_addresses_table.rowCount() == 2
     assert tab.consignees_table.rowCount() == 2
 
 
@@ -624,50 +687,47 @@ def test_route_add_row_stops_at_max_points(qt_app, quiet_dialogs):
     tab = RouteTab()
 
     for _ in range(data_module.MAX_POINTS + 3):
-        tab.btn_add_shipper.click()
+        tab.btn_add_loading_address.click()
         tab.btn_add_consignee.click()
 
-    assert tab.shippers_table.rowCount() == data_module.MAX_POINTS
+    assert tab.loading_addresses_table.rowCount() == data_module.MAX_POINTS
     assert tab.consignees_table.rowCount() == data_module.MAX_POINTS
 
 
 def test_route_remove_row_in_both_tables(qt_app, quiet_dialogs):
     tab = RouteTab()
     tab.fill_data(SAMPLE_DATA[RouteTab])
-    tab.btn_add_shipper.click()
+    tab.btn_add_loading_address.click()
     tab.btn_add_consignee.click()
 
-    tab.shippers_table.setCurrentCell(1, 0)
-    tab.btn_remove_shipper.click()
+    tab.loading_addresses_table.setCurrentCell(1, 0)
+    tab.btn_remove_loading_address.click()
     tab.consignees_table.setCurrentCell(1, 0)
     tab.btn_remove_consignee.click()
 
-    assert tab.shippers_table.rowCount() == 1
+    assert tab.loading_addresses_table.rowCount() == 2
     assert tab.consignees_table.rowCount() == 1
 
 
 def test_route_last_row_cannot_be_removed(qt_app, quiet_dialogs):
     """Последняя строка остаётся: пустая таблица точку не печатает."""
     tab = RouteTab()
-    tab.shippers_table.setCurrentCell(0, 0)
+    tab.loading_addresses_table.setCurrentCell(0, 0)
 
-    tab.btn_remove_shipper.click()
+    tab.btn_remove_loading_address.click()
 
-    assert tab.shippers_table.rowCount() == 1
+    assert tab.loading_addresses_table.rowCount() == 1
 
 
 def test_route_fill_over_limit_is_truncated(qt_app):
-    """Точек больше 10 в бланк не помещается: лишние отбрасываются."""
+    """Адресов больше 10 в бланк не помещается: лишние отбрасываются."""
     tab = RouteTab()
-    shippers = [
-        {"name": f"Склад {i}", "address": f"г. Москва, ул. Складская, д. {i}"}
-        for i in range(15)
-    ]
+    addresses = [f"г. Москва, ул. Складская, д. {i}" for i in range(15)]
 
-    tab.fill_data({"shippers": shippers})
+    tab.fill_data({"loading_addresses": addresses})
 
-    assert tab.shippers_table.rowCount() == data_module.MAX_POINTS
-    assert tab.get_data()["shippers"][0]["name"] == "Склад 0"
+    assert tab.loading_addresses_table.rowCount() == data_module.MAX_POINTS
+    assert tab.get_data()["loading_addresses"][0] == "г. Москва, ул. Складская, д. 0"
 
 
 def test_route_empty_points_list_keeps_manual_input(qt_app):
@@ -675,10 +735,195 @@ def test_route_empty_points_list_keeps_manual_input(qt_app):
     tab = RouteTab()
     tab.fill_data(SAMPLE_DATA[RouteTab])
 
-    tab.fill_data({"shippers": [], "consignees": []})
+    tab.fill_data({"loading_addresses": [], "consignees": []})
 
-    assert len(tab.get_data()["shippers"]) == 1
+    assert len(tab.get_data()["loading_addresses"]) == 2
     assert len(tab.get_data()["consignees"]) == 1
+
+
+# ─────────────────────────────────────────────────────────────
+# Подтягивание из справочника (часть D)
+# ─────────────────────────────────────────────────────────────
+
+#: Что «вернул» диалог справочника: запись салона целиком.
+SALON_RECORD = {
+    "address": "г. Москва, ул. Складская, д. 8",
+    "date": "",
+    "time_window": "",
+    "salon_name": 'ООО "КАР АЦ"',
+    "salon_code": "JMR-A048",
+    "salon_inn": "7701234567",
+    "salon_city": "Москва",
+}
+
+
+@pytest.fixture
+def fake_book(monkeypatch):
+    """
+    Подменяет AddressBookDialog: запоминает point_type и отдаёт запись салона.
+
+    Диалог импортируется ВНУТРИ слота, поэтому подменяется класс в его
+    модуле (ui.address_book_dialog), а не ссылка в route_tab.
+    """
+    import ui.address_book_dialog as book_module
+
+    calls = {"point_type": None, "count": 0}
+    state = {"accepted": True, "selected": dict(SALON_RECORD)}
+
+    class FakeAddressBookDialog:
+        def __init__(self, point_type, parent=None):
+            calls["point_type"] = point_type
+            calls["count"] += 1
+            self.selected_address = dict(state["selected"])
+
+        def exec_(self):
+            return 1 if state["accepted"] else 0
+
+    monkeypatch.setattr(book_module, "AddressBookDialog", FakeAddressBookDialog)
+    return {"calls": calls, "state": state}
+
+
+def test_route_has_book_buttons(qt_app):
+    """У адресов погрузки и грузополучателей есть кнопка «Из справочника»."""
+    tab = RouteTab()
+
+    for button in (tab.btn_book_loading, tab.btn_book_consignee):
+        assert isinstance(button, QPushButton)
+        assert button.text() == "Из справочника"
+
+
+def test_resolve_target_row_uses_current_empty_row(qt_app):
+    tab = RouteTab()
+    table = tab.consignees_table
+
+    assert tab._resolve_target_row(table) == 0
+    assert table.rowCount() == 1, "лишняя строка не создана"
+
+
+def test_resolve_target_row_uses_first_empty_row(qt_app):
+    tab = RouteTab()
+    table = tab.consignees_table
+    tab.fill_data({"consignees": [{"name": "ООО «Приёмка»", "address": "адрес"}]})
+    tab.btn_add_consignee.click()
+
+    assert tab._resolve_target_row(table) == 1
+
+
+def test_resolve_target_row_adds_row_when_full(qt_app):
+    tab = RouteTab()
+    table = tab.consignees_table
+    table.setRowCount(0)
+    for number in range(3):
+        table.insertRow(number)
+        tab._init_point_row(table, number)
+        table.setItem(number, route_tab_module.COL_NAME,
+                      QTableWidgetItem(f"ООО «Приёмка {number}»"))
+        table.setItem(number, route_tab_module.COL_ADDRESS,
+                      QTableWidgetItem(f"адрес {number}"))
+
+    assert tab._resolve_target_row(table) == 3
+    assert table.rowCount() == 4
+
+
+def test_resolve_target_row_warns_at_max_points(qt_app, monkeypatch):
+    tab = RouteTab()
+    table = tab.loading_addresses_table
+    table.setRowCount(0)
+    for number in range(data_module.MAX_POINTS):
+        table.insertRow(number)
+        tab._init_loading_address_row(table, number)
+        table.setItem(number, route_tab_module.COL_LOADING_ADDRESS,
+                      QTableWidgetItem(f"адрес {number}"))
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append(args[2])),
+    )
+
+    assert tab._resolve_target_row(table) == -1
+    assert table.rowCount() == data_module.MAX_POINTS
+    assert warnings and "свободной строки нет" in warnings[0]
+
+
+def test_book_loading_fills_address(qt_app, fake_book):
+    """Адрес погрузки из справочника попадает в пустую строку таблицы."""
+    tab = RouteTab()
+
+    tab.btn_book_loading.click()
+
+    assert fake_book["calls"]["point_type"] == "loading"
+    assert tab.get_data()["loading_addresses"] == [SALON_RECORD["address"]]
+    assert tab.loading_addresses_table.currentRow() == 0
+
+
+def test_book_loading_goes_to_next_free_row(qt_app, fake_book):
+    tab = RouteTab()
+    tab.fill_data({"loading_addresses": ["г. Москва, ул. Первая, д. 1"]})
+
+    tab.btn_book_loading.click()
+
+    assert tab.get_data()["loading_addresses"] == [
+        "г. Москва, ул. Первая, д. 1", SALON_RECORD["address"],
+    ]
+
+
+def test_book_loading_cancelled_changes_nothing(qt_app, fake_book):
+    fake_book["state"]["accepted"] = False
+    tab = RouteTab()
+
+    tab.btn_book_loading.click()
+
+    assert tab.get_data()["loading_addresses"] == []
+    assert fake_book["calls"]["count"] == 1
+
+
+def test_book_consignee_fills_name_and_address(qt_app, fake_book):
+    """У грузополучателя из справочника берутся и наименование, и адрес."""
+    tab = RouteTab()
+
+    tab.btn_book_consignee.click()
+
+    assert fake_book["calls"]["point_type"] == "unloading"
+    assert tab.get_data()["consignees"] == [
+        {"name": SALON_RECORD["salon_name"], "address": SALON_RECORD["address"]},
+    ]
+
+
+def test_book_consignee_keeps_existing_rows(qt_app, fake_book):
+    tab = RouteTab()
+    tab.fill_data({"consignees": [
+        {"name": "ООО «Приёмка»", "address": "г. Казань, ул. Приёмная, д. 3"},
+    ]})
+
+    tab.btn_book_consignee.click()
+
+    assert tab.get_data()["consignees"] == [
+        {"name": "ООО «Приёмка»", "address": "г. Казань, ул. Приёмная, д. 3"},
+        {"name": SALON_RECORD["salon_name"], "address": SALON_RECORD["address"]},
+    ]
+
+
+def test_book_consignee_without_salon_name_keeps_address(qt_app, fake_book):
+    """Запись справочника без «Юр. Лица» даёт адрес и пустое наименование."""
+    fake_book["state"]["selected"] = {"address": "г. Тверь, ул. Новая, д. 1"}
+    tab = RouteTab()
+
+    tab.btn_book_consignee.click()
+
+    assert tab.get_data()["consignees"] == [
+        {"name": "", "address": "г. Тверь, ул. Новая, д. 1"},
+    ]
+
+
+def test_book_consignee_cancelled_changes_nothing(qt_app, fake_book):
+    fake_book["state"]["accepted"] = False
+    tab = RouteTab()
+
+    tab.btn_book_consignee.click()
+
+    assert tab.get_data()["consignees"] == []
+    assert fake_book["calls"]["count"] == 1
 
 
 def test_route_default_times(qt_app):
@@ -718,9 +963,10 @@ def test_route_clear_resets_tables_and_plan(qt_app):
     data = tab.get_data()
 
     assert data["route"] == ""
-    assert data["shippers"] == []
+    assert data["shipper_name"] == route_tab_module.DEFAULT_SHIPPER_NAME
+    assert data["loading_addresses"] == []
     assert data["consignees"] == []
-    assert tab.shippers_table.rowCount() == 1
+    assert tab.loading_addresses_table.rowCount() == 1
     assert tab.consignees_table.rowCount() == 1
     assert data["loading_date"] == QDate.currentDate().toString("yyyy-MM-dd")
     assert data["loading_time_from"] == "08:00"
@@ -1035,10 +1281,14 @@ def test_tabs_data_maps_expected_fields(filled_tabs):
     assert cd.trailer == {"brand_model": "KRONE SD", "plate_number": "ВК123478"}
     assert len(cd.vehicles) == 1
 
-    # Точки маршрута: наименование, адрес и общее окно времени раздела.
-    assert cd.contract["loadings"][0]["name"] == "ООО «Склад Север»"
+    # Точки маршрута: грузоотправитель ОДИН, адреса погрузки — по порядку
+    # таблицы, окно времени у раздела общее.
+    assert len(cd.contract["loadings"]) == 2
+    assert cd.contract["loadings"][0]["name"] == "ООО «ВОТУР МОТОР РУС»"
     assert cd.contract["loadings"][0]["address"] == "г. Москва, ул. Складская, д. 1"
     assert cd.contract["loadings"][0]["time_window"] == "08:00-20:00"
+    assert cd.contract["loadings"][1]["name"] == "ООО «ВОТУР МОТОР РУС»"
+    assert cd.contract["loadings"][1]["address"] == "г. Москва, ул. Южная, д. 2"
     assert cd.contract["unloadings"][0]["name"] == "ООО «Приёмка»"
     assert cd.contract["unloadings"][0]["time_window"] == "09:00-18:00"
 

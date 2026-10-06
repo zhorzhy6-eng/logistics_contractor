@@ -21,9 +21,10 @@
 
 Чем ещё этот тип отличается от Формики (core/contracts/formika/generator.py):
 
-  * раздел 1 «Погрузка» и раздел 2 «Выгрузка» — до 10 блоков
-    «Грузоотправитель/Адрес погрузки» и «Грузополучатель №N/Адрес выгрузки»:
-    незаполненные блоки удаляет постобработка
+  * раздел 1 «Погрузка» — ОДИН грузоотправитель («Грузоотправитель: …»)
+    и до 10 нумерованных адресов погрузки («Адрес погрузки №N: …»);
+    раздел 2 «Выгрузка» — до 10 блоков «Грузополучатель №N / Адрес
+    выгрузки»: незаполненные строки удаляет постобработка
     (RemoveEmptyShipperConsigneeBlocksStep);
   * таблица автомобилей на 12 машин с шапкой «№ / Марка, модель /
     VIN-номер» (запятая, не слэш) — лишние строки удаляет
@@ -31,7 +32,7 @@
   * реквизитов сторон, банковских полей и паспорта водителя в бланке нет:
     только наименование заказчика, автовоз, водитель и стоимость.
 
-О названиях грузоотправителей и грузополучателей. ContractData хранит точки
+О названиях грузоотправителя и грузополучателей. ContractData хранит точки
 маршрута как {address, date, time_window} — поле name при приведении данных
 отбрасывается (core.contract_data._as_point_list). Поэтому название блока
 генератор берёт из точек в том виде, в каком они пришли:
@@ -41,6 +42,9 @@
     ContractData.contract без изменений;
   * исходный словарь (data["loadings"] / data["unloadings"]) — работает при
     прямом вызове build_replacements()/_build_replacements_map().
+
+Имя грузоотправителя берётся из ПЕРВОЙ точки погрузки (в заявке он один,
+поэтому имя у всех точек одно), а адреса — из всех точек по порядку.
 
 Если точки переданы только на верхнем уровне ({"loadings": [...]}), то по
 пути generate() до бланка доживают лишь адреса: name теряется в coerce.
@@ -83,9 +87,17 @@ CARGO_TABLE_BRAND_HEADERS = ("Марка, модель",)
 CARGO_TABLE_VIN_HEADER = "VIN-номер"
 
 #: Метки абзацев-блоков погрузки и выгрузки. По ним постобработка находит
-#: блоки с незаполненными значениями (см. _remove_empty_point_blocks).
+#: строки с незаполненными значениями (см. _remove_empty_point_blocks).
+#:
+#: Раздел 1: грузоотправитель ОДИН («Грузоотправитель: {{shipper_name}}»),
+#: а адресов погрузки до 10 и они нумерованы («Адрес погрузки №N:»).
+#: SHIPPER_NAME_RE оставлена как справка об исторической метке (до FIX-2.2
+#: в бланке было 10 пар «грузоотправитель + адрес») и НЕ применяется:
+#: значение этой строки непусто по построению, удалять её нельзя.
 SHIPPER_NAME_RE = re.compile(r"^Грузоотправитель\s*:\s*(?P<value>.*)$")
-SHIPPER_ADDRESS_RE = re.compile(r"^Адрес\s+погрузки\s*:\s*(?P<value>.*)$")
+SHIPPER_ADDRESS_RE = re.compile(
+    r"^Адрес\s+погрузки\s*№\s*\d+\s*:\s*(?P<value>.*)$"
+)
 CONSIGNEE_NAME_RE = re.compile(r"^Грузополучатель\s*№\s*\d+\s*:\s*(?P<value>.*)$")
 CONSIGNEE_ADDRESS_RE = re.compile(r"^Адрес\s+выгрузки\s*:\s*(?P<value>.*)$")
 
@@ -235,30 +247,51 @@ class LogistiksRusGenerator(BaseContractGenerator):
 
     def _remove_empty_point_blocks(self, doc) -> None:
         """
-        Убирает блоки грузоотправителей и грузополучателей без данных.
+        Убирает незаполненные строки грузоотправителей и грузополучателей.
 
-        В бланке по 10 блоков погрузки и выгрузки, а точек в заявке может
-        быть меньше: строки сверх фактического числа остаются в документе с
-        пустыми значениями («Грузоотправитель:»). Блок (пара абзацев
-        «название + адрес») удаляется, только если ПУСТЫ обе его строки:
-        блок, заполненный хотя бы одной из них, сохраняется — данные не
-        теряем.
+        Раздел 1: грузоотправитель один, а адресов погрузки в бланке 10 —
+        лишние строки «Адрес погрузки №N:» удаляются поодиночке. Метка
+        «Грузоотправитель:» не удаляется никогда: её значение непусто
+        по построению.
 
-        Просматриваются абзацы верхнего уровня: в бланке блоки погрузки и
-        выгрузки — обычные абзацы, а не строки таблицы.
+        Раздел 2: блок грузополучателя — пара абзацев «название + адрес»;
+        блок удаляется, только если ПУСТЫ обе его строки: блок, заполненный
+        хотя бы одной из них, сохраняется — данные не теряем.
+
+        Просматриваются абзацы верхнего уровня: в бланке обе части —
+        обычные абзацы, а не строки таблицы.
         """
-        removed = 0
-        for name_re, address_re in (
-            (SHIPPER_NAME_RE, SHIPPER_ADDRESS_RE),
-            (CONSIGNEE_NAME_RE, CONSIGNEE_ADDRESS_RE),
-        ):
-            removed += self._remove_empty_blocks_of_kind(doc, name_re, address_re)
+        # Грузополучатели: как было — пары.
+        removed_consignees = self._remove_empty_blocks_of_kind(
+            doc, CONSIGNEE_NAME_RE, CONSIGNEE_ADDRESS_RE,
+        )
 
+        # Грузоотправители: одиночные строки адресов.
+        removed_addresses = self._remove_empty_shipper_addresses(doc)
+
+        removed = removed_consignees + removed_addresses
         if removed:
             logger.info(
                 f"{TITLE}: удалено пустых блоков грузоотправителей и "
                 f"грузополучателей: {removed}"
             )
+
+    def _remove_empty_shipper_addresses(self, doc) -> int:
+        """Удаляет одиночные абзацы «Адрес погрузки №N:» с пустым
+        значением. Метка «Грузоотправитель:» не удаляется никогда —
+        её значение не пустое по построению."""
+        count = 0
+        for paragraph in list(doc.paragraphs):
+            if self._paragraph_is_deleted(paragraph):
+                continue
+            match = SHIPPER_ADDRESS_RE.match(self._paragraph_text(paragraph))
+            if match is None:
+                continue
+            if match.group("value").strip():
+                continue
+            self._delete_paragraph(paragraph)
+            count += 1
+        return count
 
     def _remove_empty_blocks_of_kind(self, doc, name_re, address_re) -> int:
         """
@@ -397,8 +430,29 @@ class LogistiksRusGenerator(BaseContractGenerator):
     def _fill_shippers(
         self, replacements: Dict[str, str], loadings: List[Dict[str, Any]]
     ) -> None:
-        """Раздел 1: до 10 блоков «грузоотправитель + адрес погрузки»."""
-        self._fill_points(replacements, loadings, "shipper")
+        """Раздел 1: ОДИН грузоотправитель + N адресов погрузки."""
+        if len(loadings) > MAX_POINTS:
+            logger.warning(
+                f"{TITLE}: адресов погрузки {len(loadings)}, в бланк "
+                f"помещается {MAX_POINTS} — лишние не выводятся"
+            )
+
+        # Имя — из первой точки (все точки с одним именем).
+        replacements["shipper_name"] = (
+            self._single_line(loadings[0].get("name") or "")
+            if loadings else ""
+        )
+
+        for number in range(1, MAX_POINTS + 1):
+            point = loadings[number - 1] if number <= len(loadings) else None
+            replacements[f"shipper_{number}_address"] = (
+                self._single_line(point.get("address") or "") if point else ""
+            )
+
+        logger.info(
+            f"{TITLE}: адресов погрузки выведено — "
+            f"{min(len(loadings), MAX_POINTS)}"
+        )
 
     def _fill_consignees(
         self, replacements: Dict[str, str], unloadings: List[Dict[str, Any]]
@@ -415,8 +469,10 @@ class LogistiksRusGenerator(BaseContractGenerator):
         """
         Блоки точек маршрута: <prefix>_N_name / <prefix>_N_address (N = 1..10).
 
-        Точек больше, чем блоков в бланке, — лишние не выводятся, в лог
-        уходит предупреждение с количеством (названий и адресов в логе нет).
+        Используется для грузополучателей (раздел 2): у них в бланке пара
+        строк «Грузополучатель №N: …» + «Адрес выгрузки: …». Точек больше,
+        чем блоков в бланке, — лишние не выводятся, в лог уходит
+        предупреждение с количеством (названий и адресов в логе нет).
         """
         if len(points) > MAX_POINTS:
             logger.warning(

@@ -21,7 +21,8 @@ ui/windows/formika/data.py.
                     contract.loading_time_from / _to,
                     contract.unloading_date,
                     contract.unloading_time_from / _to,
-                    loadings[*], unloadings[*]
+                    loadings[*] (из shipper_name + loading_addresses),
+                    unloadings[*]
     driver_tab    → driver.full_name (в этом бланке печатается только ФИО)
     vehicle_tab   → tractor.brand_model / plate_number,
                     trailer.brand_model / plate_number
@@ -46,10 +47,15 @@ ui/windows/formika/data.py.
        {address, date, time_window} для верхнеуровневой совместимости
        (name здесь теряется — так и задумано).
 
-2. ГРУЗООТПРАВИТЕЛИ И ГРУЗОПОЛУЧАТЕЛИ. Вкладка «Маршрут» отдаёт массивы
-   shippers: [{name, address}, ...] и consignees: [{name, address}, ...].
-   Сборщик раскладывает их в contract.loadings / contract.unloadings в
-   порядке массива, добавляя date / time_window из contract.*.
+2. ГРУЗООТПРАВИТЕЛЬ И ГРУЗОПОЛУЧАТЕЛИ. Раздел 1 заявки — ОДИН
+   грузоотправитель и список адресов погрузки: вкладка «Маршрут» отдаёт
+   поле shipper_name и массив loading_addresses (строки таблицы). Сборщик
+   раскладывает их в contract.loadings: имя из поля повторяется в каждой
+   точке, адреса идут по порядку. Грузополучатели приходят массивом
+   consignees: [{name, address}, …] и раскладываются в contract.unloadings.
+   В обе части добавляются date / time_window из contract.*. Старый массив
+   shippers (прежний формат вкладки и распознавания) принимается как
+   fallback.
 
 3. СУММЫ. Промпт распознавания (core/prompts/logistiks_rus.py) кладёт суммы
    в contract.sum_wo_vat / sum_vat / sum_total, а генератор читает
@@ -112,7 +118,7 @@ DEFAULT_VAT_RATE_NUM = 22.0
 #: Сколько машин помещается в таблицу заявки (см. LogistiksRusGenerator).
 MAX_CARS = 12
 
-#: Сколько блоков грузоотправителей и грузополучателей в бланке.
+#: Сколько адресов погрузки и блоков грузополучателей в бланке.
 MAX_POINTS = 10
 
 #: Заголовок точки маршрута в логе (сами названия в лог не идут).
@@ -391,13 +397,14 @@ def _build_cargo(tabs: Mapping[str, Any]) -> List[Dict[str, Any]]:
 
 def _route_points(data: Mapping[str, Any], source: str) -> List[Dict[str, Any]]:
     """
-    Точки маршрута с названиями: shippers / consignees → loadings / unloadings.
+    Точки маршрута с названиями: consignees → unloadings,
+    shippers → loadings (fallback старого формата вкладки).
 
     Название точки (name) обязательно для бланка: по нему печатается блок
-    «Грузоотправитель: …» / «Грузополучатель №N: …». Точка без адреса
-    и без названия в список не попадает; лишние точки (сверх 10) отсекаются —
-    блоков в бланке ровно 10. Дата и окно времени берутся из contract.*
-    вкладки «Маршрут»: у самих точек маршрута их нет.
+    «Грузополучатель №N: …». Точка без адреса и без названия в список не
+    попадает; лишние точки (сверх 10) отсекаются — блоков в бланке ровно
+    10. Дата и окно времени берутся из contract.* вкладки «Маршрут»:
+    у самих точек маршрута их нет.
     """
     raw_points = data.get(source)
     if not isinstance(raw_points, (list, tuple)):
@@ -447,10 +454,20 @@ def _build_route(tabs: Mapping[str, Any]) -> Dict[str, Any]:
     """
     Маршрут: направление, план погрузки/выгрузки и точки с названиями.
 
-    Возвращает четыре части: поля шапки (contract), точки погрузки, точки
-    выгрузки и те же точки в «сыром» виде — с name — для верхнеуровневых
-    loadings / unloadings. Точки без названия и без адреса отбрасываются,
-    порядок массива вкладки сохраняется.
+    Раздел 1 вкладки «Маршрут» — ОДНО поле «Грузоотправитель» (shipper_name)
+    и таблица адресов погрузки (loading_addresses, до 10 строк). В бланке
+    грузоотправитель тоже один, поэтому имя из поля идёт в КАЖДУЮ точку
+    погрузки, а адреса — по порядку строк таблицы: так точки получают
+    привычный генератору и валидатору вид [{name, address, date,
+    time_window}, …].
+
+    Старый массив shippers (формат прежних распознаваний и сохранённых
+    ответов) принимается как fallback: если нового формата нет, а массив
+    пришёл — собираем точки из него, как раньше.
+
+    Возвращает три части: поля шапки (contract), точки погрузки и точки
+    выгрузки. Точки без названия и без адреса отбрасываются, порядок
+    сохраняется.
     """
     data = _raw_data(tabs, "route")
     contract: Dict[str, Any] = {}
@@ -467,9 +484,42 @@ def _build_route(tabs: Mapping[str, Any]) -> Dict[str, Any]:
     ):
         _set_if_filled(contract, field, _field(data, field))
 
+    shipper_name = _field(data, "shipper_name")
+    loading_addresses = data.get("loading_addresses") or []
+    if not isinstance(loading_addresses, (list, tuple)):
+        loading_addresses = []
+
+    loadings: List[Dict[str, Any]] = []
+    for index, addr in enumerate(loading_addresses):
+        address = _field({"value": addr}, "value")
+        if not address:
+            continue
+        loadings.append({
+            "name": shipper_name,
+            "address": address,
+            "date": _field(data, "loading_date"),
+            "time_window": _time_window(
+                data.get("loading_time_from"),
+                data.get("loading_time_to"),
+            ),
+        })
+
+    if len(loadings) > MAX_POINTS:
+        logger.warning(
+            "Логистикс Рус: адресов погрузки %s, в бланк помещается %s — "
+            "лишние не выводятся",
+            len(loadings), MAX_POINTS,
+        )
+        loadings = loadings[:MAX_POINTS]
+
+    # Fallback: если новый формат пуст, а старый массив shippers пришёл
+    # (например, из старого распознавания) — принимаем его.
+    if not loadings:
+        loadings = _route_points(data, "shippers")
+
     return {
         "contract": contract,
-        "loadings": _route_points(data, "shippers"),
+        "loadings": loadings,
         "unloadings": _route_points(data, "consignees"),
     }
 

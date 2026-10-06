@@ -394,7 +394,7 @@ CLEAR_SPECS = (
     (0, "Заказчик", lambda tab: tab.get_data()["number"] == ""),
     (1, "Груз", lambda tab: tab.get_data()["vehicles"] == []),
     (2, "Маршрут", lambda tab: tab.get_data()["route"] == ""
-        and tab.get_data()["shippers"] == []),
+        and tab.get_data()["loading_addresses"] == []),
     (3, "Водитель", lambda tab: tab.get_data()["full_name"] == ""),
     (4, "ТС", lambda tab: not any(tab.get_data().values())),
     (5, "Стоимость", lambda tab: tab.get_data()["amount_without_vat"] == 0.0
@@ -917,8 +917,8 @@ def test_recognition_fills_tabs(window, quiet_messages):
     _answer_recognition(window, {
         "customer": {"full_name": "ООО «Новый заказчик»",
                      "short_name": "ООО «Новый заказчик»"},
-        "shippers": [{"name": "ООО «Склад 2»",
-                      "address": "г. Тверь, ул. Новая, д. 3"}],
+        "shipper_name": "ООО «Склад 2»",
+        "loading_addresses": ["г. Тверь, ул. Новая, д. 3"],
         "consignees": [{"name": "ООО «Клиент 2»",
                         "address": "г. Сочи, ул. Морская, д. 4"}],
         "vehicles": [{"brand_model": "МОДЕЛЬ X", "vin": "XTC651150N0009001"}],
@@ -947,10 +947,11 @@ def test_recognition_fills_tabs(window, quiet_messages):
         {"brand_model": "МОДЕЛЬ X", "vin": "XTC651150N0009001"}
     ]
 
-    # Маршрут: точки массивами, план — из блока contract.
+    # Маршрут: грузоотправитель и адреса погрузки — своими полями,
+    # план — из блока contract.
     route = window.route_tab.get_data()
-    assert route["shippers"] == [{"name": "ООО «Склад 2»",
-                                  "address": "г. Тверь, ул. Новая, д. 3"}]
+    assert route["shipper_name"] == "ООО «Склад 2»"
+    assert route["loading_addresses"] == ["г. Тверь, ул. Новая, д. 3"]
     assert route["consignees"] == [{"name": "ООО «Клиент 2»",
                                     "address": "г. Сочи, ул. Морская, д. 4"}]
     assert route["loading_date"] == "2026-10-02"
@@ -1006,7 +1007,8 @@ def test_recognition_does_not_overwrite_manual_input(window, quiet_messages):
     _answer_recognition(window, {
         # Модель вернула разделы целиком, но с пустыми строками и нулями.
         "customer": {"full_name": "", "short_name": ""},
-        "shippers": [{"name": "", "address": ""}],
+        "shipper_name": "",
+        "loading_addresses": ["", "   "],
         "consignees": [{"name": "", "address": ""}],
         "vehicles": [{"brand_model": "", "vin": ""}],
         "tractor": {"brand_model": "", "plate_number": ""},
@@ -1022,8 +1024,9 @@ def test_recognition_does_not_overwrite_manual_input(window, quiet_messages):
     assert window.cargo_tab.get_data()["vehicles"] == [
         {"brand_model": "МОДЕЛЬ 1", "vin": "XTC651150N0001001"}
     ]
-    assert window.route_tab.get_data()["shippers"] == [
-        {"name": "ООО «Склад 1»", "address": "г. Москва, ул. Складская, д. 1"}
+    assert window.route_tab.get_data()["shipper_name"] == "ООО «Склад 1»"
+    assert window.route_tab.get_data()["loading_addresses"] == [
+        "г. Москва, ул. Складская, д. 1"
     ]
     assert window.route_tab.get_data()["route"] == "Москва - Казань"
     assert window.driver_tab.get_data()["full_name"] == "Иванов Иван Иванович"
@@ -1196,25 +1199,57 @@ def test_cargo_tab_data_drops_empty_rows():
 
 
 def test_route_tab_data_maps_points_and_plan():
-    """Точки — массивами shippers / consignees, план — из блока contract."""
-    data = LogistiksRusWindow._route_tab_data(
-        [{"name": "ООО «Склад»", "address": "адрес погрузки"}],
-        [{"name": "", "address": ""}],
-        {"loading_date": "02.10.2026", "loading_time_from": "09:00",
-         "sum_wo_vat": 100.0, "number": "ЛР-1"},
-    )
+    """Грузоотправитель и адреса погрузки — из своего блока, план — из contract."""
+    data = LogistiksRusWindow._route_tab_data({
+        "shipper_name": "ООО «Склад»",
+        "loading_addresses": ["адрес погрузки", "  ", "адрес погрузки 2"],
+        "consignees": [{"name": "ООО «Приёмка»", "address": "адрес выгрузки"}],
+        "contract": {"loading_date": "02.10.2026", "loading_time_from": "09:00",
+                     "sum_wo_vat": 100.0, "number": "ЛР-1"},
+    })
 
     assert data == {
         "loading_date": "02.10.2026",
         "loading_time_from": "09:00",
-        "shippers": [{"name": "ООО «Склад»", "address": "адрес погрузки"}],
+        "shipper_name": "ООО «Склад»",
+        "loading_addresses": ["адрес погрузки", "адрес погрузки 2"],
+        "consignees": [{"name": "ООО «Приёмка»", "address": "адрес выгрузки"}],
     }
 
-    # Пустые точки и пустой план — пустой словарь (вкладка не тронута).
-    assert LogistiksRusWindow._route_tab_data([], [], {}) == {}
+    # Пустые значения и пустой план — пустой словарь (вкладка не тронута).
+    assert LogistiksRusWindow._route_tab_data({}) == {}
     assert LogistiksRusWindow._route_tab_data(
-        [{"name": "", "address": ""}], None, {"loading_date": ""}
+        {"loading_addresses": ["", "  "], "contract": {"loading_date": ""}}
     ) == {}
+
+
+def test_route_tab_data_accepts_old_shippers_array():
+    """Старый формат ответа (массив shippers) раскладывается как fallback."""
+    data = LogistiksRusWindow._route_tab_data({
+        "shippers": [
+            {"name": "ООО «Склад Север»", "address": "адрес 1"},
+            {"name": "ООО «Склад Юг»", "address": "адрес 2"},
+        ],
+        "consignees": [{"name": "ООО «Приёмка»", "address": "адрес выгрузки"}],
+    })
+
+    assert data["shipper_name"] == "ООО «Склад Север»"
+    assert data["loading_addresses"] == ["адрес 1", "адрес 2"]
+    assert data["consignees"] == [
+        {"name": "ООО «Приёмка»", "address": "адрес выгрузки"},
+    ]
+
+
+def test_route_tab_data_new_format_wins_over_old():
+    """Если пришли оба формата, новый важнее — старый не подмешивается."""
+    data = LogistiksRusWindow._route_tab_data({
+        "shipper_name": "ООО «Новый»",
+        "loading_addresses": ["новый адрес"],
+        "shippers": [{"name": "ООО «Старый»", "address": "старый адрес"}],
+    })
+
+    assert data["shipper_name"] == "ООО «Новый»"
+    assert data["loading_addresses"] == ["новый адрес"]
 
 
 def test_driver_tab_data_requires_full_name():

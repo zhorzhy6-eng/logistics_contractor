@@ -1,34 +1,44 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Вкладка «Маршрут» окна типа «Логистикс Рус» (ЭТАП 3.1.C.B.2).
+Вкладка «Маршрут» окна типа «Логистикс Рус» (ЭТАП 3.1.C.B.2, FIX-2.2).
 
-Маршрут этой заявки — направление, точки погрузки и выгрузки таблицами и
-общий план по каждой стороне. Образец таблиц с грузоотправителями и
-грузополучателями — ui/tabs/contract_tab.py (loadings_table /
-unloadings_table): до 10 блоков, кнопки «Добавить» / «Удалить», минимум
+Маршрут этой заявки — направление, точки погрузки и выгрузки и общий план
+по каждой стороне. В разделе 1 заявки грузоотправитель ОДИН (обычно
+ООО «ВОТУР МОТОР РУС»), а адресов погрузки у него может быть несколько —
+до 10. Поэтому на вкладке одно поле «Грузоотправитель» и таблица адресов
+погрузки с одной колонкой. Раздел 2 не менялся: до 10 пар
+«грузополучатель + адрес выгрузки».
+
+Образец таблицы с грузополучателями — ui/tabs/contract_tab.py
+(unloadings_table): до 10 блоков, кнопки «Добавить» / «Удалить», минимум
 одна строка.
 
 Отличие от ui/windows/formika/tabs/route_tab.py: у Формики точек ровно две
 (адрес погрузки и адрес выгрузки отдельными полями), здесь их списки —
-в бланке Логистикс Рус печатаются блоки «Грузоотправитель: …» и
-«Грузополучатель №N: …» с наименованием и адресом.
+в бланке Логистикс Рус печатаются строка «Грузоотправитель: …», строки
+«Адрес погрузки №N: …» и блоки «Грузополучатель №N: …».
 
-Ключи get_data() — route, shippers, consignees, loading_date,
-loading_time_from / _to, unloading_date, unloading_time_from / _to — читает
-ui/windows/logistiks_rus/data.py::_build_route. Дата и окно времени у точек
-маршрута не вводятся: в бланке они печатаются общей строкой плана, поэтому
-сборка сама подставляет их в каждую точку.
+Ключи get_data() — route, shipper_name, loading_addresses, consignees,
+loading_date, loading_time_from / _to, unloading_date, unloading_time_from
+/ _to — читает ui/windows/logistiks_rus/data.py::_build_route. Дата и окно
+времени у точек маршрута не вводятся: в бланке они печатаются общей строкой
+плана, поэтому сборка сама подставляет их в каждую точку.
+
+Кнопки «Из справочника» есть у обеих таблиц: у адресов погрузки адрес
+берётся из справочника как есть, у грузополучателей оттуда приходят и
+наименование (графа «Юр. Лицо»), и адрес выгрузки (графа «Адрес доставки
+автомобилей»).
 """
 
 import logging
 from typing import Any, Dict, List, Mapping
 
-from PyQt5.QtCore import QDate, QTime, pyqtSignal
+from PyQt5.QtCore import QDate, Qt, QTime, pyqtSignal
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QDateEdit, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-    QMessageBox, QScrollArea, QTableWidget, QTableWidgetItem, QTimeEdit,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QDateEdit, QFormLayout, QGroupBox, QHBoxLayout,
+    QHeaderView, QLabel, QMessageBox, QScrollArea, QTableWidget,
+    QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from ui import theme
@@ -37,16 +47,23 @@ from ui.widgets import PasteableDateEdit, PasteableLineEdit, RecognitionPanel
 
 logger = logging.getLogger("ui.windows.logistiks_rus.tabs.route_tab")
 
-#: Сколько блоков грузоотправителей и грузополучателей в бланке.
+#: Сколько адресов погрузки и блоков грузополучателей в бланке.
 #: Значение совпадает с ui/windows/logistiks_rus/data.py::MAX_POINTS.
 MAX_POINTS = 10
 
 #: Сколько строк показывать при открытии вкладки (меньше не бывает).
 MIN_ROWS = 1
 
-#: Колонки таблиц точек маршрута: наименование и адрес.
+#: Колонки таблицы грузополучателей: наименование и адрес.
 COL_NAME = 0
 COL_ADDRESS = 1
+
+#: Колонка таблицы адресов погрузки — адрес (наименования у неё нет:
+#: грузоотправитель один и стоит отдельным полем).
+COL_LOADING_ADDRESS = 0
+
+#: Грузоотправитель по умолчанию: в заявках этого типа он один и тот же.
+DEFAULT_SHIPPER_NAME = "ООО «ВОТУР МОТОР РУС»"
 
 #: Окно времени погрузки по умолчанию — как на вкладке условий договора.
 DEFAULT_LOADING_TIME_FROM = QTime(8, 0)
@@ -96,7 +113,7 @@ class RouteTab(TabMixin, QWidget):
 
         # ── Панель распознавания ──
         self.recognition_panel = RecognitionPanel(
-            placeholder="Вставьте текст с маршрутом, грузоотправителями и грузополучателями..."
+            placeholder="Вставьте текст с маршрутом, грузоотправителем и грузополучателями..."
         )
         self.recognition_panel.recognize_requested.connect(self._on_recognize_requested)
         layout.addWidget(self.recognition_panel)
@@ -109,28 +126,51 @@ class RouteTab(TabMixin, QWidget):
 
         layout.addWidget(route_group)
 
-        # ── Таблица «Грузоотправители» ──
-        shippers_group = QGroupBox(f"Грузоотправители (до {MAX_POINTS})")
+        # ── Грузоотправитель и адреса погрузки ──
+        # В бланке раздел 1 — ОДИН грузоотправитель и до 10 нумерованных
+        # адресов погрузки, поэтому таблица адресов одноколоночная.
+        shippers_group = QGroupBox(f"Погрузка (до {MAX_POINTS} адресов)")
         shippers_layout = QVBoxLayout(shippers_group)
 
-        shippers_buttons = QHBoxLayout()
-        self.btn_add_shipper = theme.secondary_button(
-            "Добавить грузоотправителя", tooltip="Добавить строку грузоотправителя"
+        shipper_form = QFormLayout()
+        shipper_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # Первый аргумент PasteableLineEdit — ПОДСКАЗКА (placeholder), а не
+        # значение: постоянного грузоотправителя кладём в поле явно, как
+        # заказчика на вкладке «Заказчик» (customer_tab.py).
+        self.shipper_name = PasteableLineEdit(DEFAULT_SHIPPER_NAME)
+        self.shipper_name.setText(DEFAULT_SHIPPER_NAME)
+        self.shipper_name.set_required(True)
+        shipper_form.addRow(
+            theme.required_label("Грузоотправитель"), self.shipper_name
         )
-        self.btn_add_shipper.clicked.connect(self._on_add_shipper)
-        shippers_buttons.addWidget(self.btn_add_shipper)
+        shippers_layout.addLayout(shipper_form)
 
-        self.btn_remove_shipper = theme.danger_button(
-            "Удалить", tooltip="Удалить выбранную строку"
+        shippers_buttons = QHBoxLayout()
+        self.btn_add_loading_address = theme.secondary_button(
+            "Добавить адрес погрузки",
+            tooltip="Добавить строку адреса погрузки",
         )
-        self.btn_remove_shipper.clicked.connect(self._on_remove_shipper)
-        shippers_buttons.addWidget(self.btn_remove_shipper)
+        self.btn_add_loading_address.clicked.connect(self._on_add_loading_address)
+        shippers_buttons.addWidget(self.btn_add_loading_address)
+
+        self.btn_remove_loading_address = theme.danger_button(
+            "Удалить", tooltip="Удалить выбранный адрес погрузки"
+        )
+        self.btn_remove_loading_address.clicked.connect(self._on_remove_loading_address)
+        shippers_buttons.addWidget(self.btn_remove_loading_address)
+
+        self.btn_book_loading = theme.secondary_button(
+            "Из справочника",
+            tooltip="Выбрать адрес погрузки из справочника",
+        )
+        self.btn_book_loading.clicked.connect(self._on_open_book_loading)
+        shippers_buttons.addWidget(self.btn_book_loading)
 
         shippers_buttons.addStretch()
         shippers_layout.addLayout(shippers_buttons)
 
-        self.shippers_table = self._create_points_table()
-        shippers_layout.addWidget(self.shippers_table)
+        self.loading_addresses_table = self._create_loading_addresses_table()
+        shippers_layout.addWidget(self.loading_addresses_table)
 
         layout.addWidget(shippers_group)
 
@@ -150,6 +190,13 @@ class RouteTab(TabMixin, QWidget):
         )
         self.btn_remove_consignee.clicked.connect(self._on_remove_consignee)
         consignees_buttons.addWidget(self.btn_remove_consignee)
+
+        self.btn_book_consignee = theme.secondary_button(
+            "Из справочника",
+            tooltip="Выбрать грузополучателя из справочника салонов",
+        )
+        self.btn_book_consignee.clicked.connect(self._on_open_book_consignee)
+        consignees_buttons.addWidget(self.btn_book_consignee)
 
         consignees_buttons.addStretch()
         consignees_layout.addLayout(consignees_buttons)
@@ -214,6 +261,20 @@ class RouteTab(TabMixin, QWidget):
     # Виджеты вкладки
     # ─────────────────────────────────────────────────────────
 
+    def _create_loading_addresses_table(self) -> QTableWidget:
+        """Таблица адресов погрузки: одна колонка «Адрес погрузки»."""
+        table = QTableWidget(MIN_ROWS, 1)
+        table.setHorizontalHeaderLabels(["Адрес погрузки"])
+        table.horizontalHeader().setSectionResizeMode(
+            COL_LOADING_ADDRESS, QHeaderView.Stretch
+        )
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setMinimumHeight(80)
+        table.setMaximumHeight(160)
+        for row in range(MIN_ROWS):
+            self._init_loading_address_row(table, row)
+        return table
+
     def _create_points_table(self) -> QTableWidget:
         """Пустая таблица точек маршрута: наименование и адрес."""
         table = QTableWidget(MIN_ROWS, 2)
@@ -246,6 +307,11 @@ class RouteTab(TabMixin, QWidget):
         return time_edit
 
     @staticmethod
+    def _init_loading_address_row(table: QTableWidget, row: int) -> None:
+        """Пустая строка адреса погрузки."""
+        table.setItem(row, COL_LOADING_ADDRESS, QTableWidgetItem(""))
+
+    @staticmethod
     def _init_point_row(table: QTableWidget, row: int) -> None:
         """Пустая строка точки маршрута."""
         table.setItem(row, COL_NAME, QTableWidgetItem(""))
@@ -257,16 +323,16 @@ class RouteTab(TabMixin, QWidget):
         return item.text().strip() if item else ""
 
     # ─────────────────────────────────────────────────────────
-    # Строки таблиц грузоотправителей и грузополучателей
+    # Строки таблиц адресов погрузки и грузополучателей
     # ─────────────────────────────────────────────────────────
 
-    def _on_add_shipper(self) -> None:
-        """Добавляет строку грузоотправителя; сверх 10 не пускает."""
-        self._add_point_row(self.shippers_table, "грузоотправителя")
+    def _on_add_loading_address(self) -> None:
+        """Добавляет адрес погрузки; сверх 10 не пускает."""
+        self._add_point_row(self.loading_addresses_table, "адрес погрузки")
 
-    def _on_remove_shipper(self) -> None:
-        """Удаляет выбранную строку грузоотправителя."""
-        self._remove_point_row(self.shippers_table, "грузоотправитель")
+    def _on_remove_loading_address(self) -> None:
+        """Удаляет выбранный адрес погрузки."""
+        self._remove_point_row(self.loading_addresses_table, "адрес погрузки")
 
     def _on_add_consignee(self) -> None:
         """Добавляет строку грузополучателя; сверх 10 не пускает."""
@@ -276,6 +342,10 @@ class RouteTab(TabMixin, QWidget):
         """Удаляет выбранную строку грузополучателя."""
         self._remove_point_row(self.consignees_table, "грузополучатель")
 
+    def _is_loading_addresses_table(self, table: QTableWidget) -> bool:
+        """True, если таблица — список адресов погрузки (одна колонка)."""
+        return table is self.loading_addresses_table
+
     def _add_point_row(self, table: QTableWidget, title: str) -> None:
         """Общее добавление строки для обеих таблиц (в connect — без lambda)."""
         row_count = table.rowCount()
@@ -284,12 +354,15 @@ class RouteTab(TabMixin, QWidget):
             QMessageBox.warning(
                 self, "Ограничение",
                 f"В бланк помещается не больше {MAX_POINTS} блоков: "
-                f"добавить ещё одного {title} нельзя.",
+                f"добавить ещё один {title} нельзя.",
             )
             return
 
         table.insertRow(row_count)
-        self._init_point_row(table, row_count)
+        if self._is_loading_addresses_table(table):
+            self._init_loading_address_row(table, row_count)
+        else:
+            self._init_point_row(table, row_count)
         logger.debug("Логистикс Рус: добавлена строка (%s)", title)
 
     def _remove_point_row(self, table: QTableWidget, title: str) -> None:
@@ -308,20 +381,127 @@ class RouteTab(TabMixin, QWidget):
         table.removeRow(row)
         logger.debug("Логистикс Рус: удалена строка (%s)", title)
 
+    def _row_is_empty(self, table: QTableWidget, row: int) -> bool:
+        """True, если в строке нет ни одного значения."""
+        columns = 1 if self._is_loading_addresses_table(table) else 2
+        return all(
+            not self._cell_text(table, row, column)
+            for column in range(columns)
+        )
+
+    def _resolve_target_row(self, table: QTableWidget) -> int:
+        """
+        Номер строки, в которую класть выбранное из справочника значение.
+
+        Порядок выбора:
+          1) текущая строка, если она пуста;
+          2) первая пустая из существующих;
+          3) новая строка, если не превышен MAX_POINTS;
+          4) иначе — предупреждение и -1.
+        """
+        row = table.currentRow()
+        if row >= 0 and self._row_is_empty(table, row):
+            return row
+
+        for index in range(table.rowCount()):
+            if self._row_is_empty(table, index):
+                return index
+
+        if table.rowCount() >= MAX_POINTS:
+            QMessageBox.warning(
+                self, "Ограничение",
+                f"В бланк помещается не больше {MAX_POINTS} строк: "
+                f"свободной строки нет, удалите лишнюю.",
+            )
+            return -1
+
+        index = table.rowCount()
+        table.insertRow(index)
+        if self._is_loading_addresses_table(table):
+            self._init_loading_address_row(table, index)
+        else:
+            self._init_point_row(table, index)
+        return index
+
+    # ─────────────────────────────────────────────────────────
+    # Заполнение из справочника
+    # ─────────────────────────────────────────────────────────
+
+    def _on_open_book_loading(self) -> None:
+        """Адрес погрузки из справочника адресов."""
+        from ui.address_book_dialog import AddressBookDialog
+
+        dialog = AddressBookDialog("loading", parent=self)
+        if not dialog.exec_():
+            return
+
+        selected = dialog.selected_address or {}
+        address = str(selected.get("address") or "").strip()
+        if not address:
+            return
+
+        table = self.loading_addresses_table
+        row = self._resolve_target_row(table)
+        if row < 0:
+            return
+
+        table.blockSignals(True)
+        try:
+            table.setItem(row, COL_LOADING_ADDRESS, QTableWidgetItem(address))
+        finally:
+            table.blockSignals(False)
+
+        table.selectRow(row)
+
+    def _on_open_book_consignee(self) -> None:
+        """
+        Грузополучатель из справочника салонов.
+
+        Наименование берётся из графы «Юр. Лицо» (salon_name), адрес — из
+        графы «Адрес доставки автомобилей» (address): обе колонки приходят
+        из справочника салонов (см. ui/address_book_dialog.py).
+        """
+        from ui.address_book_dialog import AddressBookDialog
+
+        dialog = AddressBookDialog("unloading", parent=self)
+        if not dialog.exec_():
+            return
+
+        selected = dialog.selected_address or {}
+        name = str(selected.get("salon_name") or "").strip()
+        address = str(selected.get("address") or "").strip()
+
+        table = self.consignees_table
+        row = self._resolve_target_row(table)
+        if row < 0:
+            return
+
+        table.blockSignals(True)
+        try:
+            table.setItem(row, COL_NAME, QTableWidgetItem(name))
+            table.setItem(row, COL_ADDRESS, QTableWidgetItem(address))
+        finally:
+            table.blockSignals(False)
+
+        table.selectRow(row)
+
     # ─────────────────────────────────────────────────────────
     # Данные вкладки
     # ─────────────────────────────────────────────────────────
 
     def get_data(self) -> Dict[str, Any]:
         """
-        Маршрут, точки и план (даты — ISO, время — «HH:mm»).
+        Маршрут, грузоотправитель, адреса погрузки, грузополучатели и план
+        (даты — ISO, время — «HH:mm»).
 
-        Точки отдаются массивами shippers / consignees по образцу
-        ui/tabs/contract_tab.py; пустые строки таблиц в них не попадают.
+        Грузоотправитель отдаётся одним полем, адреса погрузки — списком
+        строк; грузополучатели — массивом consignees по образцу
+        ui/tabs/contract_tab.py. Пустые строки таблиц в данные не попадают.
         """
         return {
             "route": self.route.text().strip(),
-            "shippers": self._read_points(self.shippers_table),
+            "shipper_name": self.shipper_name.text().strip(),
+            "loading_addresses": self._read_loading_addresses(),
             "consignees": self._read_points(self.consignees_table),
             "loading_date": self.loading_date.date().toString("yyyy-MM-dd"),
             "loading_time_from": self.loading_time_from.time().toString("HH:mm"),
@@ -330,6 +510,22 @@ class RouteTab(TabMixin, QWidget):
             "unloading_time_from": self.unloading_time_from.time().toString("HH:mm"),
             "unloading_time_to": self.unloading_time_to.time().toString("HH:mm"),
         }
+
+    def _read_loading_addresses(self) -> List[str]:
+        """
+        Заполненные адреса погрузки — списком строк.
+
+        Пустая строка таблицы адресом не считается: иначе в бланк попали бы
+        пустые строки «Адрес погрузки №N:». Нумерация в бланке идёт по
+        порядку списка, поэтому пустые строки не должны «съедать» номер.
+        """
+        addresses: List[str] = []
+        table = self.loading_addresses_table
+        for row in range(table.rowCount()):
+            address = self._cell_text(table, row, COL_LOADING_ADDRESS)
+            if address:
+                addresses.append(address)
+        return addresses
 
     @staticmethod
     def _read_points(table: QTableWidget) -> List[Dict[str, str]]:
@@ -350,12 +546,16 @@ class RouteTab(TabMixin, QWidget):
 
     def fill_data(self, data: Dict[str, Any]) -> None:
         """
-        Заполняет маршрут, таблицы точек и план погрузки/выгрузки.
+        Заполняет маршрут, грузоотправителя, адреса погрузки, таблицу
+        грузополучателей и план погрузки/выгрузки.
 
         Пустые значения игнорируются — частичное распознавание не должно
-        сбрасывать уже введённый маршрут. Список точек заменяет таблицу
-        целиком (как в CargoTab), но пустой список её не трогает: «точек не
+        сбрасывать уже введённый маршрут. Список заменяет таблицу целиком
+        (как в CargoTab), но пустой список её не трогает: «точек не
         распознано» и «стереть введённое» — разные вещи.
+
+        Старый формат ответа (массив shippers с наименованиями) принимается
+        как fallback: имя берётся из первой точки, адреса — из всех.
         """
         if not data:
             return
@@ -364,7 +564,31 @@ class RouteTab(TabMixin, QWidget):
         if route:
             self.route.setText(route)
 
-        self._fill_points(self.shippers_table, data.get("shippers"))
+        shipper_name = str(data.get("shipper_name") or "").strip()
+        loading_addresses = data.get("loading_addresses")
+
+        if not shipper_name and not isinstance(loading_addresses, (list, tuple)):
+            # Fallback старого распознавания: массив shippers с именами.
+            old_points = [
+                item for item in (data.get("shippers") or [])
+                if isinstance(item, Mapping)
+            ]
+            if old_points:
+                names = [
+                    str(point.get("name") or "").strip()
+                    for point in old_points
+                    if str(point.get("name") or "").strip()
+                ]
+                if names:
+                    shipper_name = names[0]
+                loading_addresses = [
+                    str(point.get("address") or "") for point in old_points
+                ]
+
+        if shipper_name:
+            self.shipper_name.setText(shipper_name)
+
+        self._fill_loading_addresses(loading_addresses)
         self._fill_points(self.consignees_table, data.get("consignees"))
 
         if data.get("loading_date"):
@@ -378,6 +602,39 @@ class RouteTab(TabMixin, QWidget):
         self._set_time(self.unloading_time_to, data.get("unloading_time_to"))
 
         logger.info("Логистикс Рус: данные маршрута заполнены")
+
+    def _fill_loading_addresses(self, items: Any) -> None:
+        """
+        Перерисовывает таблицу адресов погрузки по списку из данных.
+
+        Лишние адреса (сверх 10) отбрасываются: строк в бланке ровно 10.
+        Не список и пустой список оставляют таблицу как есть.
+        """
+        if not isinstance(items, (list, tuple)):
+            return
+
+        addresses = [str(item).strip() for item in items if str(item or "").strip()]
+        if not addresses:
+            return
+
+        if len(addresses) > MAX_POINTS:
+            logger.warning(
+                "Логистикс Рус: адресов погрузки %s, в бланк помещается %s — "
+                "лишние не выводятся",
+                len(addresses), MAX_POINTS,
+            )
+            addresses = addresses[:MAX_POINTS]
+
+        table = self.loading_addresses_table
+        table.blockSignals(True)
+        try:
+            table.setRowCount(0)
+            table.setRowCount(len(addresses))
+            for row, address in enumerate(addresses):
+                table.setItem(row, COL_LOADING_ADDRESS, QTableWidgetItem(address))
+            table.clearSelection()
+        finally:
+            table.blockSignals(False)
 
     def _fill_points(self, table: QTableWidget, items: Any) -> None:
         """
@@ -434,17 +691,27 @@ class RouteTab(TabMixin, QWidget):
     def clear(self) -> None:
         """Очищает маршрут и возвращает план к значениям по умолчанию."""
         self.route.clear()
+        self.shipper_name.setText(DEFAULT_SHIPPER_NAME)
 
-        for table in (self.shippers_table, self.consignees_table):
-            table.blockSignals(True)
-            try:
-                table.setRowCount(0)
-                table.setRowCount(MIN_ROWS)
-                for row in range(MIN_ROWS):
-                    self._init_point_row(table, row)
-                table.clearSelection()
-            finally:
-                table.blockSignals(False)
+        self.loading_addresses_table.blockSignals(True)
+        try:
+            self.loading_addresses_table.setRowCount(0)
+            self.loading_addresses_table.setRowCount(MIN_ROWS)
+            for row in range(MIN_ROWS):
+                self._init_loading_address_row(self.loading_addresses_table, row)
+            self.loading_addresses_table.clearSelection()
+        finally:
+            self.loading_addresses_table.blockSignals(False)
+
+        self.consignees_table.blockSignals(True)
+        try:
+            self.consignees_table.setRowCount(0)
+            self.consignees_table.setRowCount(MIN_ROWS)
+            for row in range(MIN_ROWS):
+                self._init_point_row(self.consignees_table, row)
+            self.consignees_table.clearSelection()
+        finally:
+            self.consignees_table.blockSignals(False)
 
         self.loading_date.setDate(QDate.currentDate())
         self.unloading_date.setDate(
@@ -463,6 +730,10 @@ __all__ = [
     "RouteTab",
     "MAX_POINTS",
     "MIN_ROWS",
+    "COL_NAME",
+    "COL_ADDRESS",
+    "COL_LOADING_ADDRESS",
+    "DEFAULT_SHIPPER_NAME",
     "DEFAULT_LOADING_TIME_FROM",
     "DEFAULT_LOADING_TIME_TO",
     "DEFAULT_UNLOADING_TIME_FROM",

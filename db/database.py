@@ -36,6 +36,29 @@ logger = logging.getLogger("db.database")
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "contracts.db")
 
+#: Файл справочника салонов («Места выгрузок»), который раскладывается по
+#: заголовкам граф. Лежит в data/ — там же, где остальные входные файлы.
+SALONS_XLSX_NAME = "spravochnik_mest_vygruzki.xlsx"
+
+#: Ключевые слова заголовков файла справочника салонов → имена полей.
+#: Сравнение идёт по подстроке в шапке (регистр не важен): «КОД (второй)»
+#: и «КОД» — одна и та же графа, а «Адрес доставки автомобилей» находится
+#: по слову «Адрес доставки».
+SALON_COLUMN_KEYS = (
+    ("salon_code", ("код",)),
+    ("salon_inn", ("инн",)),
+    ("salon_name", ("юр. лицо", "юридическое лицо")),
+    ("salon_city", ("город",)),
+    ("address", ("адрес доставки",)),
+)
+
+
+def salons_xlsx_path() -> str:
+    """Путь к файлу справочника салонов в папке data/ проекта."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, "data", SALONS_XLSX_NAME)
+
+
 # Индексы по часто используемым полям (Шаг 2 оптимизации производительности).
 # Вынесены на уровень модуля, чтобы проверять их наличие до миграций.
 INDEXES = (
@@ -129,6 +152,10 @@ def _needs_migration(cursor: sqlite3.Cursor) -> bool:
         ("drivers", "passport_issuer"),
         ("drivers", "phone"),
         ("address_book", "city"),
+        ("address_book", "salon_name"),
+        ("address_book", "salon_code"),
+        ("address_book", "salon_inn"),
+        ("address_book", "salon_city"),
         ("vehicles", "contract_id"),
     )
     for table, column in required_columns:
@@ -156,6 +183,154 @@ def _needs_migration(cursor: sqlite3.Cursor) -> bool:
             return True
 
     return False
+
+
+def _find_salon_columns(header: Tuple[Any, ...]) -> Dict[str, int]:
+    """
+    Индексы граф файла справочника салонов по ключевым словам шапки.
+
+    Возвращает {имя поля: индекс колонки}. Ключ «код» ищется ПЕРВЫМ
+    совпадением по порядку граф (в файле две графы КОД — берём левую).
+    Если ни одного ключа не найдено, словарь пуст: файл не похож на
+    справочник салонов, импортировать его построчно нельзя.
+    """
+    found: Dict[str, int] = {}
+    for index, title in enumerate(header):
+        text = str(title or "").strip().lower()
+        if not text:
+            continue
+        for field, keywords in SALON_COLUMN_KEYS:
+            if field in found:
+                continue
+            if any(keyword in text for keyword in keywords):
+                found[field] = index
+                break
+    return found
+
+
+def read_salons_rows(path: str) -> List[Dict[str, str]]:
+    """
+    Читает файл «Места выгрузок» и отдаёт строки справочника салонов.
+
+    Графы ищутся по ЗАГОЛОВКАМ (первая непустая строка), а не по номерам:
+    порядок колонок в файле заказчика может меняться. Ожидаемые графы —
+    КОД, ИНН, Юр. Лицо, Город, Адрес доставки автомобилей; лишние графы
+    (e-mail, телефоны, комментарии, региональный менеджер) не читаются:
+    в справочнике им места нет, а контакты — персональные данные.
+
+    Возвращает список словарей {address, salon_name, salon_code, salon_inn,
+    salon_city, date, time_window}. Пустой список — либо файла нет, либо
+    шапка не распознана (тогда вызывающий код импорт не делает).
+    """
+    if not path or not os.path.exists(path):
+        logger.info(f"Файл справочника салонов не найден: {path}")
+        return []
+
+    try:
+        import openpyxl
+    except ImportError:
+        logger.warning("openpyxl не установлен — справочник салонов не загружен")
+        return []
+
+    try:
+        workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    except Exception as e:  # noqa: BLE001 — файл может быть занят или битым
+        logger.warning(f"Не удалось открыть справочник салонов ({type(e).__name__})")
+        return []
+
+    try:
+        sheet = workbook.active
+        rows = sheet.iter_rows(values_only=True)
+
+        header = None
+        columns: Dict[str, int] = {}
+        for row in rows:
+            if row is None or all(value is None or not str(value).strip() for value in row):
+                continue
+            header = row
+            columns = _find_salon_columns(row)
+            break
+
+        if not columns or "address" not in columns:
+            logger.warning(
+                "В файле справочника салонов не найдена ожидаемая шапка "
+                "(КОД / ИНН / Юр. Лицо / Город / Адрес доставки) — импорт пропущен"
+            )
+            return []
+
+        def cell(row: Tuple[Any, ...], field: str) -> str:
+            index = columns.get(field)
+            if index is None or index >= len(row):
+                return ""
+            value = row[index]
+            return "" if value is None else str(value).strip()
+
+        result: List[Dict[str, str]] = []
+        for row in rows:
+            if row is None:
+                continue
+            address = cell(row, "address")
+            if not address:
+                continue
+            result.append({
+                "address": address,
+                "salon_name": cell(row, "salon_name"),
+                "salon_code": cell(row, "salon_code"),
+                "salon_inn": cell(row, "salon_inn"),
+                "salon_city": cell(row, "salon_city"),
+                "date": "",
+                "time_window": "",
+            })
+
+        return result
+    finally:
+        try:
+            workbook.close()
+        except Exception:  # noqa: BLE001 — закрытие не должно ломать импорт
+            pass
+
+
+def _load_salons_if_empty() -> int:
+    """
+    Первый запуск: если справочник выгрузок пуст, заливает файл салонов.
+
+    Проверяются оба условия: пустая таблица для point_type='unloading'
+    и наличие файла. Если файла нет — тихо ничего не делаем: приложение
+    работает и без него, справочник наполняется вручную.
+
+    Открывает своё соединение и закрывает его до вызова импорта: импорт
+    пишет своей транзакцией, а два писателя на одной базе не нужны.
+
+    :return: сколько записей импортировано (0 — импорта не было)
+    """
+    conn = get_connection()
+    try:
+        count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM address_book WHERE point_type = 'unloading'"
+            ).fetchone()[0] or 0
+        )
+    except sqlite3.DatabaseError as e:
+        logger.warning(f"Не удалось проверить справочник выгрузок: {e}")
+        return 0
+    finally:
+        conn.close()
+
+    if count:
+        logger.debug(f"Справочник выгрузок уже заполнен ({count} записей)")
+        return 0
+
+    rows = read_salons_rows(salons_xlsx_path())
+    if not rows:
+        logger.info(
+            "Справочник салонов не загружен автоматически "
+            "(нет файла или не распознана шапка)"
+        )
+        return 0
+
+    added = import_addresses_from_list("unloading", rows)
+    logger.info(f"Загружен справочник салонов: {len(rows)} записей, новых {added}")
+    return added
 
 
 def init_database() -> None:
@@ -399,6 +574,26 @@ def init_database() -> None:
         except Exception as e:
             logger.warning(f"Не удалось добавить city: {e}")
 
+    # ── Миграция: address_book — справочник салонов (ШАГ FIX-2.2) ──
+    # Справочник адресов стал справочником МЕСТ ВЫГРУЗКИ: у записи появились
+    # код салона (JMR-Axxx), наименование юр. лица, ИНН и город салона.
+    # Колонки добавляются к существующей таблице: старые записи не трогаются,
+    # их данные остаются на месте.
+    for column, sql_type in (
+        ("salon_name", "TEXT"),
+        ("salon_code", "TEXT"),
+        ("salon_inn", "TEXT"),
+        ("salon_city", "TEXT"),
+    ):
+        if not _column_exists(cursor, "address_book", column):
+            try:
+                cursor.execute(
+                    f"ALTER TABLE address_book ADD COLUMN {column} {sql_type}"
+                )
+                logger.info(f"Добавлена колонка address_book.{column}")
+            except Exception as e:
+                logger.warning(f"Не удалось добавить {column}: {e}")
+
     # ── Миграция: мягкое удаление (вариант В) ──
     # Существующие записи получают is_deleted = 0, то есть остаются видимыми:
     # поведение пользователя не меняется, меняется только способ удаления.
@@ -483,6 +678,11 @@ def init_database() -> None:
     conn.close()
     logger.info("База данных инициализирована")
     audit.log_event("database_initialized", db=os.path.basename(DB_PATH))
+
+    # ── Справочник салонов при первом запуске (ШАГ FIX-2.2, п. C.9) ──
+    # Импорт идёт ПОСЛЕ закрытия основного соединения: _load_salons_if_empty
+    # работает своим соединением, а два писателя на одной базе не нужны.
+    _load_salons_if_empty()
 
     # ── Права на файлы базы (Шаг 5 задания) ──
     # contracts.db содержит персональные данные водителей, поэтому доступ
@@ -1565,13 +1765,34 @@ def load_contract_points(contract_id: int) -> Dict[str, List[Dict]]:
 # Address Book
 # ─────────────────────────────────────────────────────────────
 
-def save_address(point_type: str, address: str, date: str = "", time_window: str = "") -> Optional[int]:
+def save_address(
+    point_type: str,
+    address: str,
+    date: str = "",
+    time_window: str = "",
+    salon_name: str = "",
+    salon_code: str = "",
+    salon_inn: str = "",
+    salon_city: str = "",
+) -> Optional[int]:
+    """
+    Сохраняет адрес в справочнике (или обновляет существующий).
+
+    Четыре первых параметра — прежний вызов (point_type, address, date,
+    time_window): старые вызовы продолжают работать без правок. Поля
+    салона (ШАГ FIX-2.2) — опциональные: пустое значение НЕ затирает то,
+    что уже записано в справочнике.
+    """
     if not address or not address.strip():
         return None
 
     address = address.strip()
     date = (date or "").strip()
     time_window = (time_window or "").strip()
+    salon_name = (salon_name or "").strip()
+    salon_code = (salon_code or "").strip()
+    salon_inn = (salon_inn or "").strip()
+    salon_city = (salon_city or "").strip()
     city = _extract_city(address)
 
     conn = get_connection()
@@ -1588,9 +1809,15 @@ def save_address(point_type: str, address: str, date: str = "", time_window: str
             cursor.execute(
                 "UPDATE address_book SET usage_count = usage_count + 1, city = ?, "
                 "date = CASE WHEN ? != '' THEN ? ELSE date END, "
-                "time_window = CASE WHEN ? != '' THEN ? ELSE time_window END "
+                "time_window = CASE WHEN ? != '' THEN ? ELSE time_window END, "
+                "salon_name = CASE WHEN ? != '' THEN ? ELSE salon_name END, "
+                "salon_code = CASE WHEN ? != '' THEN ? ELSE salon_code END, "
+                "salon_inn  = CASE WHEN ? != '' THEN ? ELSE salon_inn END, "
+                "salon_city = CASE WHEN ? != '' THEN ? ELSE salon_city END "
                 "WHERE id = ?",
-                (city, date, date, time_window, time_window, addr_id)
+                (city, date, date, time_window, time_window,
+                 salon_name, salon_name, salon_code, salon_code,
+                 salon_inn, salon_inn, salon_city, salon_city, addr_id)
             )
             # FTS5: адрес не менялся, но город мог (правим индекс вручную,
             # без триггеров — см. db/fts.py).
@@ -1603,9 +1830,11 @@ def save_address(point_type: str, address: str, date: str = "", time_window: str
         else:
             cursor.execute(
                 "INSERT INTO address_book "
-                "(point_type, address, city, date, time_window, usage_count) "
-                "VALUES (?, ?, ?, ?, ?, 1)",
-                (point_type, address, city, date, time_window)
+                "(point_type, address, city, date, time_window, usage_count, "
+                " salon_name, salon_code, salon_inn, salon_city) "
+                "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+                (point_type, address, city, date, time_window,
+                 salon_name, salon_code, salon_inn, salon_city)
             )
             addr_id = cursor.lastrowid
             fts.replace_row(conn, "fts_addresses", addr_id, (address, city))
@@ -1671,6 +1900,9 @@ def get_addresses(
       * LIKE — резервный путь: если FTS5 недоступен, запрос содержит цифры
         (номер дома, индекс) или FTS ничего не нашёл (например, ищут середину
         слова «ольский» в «Кольский», чего токенизатор не умеет).
+        Сюда же попадает поиск по ПОЛЯМ САЛОНА (ШАГ FIX-2.2): код
+        («JMR-A048»), наименование юр. лица и ИНН в FTS-индекс не входят,
+        поэтому такие запросы всегда идут через LIKE.
 
     Шаг 4 оптимизации:
       * жёсткий LIMIT 500 заменён параметрами limit/offset — при росте
@@ -1712,13 +1944,18 @@ def get_addresses(
             except sqlite3.DatabaseError as e:
                 logger.warning(f"FTS5-поиск адресов не удался, откат на LIKE: {e}")
 
-        # ── Путь 2: LIKE (как раньше + город) ──
+        # ── Путь 2: LIKE (как раньше + город + поля салона) ──
         sql = "SELECT * FROM address_book WHERE point_type = ?"
         params: List[Any] = [point_type]
 
         if search:
-            sql += " AND (address LIKE ? OR COALESCE(city, '') LIKE ?)"
-            params.extend([f"%{search}%", f"%{search}%"])
+            sql += (
+                " AND (address LIKE ? OR COALESCE(city, '') LIKE ?"
+                " OR COALESCE(salon_name, '') LIKE ?"
+                " OR COALESCE(salon_code, '') LIKE ?"
+                " OR COALESCE(salon_inn, '') LIKE ?)"
+            )
+            params.extend([f"%{search}%"] * 5)
 
         sql += (
             " ORDER BY city COLLATE NOCASE, address COLLATE NOCASE"
@@ -1759,8 +1996,11 @@ def count_addresses(point_type: str, search: str = "") -> int:
         if search:
             cursor.execute(
                 "SELECT COUNT(*) FROM address_book "
-                "WHERE point_type = ? AND (address LIKE ? OR COALESCE(city, '') LIKE ?)",
-                (point_type, f"%{search}%", f"%{search}%"),
+                "WHERE point_type = ? AND (address LIKE ? OR COALESCE(city, '') LIKE ?"
+                " OR COALESCE(salon_name, '') LIKE ?"
+                " OR COALESCE(salon_code, '') LIKE ?"
+                " OR COALESCE(salon_inn, '') LIKE ?)",
+                (point_type, *([f"%{search}%"] * 5)),
             )
         else:
             cursor.execute(
@@ -1796,12 +2036,33 @@ def rebuild_fts_index() -> bool:
         conn.close()
 
 
-def update_address(addr_id: int, address: str, date: str = "", time_window: str = "") -> bool:
+def update_address(
+    addr_id: int,
+    address: str,
+    date: str = "",
+    time_window: str = "",
+    salon_name: str = "",
+    salon_code: str = "",
+    salon_inn: str = "",
+    salon_city: str = "",
+) -> bool:
+    """
+    Обновляет запись справочника адресов.
+
+    Первые четыре параметра — прежний вызов; поля салона (ШАГ FIX-2.2)
+    опциональны и по умолчанию пусты — тогда колонка сохраняет прежнее
+    значение (CASE WHEN '' THEN старое), чтобы правка адреса из старого
+    окна не стирала данные салона.
+    """
     conn = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
         city = _extract_city(address.strip())
+        salon_name = (salon_name or "").strip()
+        salon_code = (salon_code or "").strip()
+        salon_inn = (salon_inn or "").strip()
+        salon_city = (salon_city or "").strip()
 
         # Старые значения нужны FTS5: удаление из индекса идёт по ним.
         old = cursor.execute(
@@ -1809,8 +2070,16 @@ def update_address(addr_id: int, address: str, date: str = "", time_window: str 
         ).fetchone()
 
         cursor.execute(
-            "UPDATE address_book SET address = ?, city = ?, date = ?, time_window = ? WHERE id = ?",
-            (address.strip(), city, date.strip(), time_window.strip(), addr_id)
+            "UPDATE address_book SET address = ?, city = ?, date = ?, "
+            "time_window = ?, "
+            "salon_name = CASE WHEN ? != '' THEN ? ELSE salon_name END, "
+            "salon_code = CASE WHEN ? != '' THEN ? ELSE salon_code END, "
+            "salon_inn  = CASE WHEN ? != '' THEN ? ELSE salon_inn END, "
+            "salon_city = CASE WHEN ? != '' THEN ? ELSE salon_city END "
+            "WHERE id = ?",
+            (address.strip(), city, date.strip(), time_window.strip(),
+             salon_name, salon_name, salon_code, salon_code,
+             salon_inn, salon_inn, salon_city, salon_city, addr_id)
         )
         if old:
             fts.replace_row(
@@ -1862,6 +2131,10 @@ def import_addresses_from_list(point_type: str, addresses: List[Dict[str, str]])
     (point_type, address): существующие адреса увеличивают usage_count,
     новые — добавляются.
 
+    ШАГ FIX-2.2: элемент может нести поля салона (salon_name, salon_code,
+    salon_inn, salon_city) — они пишутся в свои колонки. Пустое значение
+    НЕ затирает уже записанное: COALESCE(NULLIF(excluded.X, ''), X).
+
     :return: сколько НОВЫХ адресов добавлено
     """
     if not addresses:
@@ -1880,6 +2153,10 @@ def import_addresses_from_list(point_type: str, addresses: List[Dict[str, str]])
             _extract_city(addr),
             (item.get("date") or "").strip(),
             (item.get("time_window") or "").strip(),
+            (item.get("salon_name") or "").strip(),
+            (item.get("salon_code") or "").strip(),
+            (item.get("salon_inn") or "").strip(),
+            (item.get("salon_city") or "").strip(),
         ))
 
     if not rows:
@@ -1897,11 +2174,20 @@ def import_addresses_from_list(point_type: str, addresses: List[Dict[str, str]])
 
         cursor.executemany(
             "INSERT INTO address_book "
-            "(point_type, address, city, date, time_window, usage_count) "
-            "VALUES (?, ?, ?, ?, ?, 1) "
+            "(point_type, address, city, date, time_window, usage_count, "
+            " salon_name, salon_code, salon_inn, salon_city) "
+            "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?) "
             "ON CONFLICT(point_type, address) DO UPDATE SET "
             "    usage_count = usage_count + 1, "
-            "    city = COALESCE(NULLIF(excluded.city, ''), address_book.city)",
+            "    city = COALESCE(NULLIF(excluded.city, ''), address_book.city), "
+            "    salon_name = COALESCE(NULLIF(excluded.salon_name, ''), "
+            "                          address_book.salon_name), "
+            "    salon_code = COALESCE(NULLIF(excluded.salon_code, ''), "
+            "                          address_book.salon_code), "
+            "    salon_inn  = COALESCE(NULLIF(excluded.salon_inn, ''), "
+            "                          address_book.salon_inn), "
+            "    salon_city = COALESCE(NULLIF(excluded.salon_city, ''), "
+            "                          address_book.salon_city)",
             rows,
         )
 
