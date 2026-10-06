@@ -109,6 +109,9 @@ LOADING_DATE_2 = "2026-09-22"
 LOADING_TIME_FROM = "08:00"
 LOADING_TIME_TO = "18:00"
 UNLOADING_DATE_1 = "2026-09-27"
+#: Дата ВТОРОЙ точки выгрузки — своя, не равная дате завершения рейса: с шага
+#: FIX-1-T п. 3.3.2 печатает {{planned_completion_date}}, а не дату точки.
+UNLOADING_DATE_2 = "2026-09-25"
 
 #: Планируемая дата завершения рейса (п. 3.3.2 бланка). Это ТРЕТЬЯ, отдельная
 #: дата договора: в образце ТЛ-574 она не равна окончанию аренды.
@@ -1341,9 +1344,13 @@ def test_dates_reach_generated_document_in_their_clauses(
     """
     Три даты стоят в договоре каждая на своём месте и не путаются.
 
-    П. 2.5 — плановый период аренды (начало и конец), п. 3.3.2 — плановая дата
-    завершения рейса у последней точки выгрузки. В образце ТЛ-574 это разные
-    даты (28.09.2026 и 26.09.2026), поэтому проверяются обе формулировки.
+    П. 2.5 — плановый период аренды (начало и конец), п. 3.3.2 — планируемая
+    дата завершения рейса. В образце ТЛ-574 это разные даты (28.09.2026 и
+    26.09.2026), поэтому проверяются обе формулировки.
+
+    Поле «Планируемая дата завершения рейса» с шага FIX-1-T печатает бланк
+    САМ (плейсхолдер {{planned_completion_date}}), а не дата второй точки
+    выгрузки: дата точки в п. 3.3.2 документа больше не участвует.
     """
     from docx import Document
 
@@ -1353,13 +1360,13 @@ def test_dates_reach_generated_document_in_their_clauses(
     data["vehicle"]["lease_start_date"] = LEASE_START
     data["vehicle"]["lease_end_date"] = LEASE_END
     data["vehicle"]["planned_completion_date"] = COMPLETION_DATE
-    # В бланке плановая дата завершения стоит у ВТОРОЙ точки выгрузки
-    # (п. 3.3.2): у первой точки своя дата, у последней — дата завершения рейса.
+    # Даты точек выгрузки — свои и обе отличны от даты завершения рейса:
+    # если бы бланк печатал дату точки, в договоре стояла бы не та дата.
     data["route"]["unloadings"] = [
         {"name": UNLOADING_NAME_1, "address": UNLOADING_ADDRESS_1,
          "date": UNLOADING_DATE_1},
         {"name": UNLOADING_NAME_2, "address": UNLOADING_ADDRESS_2,
-         "date": COMPLETION_DATE},
+         "date": UNLOADING_DATE_2},
     ]
 
     generator = ArendaTsGenerator(templates_dir=str(templates_dir))
@@ -1375,10 +1382,15 @@ def test_dates_reach_generated_document_in_their_clauses(
     start_text = _format_date(LEASE_START)
     end_text = _format_date(LEASE_END)
     completion_text = _format_date(COMPLETION_DATE)
+    second_point_text = _format_date(UNLOADING_DATE_2)
 
     assert start_text != end_text != completion_text
+    assert completion_text != second_point_text
     assert f"с {start_text} г. по {end_text} г. включительно" in text
     assert f"Плановая дата завершения: {completion_text} г." in text
+    # Дата второй точки выгрузки в п. 3.3.2 не печатается — там дата рейса.
+    assert (f"{UNLOADING_ADDRESS_2}. Плановая дата завершения: "
+            f"{second_point_text} г.") not in text
 
 
 def test_completion_date_is_not_printed_as_lease_end(

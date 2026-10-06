@@ -114,6 +114,11 @@ MAX_POINTS = 10
 #: (3.2.N. / 3.3.N.) и метке; адрес берётся между тире и фразой «Плановая
 #: дата…». Пустой адрес — признак незаполненной точки: docxtpl подставляет
 #: пустое значение, но саму строку не удаляет.
+#:
+#: У точки выгрузки метка закрывается двоеточием: в п. 3.3.2 стоит плановая
+#: дата завершения рейса (шаг FIX-1-T), и после «:» в строке либо пустота,
+#: либо «<дата> г.». Адрес — всё до двоеточия, поэтому хвост с датой
+#: разбирать не нужно: у незаполненной точки он тоже пустой.
 LOADING_POINT_RE = re.compile(
     r"^3\.2\.(?P<number>\d+)\.\s*Точка\s+погрузки\s*№\s*\d+\s*[—–-]\s*"
     r"(?P<address>.*?)\.\s*Плановая\s+дата",
@@ -121,7 +126,7 @@ LOADING_POINT_RE = re.compile(
 )
 UNLOADING_POINT_RE = re.compile(
     r"^3\.3\.(?P<number>\d+)\.\s*Точка\s+выгрузки\s*№\s*\d+\s*[—–-]\s*"
-    r"(?P<address>.*?)\.\s*Плановая\s+дата",
+    r"(?P<address>.*?)\.\s*Плановая\s+дата\s+завершения\s*:",
     re.DOTALL,
 )
 
@@ -483,6 +488,7 @@ class ArendaTsGenerator(BaseContractGenerator):
             contract,
             self._root_value(data, contract_data, "lease_start_date"),
             self._root_value(data, contract_data, "lease_end_date"),
+            self._root_value(data, contract_data, "planned_completion_date"),
         )
         self._fill_lessee(replacements, lessee, is_ooo)
         self._fill_lessor(replacements, lessor)
@@ -513,8 +519,17 @@ class ArendaTsGenerator(BaseContractGenerator):
         contract: Dict[str, Any],
         lease_start_date: Any,
         lease_end_date: Any,
+        planned_completion_date: Any,
     ) -> None:
-        """Шапка: номер и дата договора, а также плановый срок аренды (п. 2.5)."""
+        """
+        Шапка и сроки: номер и дата договора, плановый период аренды (п. 2.5)
+        и планируемая дата завершения рейса (п. 3.3.2).
+
+        Даты не выводятся одна из другой: lease_start_date / lease_end_date —
+        период аренды, planned_completion_date — отдельное поле интерфейса
+        (шаг FIX-1; в образце ТЛ-574 это разные даты). Пустое значение
+        печатается пустой строкой — дату не выдумываем.
+        """
         replacements["contract_number"] = self._single_line(
             contract.get("number") or ""
         )
@@ -523,6 +538,9 @@ class ArendaTsGenerator(BaseContractGenerator):
         )
         replacements["lease_start_date"] = self._format_date_full(lease_start_date or "")
         replacements["lease_end_date"] = self._format_date_full(lease_end_date or "")
+        replacements["planned_completion_date"] = self._format_date_full(
+            planned_completion_date or ""
+        )
 
     def _fill_lessee(
         self,
@@ -802,7 +820,8 @@ class ArendaTsGenerator(BaseContractGenerator):
         is_ip_without_vat: bool,
     ) -> None:
         """
-        Раздел 4.1 «Арендная плата, НДС и порядок оплаты».
+        Раздел 4 «Арендная плата, НДС и порядок оплаты»: суммы п. 4.1 и срок
+        оплаты п. 4.5.
 
         Вариант ООО и ИП с НДС: три суммы — без НДС, НДС по ставке и итого,
         каждая цифрами и прописью. Вариант ИП без НДС: одна сумма, а
@@ -816,6 +835,8 @@ class ArendaTsGenerator(BaseContractGenerator):
         плейсхолдера в бланке нет (ИП без НДС: sum_wo_vat / sum_vat /
         vat_rate), печатается «—».
         """
+        self._fill_payment_days(replacements, contract)
+
         vat_rate_num = self._resolve_vat_rate_num(contract)
         base = self._base_price(contract, is_ip_without_vat)
 
@@ -863,6 +884,61 @@ class ArendaTsGenerator(BaseContractGenerator):
                 "Маппинг суммы — TODO 3.1.D.B.1",
                 "ИП без НДС" if is_ip_without_vat else "с НДС",
             )
+
+    def _fill_payment_days(
+        self, replacements: Dict[str, str], contract: Dict[str, Any]
+    ) -> None:
+        """
+        Пункт 4.5: срок оплаты в банковских днях — «{{payment_days}}
+        ({{payment_days_words}}) банковских дней».
+
+        Логика как у перевозки (core/contracts/perevozka/generator.py,
+        _build_replacements_map): срок берётся из contract и печатается
+        цифрами плюс прописью в родительном падеже — «45 (сорока пяти)».
+        Срок не выдумывается: нет ключа (распознавание его не нашло, поле
+        вкладки пустое) — оба плейсхолдера пустые, о незаполненном сроке
+        сообщит валидатор. Строку пишет ТОЛЬКО этот INFO: он же несёт и
+        срок, и признак «срок не задан», и в лог попадают одни числа.
+        """
+        raw_days = contract.get("payment_days")
+        days = self._payment_days(raw_days)
+
+        if days is None:
+            replacements["payment_days"] = ""
+            replacements["payment_days_words"] = ""
+            logger.info(
+                f"{TITLE}: срок оплаты (п. 4.5) — не задан: в бланке пустая строка"
+            )
+            return
+
+        replacements["payment_days"] = str(days)
+        replacements["payment_days_words"] = self._days_to_words_genitive(days)
+        logger.info(f"{TITLE}: срок оплаты (п. 4.5) — {days} банковских дней")
+
+    @staticmethod
+    def _payment_days(value: Any) -> Optional[int]:
+        """
+        Срок оплаты целым числом банковских дней: 45, «45», «45 дн.» → 45.
+
+        Ноль и отрицательное значение читаются как «срок не задан» (None) —
+        ровно так же, как в сборщике окна
+        (ui/windows/arenda_ts/data.py::_payment_days_value): в п. 4.5 бланка
+        печатается число банковских дней, и ноль там смысла не имеет. Если
+        значение не разобралось, тоже None: мусор в бланк не попадает.
+        """
+        if value is None or isinstance(value, bool):
+            return None
+
+        try:
+            if isinstance(value, str):
+                number = float(value.replace(" ", "").replace(",", ".").strip())
+            else:
+                number = float(value)
+        except (ValueError, TypeError):
+            return None
+
+        days = int(number)
+        return days if days > 0 else None
 
     # ─────────────────────────────────────────────────────────
     # Стороны, точки маршрута и значения из исходных данных

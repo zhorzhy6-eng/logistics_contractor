@@ -555,28 +555,45 @@ def test_requisites_table_has_both_parties(generator, work_dir, variant):
 def test_replacements_map_covers_all_template_placeholders(
     generator, templates_dir, variant
 ):
-    """Каждый плейсхолдер бланка получает значение, лишних ключей нет."""
+    """
+    Каждый плейсхолдер бланка получает значение, лишних ключей нет.
+
+    Одно исключение — unloading_2_date: в бланке его больше нет (п. 3.3.2
+    печатает {{planned_completion_date}}, шаг FIX-1-T), но ключ остаётся в
+    карте замен: он парный к unloading_2_address и заполняется датой точки из
+    вкладки «Маршрут». В документ он не идёт — бланк его не спрашивает.
+    """
     names = _template_placeholder_names(templates_dir, variant)
     assert names, "в шаблоне не найдено ни одного плейсхолдера"
 
     replacements = generator._build_replacements_map(_payload(variant))
 
-    assert set(replacements) == names, (
-        f"набор ключей карты замен не совпал с бланком ({variant}): "
-        f"нет {sorted(names - set(replacements))}, "
-        f"лишние {sorted(set(replacements) - names)}"
+    assert set(replacements) - names == {"unloading_2_date"}, (
+        f"лишние ключи карты замен ({variant}): "
+        f"{sorted(set(replacements) - names - {'unloading_2_date'})}"
+    )
+    assert not (names - set(replacements)), (
+        f"плейсхолдеры бланка без значений ({variant}): "
+        f"{sorted(names - set(replacements))}"
     )
 
 
-def test_replacements_map_covers_187_placeholders_of_ooo_template(
+def test_replacements_map_covers_189_placeholders_of_ooo_template(
     generator, templates_dir
 ):
-    """В ООО-бланке 187 плейсхолдеров — все они есть в карте замен."""
+    """
+    В ООО-бланке 189 плейсхолдеров — все они (кроме unloading_2_date) есть
+    в карте замен.
+
+    Было 187: шаг FIX-1-T заменил в п. 3.3.2 {{unloading_2_date}} на
+    {{planned_completion_date}} (−1) и добавил в п. 4.5 {{payment_days}} и
+    {{payment_days_words}} (+2).
+    """
     name = ArendaTsGenerator.TEMPLATE_NAMES["ООО"]
     text = _document_text(Document(str(templates_dir / name)))
     occurrences = [match.strip("{} ") for match in PLACEHOLDER_RE.findall(text)]
-    assert len(occurrences) == 187, (
-        f"в ООО-бланке {len(occurrences)} плейсхолдеров, ожидалось 187"
+    assert len(occurrences) == 189, (
+        f"в ООО-бланке {len(occurrences)} плейсхолдеров, ожидалось 189"
     )
 
     replacements = generator._build_replacements_map(_payload("ООО"))

@@ -65,13 +65,15 @@ CARRIER_TYPES = tuple(TEMPLATE_NAMES)
 VAT_VARIANTS = ("ООО", "ИП с НДС")
 
 #: SHA256 собранных шаблонов (ЭТАП 3.1.D.A.1-A.3-fix: поля российского
-#: стандарта 2,0 / 1,5 / 2,0 / 2,0 см на A4).
+#: стандарта 2,0 / 1,5 / 2,0 / 2,0 см на A4; шаг FIX-1-T: п. 3.3.2 —
+#: {{planned_completion_date}}, п. 4.5 — {{payment_days}} и
+#: {{payment_days_words}}).
 #: Если шаблон пересобрали осознанно (например, поменяли формулировку),
 #: значения нужно обновить — тест ловит ручную правку .docx мимо сборщика.
 TEMPLATE_SHA256 = {
-    "ООО": "bfbc6ea761ccef6aff88419e3dd43df5cc2739c52674e7464ce3c4444142abeb",
-    "ИП с НДС": "6a08de45bd0952976e3bd2d8f3208fa2feb5765e54be5c76bc7204e838f30633",
-    "ИП без НДС": "7496d1e8ae1404f5c2a02ba3fbcc03a83f437e1bf5d7485c0004bc10f7232309",
+    "ООО": "949cc7d08858fe9f1d4827a1422cc76ef5dbae2ade470c51b781a93d3d5da408",
+    "ИП с НДС": "bbe2ca0ffe981995c674e35d618f5dca5bf21eea46b9d2f4cc58162c5cbb6f45",
+    "ИП без НДС": "3647b86fee302db007a3d02df36865333a3cb2863ca86b288502deab18f72688",
 }
 
 #: Образец-источник и его SHA256 на момент сборки шаблонов.
@@ -93,6 +95,10 @@ CAR_COLUMN_WIDTHS = ("453", "1360", "2382", "1984", "2552")
 
 CAR_ROWS = 12
 MAX_POINTS = 10
+
+#: Точка выгрузки, в пункте которой напечатана ПЛАНОВАЯ ДАТА ЗАВЕРШЕНИЯ РЕЙСА
+#: (п. 3.3.2, шаг FIX-1-T): у неё дата своя, а не {{unloading_2_date}}.
+COMPLETION_POINT = 2
 
 #: Плейсхолдеры, общие для всех трёх вариантов.
 COMMON_PLACEHOLDERS = (
@@ -117,6 +123,11 @@ COMMON_PLACEHOLDERS = (
     "trailer_plate",
     "lease_start_date",
     "lease_end_date",
+    # Планируемая дата завершения рейса (п. 3.3.2) и срок оплаты (п. 4.5) —
+    # поля шага FIX-1, попадают в бланк с шага FIX-1-T.
+    "planned_completion_date",
+    "payment_days",
+    "payment_days_words",
     "cargo_count",
     "route",
     "driver_full_name",
@@ -264,6 +275,9 @@ def _expected_placeholders(variant: str) -> set:
         f"unloading_{number}_{field}"
         for number in range(1, MAX_POINTS + 1)
         for field in ("address", "date")
+        # У точки № 2 (п. 3.3.2) дата — планируемая дата завершения рейса,
+        # отдельное поле бланка (см. COMPLETION_POINT).
+        if not (number == COMPLETION_POINT and field == "date")
     }
     if variant == "ООО":
         names.add("lessee_kpp")
@@ -421,13 +435,24 @@ def test_loading_point_placeholders_present(template_doc, variant):
 
 
 def test_unloading_point_placeholders_present(template_doc, variant):
-    """Все 10 точек выгрузки: адрес и плановая дата завершения."""
+    """
+    Точки выгрузки: адрес у всех десяти, дата — у всех, кроме п. 3.3.2.
+
+    У второй точки (п. 3.3.2) напечатана ПЛАНОВАЯ ДАТА ЗАВЕРШЕНИЯ РЕЙСА —
+    отдельное поле {{planned_completion_date}} (шаг FIX-1-T), поэтому
+    {{unloading_2_date}} в бланке нет.
+    """
     text = _document_text(template_doc)
     missing = [
-        f"{{{{unloading_{number}_{field}}}}}"
+        "{{unloading_" + str(number) + "_address}}"
         for number in range(1, MAX_POINTS + 1)
-        for field in ("address", "date")
-        if f"{{{{unloading_{number}_{field}}}}}" not in text
+        if "{{unloading_" + str(number) + "_address}}" not in text
+    ]
+    missing += [
+        "{{unloading_" + str(number) + "_date}}"
+        for number in range(1, MAX_POINTS + 1)
+        if number != COMPLETION_POINT
+        and "{{unloading_" + str(number) + "_date}}" not in text
     ]
     assert not missing, f"нет плейсхолдеров точек выгрузки: {missing}"
 
@@ -688,13 +713,75 @@ def test_loading_point_line_format(template_doc, variant):
 
 
 def test_unloading_point_line_format(template_doc, variant):
-    """Строка точки выгрузки: адрес и плановая дата завершения."""
-    texts = _body_texts(template_doc)
-    line = next(t for t in texts if t.startswith("3.3.1. Точка выгрузки № 1"))
-    assert line == (
-        "3.3.1. Точка выгрузки № 1 — {{unloading_1_address}}. Плановая дата "
-        "завершения: {{unloading_1_date}} г."
+    """
+    Строка точки выгрузки: адрес и плановая дата завершения.
+
+    Плейсхолдер даты стоит отдельным run, а не внутри строки с пробелами по
+    краям: docxtpl подставляет значение вместе с окружающими пробелами, и в
+    абзаце оставался бы лишний пробел. Поэтому текст абзаца собирается из
+    runs — тем же способом, каким его читает Word.
+    """
+    paragraph = next(
+        p for p in template_doc.paragraphs
+        if p.text.startswith("3.3.1. Точка выгрузки № 1")
     )
+    assert [run.text for run in paragraph.runs] == [
+        "3.3.1. Точка выгрузки № 1 — ",
+        "{{unloading_1_address}}. Плановая дата завершения: ",
+        "{{unloading_1_date}}",
+        " г.",
+    ]
+
+
+def test_completion_date_stands_in_clause_3_3_2(template_doc, variant):
+    """
+    П. 3.3.2 печатает плановую дату завершения рейса, а не дату точки.
+
+    {{planned_completion_date}} — поле интерфейса «Планируемая дата завершения
+    рейса» (шаг FIX-1): в образце ТЛ-574 она не совпадает ни с датой второй
+    точки выгрузки, ни с концом срока аренды. Остальные девять точек выгрузки
+    по-прежнему печатают свою дату.
+    """
+    texts = _body_texts(template_doc)
+
+    completion = next(t for t in texts if t.startswith("3.3.2. Точка выгрузки № 2"))
+    assert completion == (
+        "3.3.2. Точка выгрузки № 2 — {{unloading_2_address}}. Плановая дата "
+        "завершения: {{planned_completion_date}} г."
+    )
+
+    # Плейсхолдер точки № 2 из бланка ушёл: дату печатает он один.
+    assert "{{unloading_2_date}}" not in _document_text(template_doc)
+
+    # Соседние точки не тронуты: у них своя дата.
+    for number in (1, 3, 10):
+        line = next(t for t in texts
+                    if t.startswith(f"3.3.{number}. Точка выгрузки № {number}"))
+        assert f"{{{{unloading_{number}_date}}}}" in line, line
+
+    # Плановая дата завершения — не срок аренды: п. 2.5 её не печатает.
+    period = next(t for t in texts if t.startswith("2.5. Плановый период аренды:"))
+    assert "{{planned_completion_date}}" not in period
+
+
+def test_payment_days_stand_in_clause_4_5(template_doc, variant):
+    """
+    П. 4.5: срок оплаты — плейсхолдеры, а не константа «30 (тридцати)».
+
+    Формулировка — как в шаблоне перевозки (п. 4.4): цифры, затем прописью в
+    скобках, затем «банковских дней». Константы в бланке быть не должно:
+    число банковских дней задаётся на вкладке «Стоимость».
+    """
+    texts = _body_texts(template_doc)
+    line = next(t for t in texts if t.startswith("4.5. Оплата производится"))
+
+    assert line.startswith(
+        "4.5. Оплата производится в течение {{payment_days}} "
+        "({{payment_days_words}}) банковских дней с даты фактического "
+        "возврата ТС"
+    )
+    assert "30 (тридцати)" not in line
+    assert "{{unloading_2_date}}" not in line
 
 
 # ─────────────────────────────────────────────────────────────

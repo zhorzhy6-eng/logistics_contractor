@@ -107,6 +107,19 @@ LEASE_START_TEXT = "21.09.2026"
 LEASE_END_TEXT = "27.09.2026"
 ROUTE = "г. Москва — г. Калуга — г. Чехов"
 
+#: Планируемая дата завершения рейса (п. 3.3.2) — ТРЕТЬЯ дата договора, не
+#: совпадающая ни с концом срока аренды, ни с датой точки выгрузки: в образце
+#: ТЛ-574 это тоже разные даты (шаг FIX-1/T).
+PLANNED_COMPLETION = "2026-09-26"
+PLANNED_COMPLETION_TEXT = "26.09.2026"
+
+#: Срок оплаты (п. 4.5), банковских дней: значение по умолчанию из вкладки
+#: «Стоимость» и другое число — оба печатаются цифрами и прописью.
+PAYMENT_DAYS_DEFAULT = 30
+PAYMENT_DAYS_CUSTOM = 45
+PAYMENT_DAYS_DEFAULT_WORDS = "тридцати"
+PAYMENT_DAYS_CUSTOM_WORDS = "сорока пяти"
+
 #: Стороны. Арендатор — наша сторона (три варианта), Арендодатель — всегда
 #: ООО: на это рассчитаны все три бланка.
 LESSEE_OOO_NAME = "ООО «Арендатор-Тест»"
@@ -327,16 +340,30 @@ def _loadings(count: int = 2) -> list:
     ]
 
 
-def _unloadings(count: int = 1) -> list:
-    """Точки выгрузки: адрес и плановая дата завершения."""
-    return [
-        {
-            "address": "г. Чехов, ул. Приёмная, д. 9",
-            "date": "2026-09-27",
+def _unloadings(count: int = 1, planned_completion: str = "") -> list:
+    """
+    Точки выгрузки: адрес и плановая дата завершения.
+
+    Дата последней точки — планируемая дата завершения рейса (в бланке это
+    п. 3.3.2, где стоит {{planned_completion_date}}). Если она передана, у
+    последней точки дата своя, отличная от неё: так видно, что в п. 3.3.2
+    печатается поле договора, а не дата точки. Остальные точки — со своей
+    датой. Порядок аргументов хвостом, чтобы не ломать вызовы вида
+    _unloadings(2).
+    """
+    addresses = ("г. Чехов, ул. Приёмная, д. 9",
+                 "г. Калуга, ул. Конечная, д. 1")
+    points = []
+    for number in range(1, count + 1):
+        date = f"2026-09-2{number + 3}"
+        if planned_completion and number == count:
+            date = "2026-09-25"
+        points.append({
+            "address": addresses[number - 1],
+            "date": date,
             "time_window": "",
-        }
-        for _ in range(1, count + 1)
-    ]
+        })
+    return points
 
 
 def _vehicles(count: int = FILLED_CARS) -> list:
@@ -371,6 +398,10 @@ def _contract_payload(variant: str, carrier_type: str = "auto") -> dict:
     _root_value и ArendaTsValidator. carrier_type заполняет интерфейс;
     carrier_type=None — поля нет (проверка стыка с промптом, который его не
     отдаёт).
+
+    Три даты и срок оплаты — как их отдаёт вкладка: lease_start_date /
+    lease_end_date (п. 2.5), planned_completion_date (п. 3.3.2) и
+    payment_days (п. 4.5). Ни одна из дат не выводится из другой.
     """
     contract = {
         "number": CONTRACT_NUMBER,
@@ -379,7 +410,9 @@ def _contract_payload(variant: str, carrier_type: str = "auto") -> dict:
         "lessor": _lessor(),
         "lease_start_date": LEASE_START,
         "lease_end_date": LEASE_END,
+        "planned_completion_date": PLANNED_COMPLETION,
         "route": ROUTE,
+        "payment_days": PAYMENT_DAYS_DEFAULT,
     }
     if carrier_type == "auto":
         carrier_type = variant
@@ -632,6 +665,10 @@ def test_replacements_map_matches_template_placeholders(generator,
     Это главная проверка стыка «данные → бланк»: лишний или недостающий ключ
     означает, что генератор и шаблон разошлись, — а в готовом документе это
     видно только как «{{…}}» в тексте или как пропущенная строка.
+
+    Единственное исключение — unloading_2_date: он остаётся в карте замен
+    парным ключом к unloading_2_address (дата точки из вкладки «Маршрут»), а
+    в бланке его место занимает {{planned_completion_date}} (шаг FIX-1-T).
     """
     variant = valid_data_of_variant.contract["carrier_type"]
     template = templates_dir / TEMPLATE_NAMES[variant]
@@ -643,11 +680,20 @@ def test_replacements_map_matches_template_placeholders(generator,
 
     replacements = generator.build_replacements(valid_data_of_variant)
 
-    assert set(replacements) == names, (
-        f"набор ключей карты замен не совпал с бланком ({variant}): "
-        f"нет {sorted(names - set(replacements))}, "
-        f"лишние {sorted(set(replacements) - names)}"
+    assert not (names - set(replacements)), (
+        f"плейсхолдеры бланка без значений ({variant}): "
+        f"{sorted(names - set(replacements))}"
     )
+    assert set(replacements) - names == {"unloading_2_date"}, (
+        f"лишние ключи карты замен ({variant}): "
+        f"{sorted(set(replacements) - names - {'unloading_2_date'})}"
+    )
+
+    # Дата точки № 2 в карте есть (её читает вкладка), но в бланк не идёт:
+    # в п. 3.3.2 печатается планируемая дата завершения рейса.
+    assert replacements["unloading_2_address"] == ""
+    assert replacements["unloading_2_date"] == ""
+    assert replacements["planned_completion_date"] == PLANNED_COMPLETION_TEXT
 
 
 def test_party_blocks_reach_the_document(generator, valid_data_of_variant,
@@ -734,6 +780,99 @@ def test_lease_dates_and_route_reach_the_document(generator,
             for text in texts
         ), "нет планового периода аренды"
         assert f"3.4. Согласованный маршрут: {ROUTE}." in texts
+
+
+def test_planned_completion_date_is_not_confused_with_lease_end(
+    generator, work_dir
+):
+    """
+    Планируемая дата завершения рейса и три остальные даты не путаются.
+
+    Три даты договора — разные поля: lease_start_date / lease_end_date
+    (п. 2.5, срок аренды) и planned_completion_date (п. 3.3.2, завершение
+    рейса). Здесь у каждой СВОЁ значение, и все проверяются по местам: если
+    генератор возьмёт дату не из того поля, договор напечатает не ту дату,
+    что введена в интерфейсе.
+    """
+    data = _make_data("ООО")
+    # Точки выгрузки — две штуки, у каждой своя дата; п. 3.3.2 при этом
+    # печатает дату завершения рейса из contract.
+    points = _unloadings(2, planned_completion=PLANNED_COMPLETION)
+    data.unloadings = points
+    data.contract["unloadings"] = [dict(point) for point in points]
+
+    first_unloading_text = "24.09.2026"   # дата первой точки
+    second_unloading_text = "25.09.2026"  # дата второй точки — своя
+    assert second_unloading_text != PLANNED_COMPLETION_TEXT
+
+    with _generate(generator, data, work_dir, "e2e_completion_date") as path:
+        doc = Document(str(path))
+        texts = _body_texts(doc)
+        period = next(t for t in texts if t.startswith("2.5. Плановый период"))
+        first = next(t for t in texts if t.startswith("3.3.1."))
+        second = next(t for t in texts if t.startswith("3.3.2."))
+
+    # П. 2.5 — срок аренды; даты завершения рейса там нет.
+    assert LEASE_START_TEXT in period and LEASE_END_TEXT in period
+    assert PLANNED_COMPLETION_TEXT not in period
+
+    # П. 3.3.1 — дата первой точки, а не дата завершения рейса.
+    assert first_unloading_text in first
+    assert PLANNED_COMPLETION_TEXT not in first
+
+    # П. 3.3.2 — планируемая дата завершения рейса, а не дата самой точки.
+    assert PLANNED_COMPLETION_TEXT in second
+    assert second_unloading_text not in second
+
+
+def test_payment_days_custom_value_reaches_the_document(generator, work_dir):
+    """Срок оплаты 45 дней печатается цифрами и прописью (п. 4.5)."""
+    data = _make_data("ООО")
+    data.contract["payment_days"] = PAYMENT_DAYS_CUSTOM
+
+    with _generate(generator, data, work_dir, "e2e_payment_days_45") as path:
+        texts = _body_texts(Document(str(path)))
+
+    clause = next(t for t in texts if t.startswith("4.5. Оплата производится"))
+    assert "в течение 45 (сорока пяти) банковских дней" in clause
+    assert "30 (тридцати)" not in clause
+
+
+def test_payment_days_default_value_reaches_the_document(generator,
+                                                         work_dir):
+    """Срок оплаты по умолчанию (30 дней) печатается теми же плейсхолдерами."""
+    data = _make_data("ООО")
+    assert data.contract["payment_days"] == PAYMENT_DAYS_DEFAULT
+
+    with _generate(generator, data, work_dir, "e2e_payment_days_30") as path:
+        texts = _body_texts(Document(str(path)))
+
+    clause = next(t for t in texts if t.startswith("4.5. Оплата производится"))
+    assert "в течение 30 (тридцати) банковских дней" in clause
+
+
+def test_payment_days_missing_is_printed_as_empty(generator, work_dir):
+    """
+    Срок оплаты не задан — в п. 4.5 пустое место, а не выдуманное число.
+
+    Ноль и отрицательное значение означают «срок не задан» (так их читает и
+    сборщик окна); отсутствие ключа — то же самое. О незаполненном сроке
+    сообщает валидатор, а генератор ничего не додумывает.
+    """
+    for value in (0, -5, None):
+        data = _make_data("ООО")
+        data.contract["payment_days"] = value
+
+        name = f"e2e_payment_days_{value}".replace("-", "minus")
+        with _generate(generator, data, work_dir, name) as path:
+            texts = _body_texts(Document(str(path)))
+
+        clause = next(t for t in texts if t.startswith("4.5. Оплата производится"))
+        # Числа в сроке нет: docxtpl оставляет от плейсхолдеров пустое место.
+        assert clause.startswith("4.5. Оплата производится в течение (")
+        assert "банковских дней" in clause
+        assert "30 (тридцати)" not in clause
+        assert PLACEHOLDER_RE.search(clause) is None
 
 
 def test_point_time_is_read_from_time_window(generator, work_dir):
@@ -1031,6 +1170,23 @@ def test_document_matches_the_replacements_map(generator,
         assert (f"3.3.1. Точка выгрузки № 1 — "
                 f"{replacements['unloading_1_address']}. Плановая дата "
                 f"завершения: {replacements['unloading_1_date']} г.") in body
+
+        # Планируемая дата завершения рейса (п. 3.3.2) — своё поле договора:
+        # это НЕ конец срока аренды (п. 2.5). В «полных» данных точка выгрузки
+        # одна, поэтому строки 3.3.2 в документе нет (пустой адрес удаляет
+        # постобработка), а дата завершения рейса печатается отдельным тестом
+        # ниже — там точек две.
+        assert replacements["planned_completion_date"] == PLANNED_COMPLETION_TEXT
+        assert replacements["planned_completion_date"] != replacements[
+            "lease_end_date"
+        ]
+        assert not [t for t in texts if t.startswith("3.3.2.")]
+
+        # Срок оплаты (п. 4.5) — цифрами и прописью.
+        assert (f"Оплата производится в течение "
+                f"{replacements['payment_days']} "
+                f"({replacements['payment_days_words']}) банковских дней"
+                ) in body
 
         assert f"ФИО: {replacements['driver_full_name']}" in body
         assert f"Паспорт: {replacements['driver_passport']}" in body

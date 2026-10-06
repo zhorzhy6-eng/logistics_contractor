@@ -64,8 +64,9 @@ LESSEE_KEYS = {
 #: и плейсхолдера КПП у него нет).
 LESSOR_EXTRA_KEYS = {"entity_type", "kpp"}
 
-#: Ключи стоимости в блоке contract.
-SUM_KEYS = ("sum_wo_vat", "sum_vat", "sum_total", "vat_rate")
+#: Ключи стоимости в блоке contract: суммы, ставка НДС и срок оплаты
+#: в банковских днях (п. 4.5, шаг FIX-1-T).
+SUM_KEYS = ("sum_wo_vat", "sum_vat", "sum_total", "vat_rate", "payment_days")
 
 #: Блоки и поля чужих схем (перевозка, заявка), которых здесь быть не должно.
 FOREIGN_KEYS = (
@@ -336,7 +337,7 @@ def test_prompt_does_not_mix_drivers(prompt):
 
 @pytest.mark.parametrize("key", SUM_KEYS)
 def test_schema_has_sum_keys(schema, key):
-    """В схеме есть все четыре ключа стоимости."""
+    """В схеме есть все ключи стоимости: суммы, ставка НДС и срок оплаты."""
     assert key in schema["contract"], f"в схеме нет ключа {key}"
 
 
@@ -526,17 +527,34 @@ def test_schema_driver_has_key(schema):
 
 @pytest.mark.parametrize("key", [
     "number", "date", "sum_wo_vat", "sum_vat", "sum_total", "vat_rate",
+    "payment_days",
 ])
 def test_schema_contract_has_key(schema, key):
-    """Блок contract содержит реквизиты договора и суммы."""
+    """Блок contract содержит реквизиты договора, суммы и срок оплаты."""
     assert key in schema["contract"], f"в contract нет ключа {key}"
 
 
 def test_schema_contract_has_no_extra_keys(schema):
     """В contract нет ничего лишнего сверх оговорённого набора."""
     expected = {"number", "date", "sum_wo_vat", "sum_vat", "sum_total",
-                "vat_rate"}
+                "vat_rate", "payment_days"}
     assert set(schema["contract"]) == expected
+
+
+def test_prompt_reads_payment_days_from_clause_4_5(prompt):
+    """Срок оплаты извлекается из п. 4.5 и лежит в блоке contract."""
+    assert "payment_days" in prompt
+    assert "п. 4.5" in prompt
+    assert "банковских дней" in prompt
+    # Число прописью из скобок в ответ не переносится — поля для него нет.
+    assert "прописью в скобках" in prompt
+    # Дни из п. 4.5 — не срок аренды и не даты рейса.
+    assert "в payment_days НЕ попадают" in prompt
+
+
+def test_prompt_sets_zero_when_payment_days_missing(prompt):
+    """Срок оплаты в документе не указан → 0, а не выдуманное число."""
+    assert "срок оплаты в документе не указан — 0" in prompt
 
 
 def test_schema_defaults_are_typed(schema):
@@ -548,5 +566,7 @@ def test_schema_defaults_are_typed(schema):
     assert contract["sum_vat"] == 0.0
     assert contract["sum_total"] == 0.0
     assert contract["vat_rate"] == "22%"
+    assert contract["payment_days"] == 0
+    assert not isinstance(contract["payment_days"], bool)
     assert schema["lessee"]["entity_type"] == "ООО"
     assert schema["route"] == ""
