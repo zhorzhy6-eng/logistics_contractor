@@ -429,6 +429,33 @@ def test_salons_are_not_reloaded_when_not_empty(isolated_db, work_dir, monkeypat
     assert count_addresses("unloading") == 1
 
 
+def test_legacy_addresses_get_salon_fields_from_file(
+    isolated_db, work_dir, monkeypatch
+):
+    """
+    База, набранная до FIX-2.2, получает поля салона из файла.
+
+    Записи без кода салона — признак «файл ещё не читали»: адрес из файла
+    обновляет такую запись (usage_count +1 и наименование/город), а его
+    собственные значения не теряются.
+    """
+    path = _salon_xlsx(work_dir / "salons.xlsx", rows=[SALON_ROW])
+    _patch_salons_file(monkeypatch, path)
+    save_address("unloading", SALON_ROW[4])          # старая запись без салона
+    save_address("unloading", "г. Тверь, ул. Своя, д. 1")  # записи нет в файле
+
+    from db.database import _load_salons_if_empty
+
+    assert _load_salons_if_empty() == 0, "новых адресов файл не добавил"
+
+    rows = {row["address"]: row for row in get_addresses("unloading")}
+    assert rows[SALON_ROW[4]]["salon_name"] == SALON_ROW[2]
+    assert rows[SALON_ROW[4]]["salon_code"] == SALON_ROW[0]
+    assert rows[SALON_ROW[4]]["usage_count"] == 2
+    # Запись, которой нет в файле, осталась нетронутой.
+    assert rows["г. Тверь, ул. Своя, д. 1"]["salon_code"] in (None, "")
+
+
 def test_missing_salons_file_is_not_an_error(isolated_db, work_dir, monkeypatch):
     """Файла справочника нет — автозагрузки нет, ошибки тоже."""
     _patch_salons_file(monkeypatch, work_dir / "нет-такого.xlsx")
