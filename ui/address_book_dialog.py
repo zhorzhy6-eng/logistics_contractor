@@ -2,38 +2,59 @@
 # -*- coding: utf-8 -*-
 """
 Диалог справочника адресов погрузки/выгрузки.
+
+Справочник выгрузки (point_type='unloading') — это справочник САЛОНОВ
+(ШАГ FIX-2.2): у записи есть код салона (JMR-Axxx), наименование юр. лица,
+ИНН и город. Из него грузополучатель заявки берётся целиком: наименование
+идёт из графы «Юр. Лицо», адрес — из графы «Адрес доставки автомобилей».
+
 Позволяет выбирать, добавлять, редактировать и удалять адреса.
-Поддерживает импорт из Excel-файла.
+Поддерживает импорт из Excel-файла (графы ищутся по заголовкам — см.
+db.database.read_salons_rows).
 
 Сортировка: включена по клику на заголовок, при загрузке — по алфавиту.
+
+В connect — только методы и слоты, без lambda: lambda, захватывающая окно,
+создаёт цикл ссылок Python ↔ Qt.
 """
 
 import logging
-import os
 from typing import Dict, Any, Optional, List
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QMessageBox, QLineEdit, QAbstractItemView, QFormLayout,
-    QGroupBox, QWidget, QFileDialog,
+    QMessageBox, QLineEdit, QAbstractItemView, QFormLayout, QFileDialog,
 )
 from PyQt5.QtCore import Qt, QTimer
 
 from db.database import (
     get_addresses, save_address, update_address, delete_address,
-    import_addresses_from_list, count_addresses,
+    import_addresses_from_list, count_addresses, read_salons_rows,
 )
 
 from ui import theme
 
 logger = logging.getLogger("ui.address_book_dialog")
 
+#: Колонки таблицы справочника: код, наименование салона, город, адрес, счётчик.
+COL_ID = 0
+COL_CODE = 1
+COL_SALON_NAME = 2
+COL_SALON_CITY = 3
+COL_ADDRESS = 4
+COL_USAGE = 5
+
+#: Поля салона, которые диалог хранит и возвращает наружу.
+SALON_FIELDS = ("salon_name", "salon_code", "salon_inn", "salon_city")
+
 
 class EditAddressDialog(QDialog):
-    """Диалог добавления/редактирования одного адреса."""
+    """Диалог добавления/редактирования одной записи справочника."""
 
     def __init__(self, address: str = "", date: str = "", time_window: str = "",
+                 salon_name: str = "", salon_code: str = "",
+                 salon_inn: str = "", salon_city: str = "",
                  title: str = "Адрес", parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -45,6 +66,23 @@ class EditAddressDialog(QDialog):
         self.address_edit = QLineEdit(address)
         self.address_edit.setPlaceholderText("Полный адрес")
         form.addRow("Адрес *:", self.address_edit)
+
+        # ── Поля салона (ШАГ FIX-2.2) ──
+        self.salon_code_edit = QLineEdit(salon_code)
+        self.salon_code_edit.setPlaceholderText("Например JMR-A048")
+        form.addRow("Код:", self.salon_code_edit)
+
+        self.salon_name_edit = QLineEdit(salon_name)
+        self.salon_name_edit.setPlaceholderText("ООО «...»")
+        form.addRow("Наименование салона:", self.salon_name_edit)
+
+        self.salon_inn_edit = QLineEdit(salon_inn)
+        self.salon_inn_edit.setPlaceholderText("10 или 12 цифр")
+        form.addRow("ИНН:", self.salon_inn_edit)
+
+        self.salon_city_edit = QLineEdit(salon_city)
+        self.salon_city_edit.setPlaceholderText("Город салона")
+        form.addRow("Город:", self.salon_city_edit)
 
         self.date_edit = QLineEdit(date)
         self.date_edit.setPlaceholderText("ДД.ММ.ГГГГ (опционально)")
@@ -78,10 +116,15 @@ class EditAddressDialog(QDialog):
         self.accept()
 
     def get_data(self) -> Dict[str, str]:
+        """Данные записи: адрес, даты и поля салона (пустые — пустыми строками)."""
         return {
             "address": self.address_edit.text().strip(),
             "date": self.date_edit.text().strip(),
             "time_window": self.time_edit.text().strip(),
+            "salon_name": self.salon_name_edit.text().strip(),
+            "salon_code": self.salon_code_edit.text().strip(),
+            "salon_inn": self.salon_inn_edit.text().strip(),
+            "salon_city": self.salon_city_edit.text().strip(),
         }
 
 
@@ -104,10 +147,10 @@ class AddressBookDialog(QDialog):
 
         title_map = {
             "loading": "📋 Справочник адресов погрузки",
-            "unloading": "📋 Справочник адресов выгрузки",
+            "unloading": "📋 Справочник мест выгрузки (салоны)",
         }
         self.setWindowTitle(title_map.get(point_type, "📋 Справочник адресов"))
-        self.setMinimumSize(1000, 600)
+        self.setMinimumSize(1100, 600)
 
         layout = QVBoxLayout(self)
 
@@ -120,30 +163,35 @@ class AddressBookDialog(QDialog):
         search_layout = QHBoxLayout()
         search_layout.addWidget(QLabel("🔍 Поиск:"))
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Подстрока адреса...")
+        self.search_input.setPlaceholderText(
+            "Код, наименование салона, ИНН или адрес..."
+        )
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_search)
         search_layout.addWidget(self.search_input, 1)
 
         btn_reset = QPushButton("Сбросить")
-        btn_reset.clicked.connect(lambda: self.search_input.clear())
+        btn_reset.clicked.connect(self._on_reset_search)
         search_layout.addWidget(btn_reset)
 
         layout.addLayout(search_layout)
 
         # ── Таблица ──
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["ID", "Адрес", "Дата", "Время", "Использован"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels([
+            "ID", "Код", "Наименование салона", "Город", "Адрес", "Использован",
+        ])
 
         # ── СОРТИРОВКА ──
         self.table.setSortingEnabled(True)
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_ID, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_CODE, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_SALON_NAME, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_SALON_CITY, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_ADDRESS, QHeaderView.Stretch)
+        header.setSectionResizeMode(COL_USAGE, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.doubleClicked.connect(self._on_pick)
@@ -216,6 +264,10 @@ class AddressBookDialog(QDialog):
         """
         self._search_timer.start()
 
+    def _on_reset_search(self):
+        """Кнопка «Сбросить»: очищает строку поиска (без lambda в connect)."""
+        self.search_input.clear()
+
     def _current_search(self) -> str:
         return self.search_input.text().strip()
 
@@ -265,16 +317,30 @@ class AddressBookDialog(QDialog):
 
             item_id = QTableWidgetItem(str(item.get("id", "")))
             item_id.setData(Qt.UserRole, item)
-            self.table.setItem(row, 0, item_id)
+            self.table.setItem(row, COL_ID, item_id)
 
-            self.table.setItem(row, 1, QTableWidgetItem(item.get("address", "") or ""))
-            self.table.setItem(row, 2, QTableWidgetItem(item.get("date", "") or ""))
-            self.table.setItem(row, 3, QTableWidgetItem(item.get("time_window", "") or ""))
-            self.table.setItem(row, 4, QTableWidgetItem(f"{item.get('usage_count', 0)} раз"))
+            self.table.setItem(
+                row, COL_CODE, QTableWidgetItem(item.get("salon_code", "") or "")
+            )
+            self.table.setItem(
+                row, COL_SALON_NAME,
+                QTableWidgetItem(item.get("salon_name", "") or ""),
+            )
+            self.table.setItem(
+                row, COL_SALON_CITY,
+                QTableWidgetItem(item.get("salon_city", "") or ""),
+            )
+            self.table.setItem(
+                row, COL_ADDRESS, QTableWidgetItem(item.get("address", "") or "")
+            )
+            self.table.setItem(
+                row, COL_USAGE,
+                QTableWidgetItem(f"{item.get('usage_count', 0)} раз"),
+            )
 
-        # Включаем сортировку и сортируем по «Адрес» (колонка 1)
+        # Включаем сортировку и сортируем по «Адрес» (колонка 4).
         self.table.setSortingEnabled(True)
-        self.table.sortByColumn(1, Qt.AscendingOrder)
+        self.table.sortByColumn(COL_ADDRESS, Qt.AscendingOrder)
 
         self._offset += len(items)
         self._update_pager()
@@ -288,7 +354,7 @@ class AddressBookDialog(QDialog):
         row = self.table.currentRow()
         if row < 0:
             return None
-        item = self.table.item(row, 0)
+        item = self.table.item(row, COL_ID)
         if not item:
             return None
         return item.data(Qt.UserRole)
@@ -297,7 +363,7 @@ class AddressBookDialog(QDialog):
     # Добавление / редактирование / удаление
     # ─────────────────────────────────────────────────────────
     def _on_add(self):
-        dialog = EditAddressDialog(title="Новый адрес", parent=self)
+        dialog = EditAddressDialog(title="Новая запись справочника", parent=self)
         if dialog.exec_():
             data = dialog.get_data()
             save_address(
@@ -305,6 +371,10 @@ class AddressBookDialog(QDialog):
                 data["address"],
                 data["date"],
                 data["time_window"],
+                data["salon_name"],
+                data["salon_code"],
+                data["salon_inn"],
+                data["salon_city"],
             )
             self._reload_first_page()
 
@@ -318,7 +388,11 @@ class AddressBookDialog(QDialog):
             address=selected.get("address", ""),
             date=selected.get("date", "") or "",
             time_window=selected.get("time_window", "") or "",
-            title="Редактирование адреса",
+            salon_name=selected.get("salon_name", "") or "",
+            salon_code=selected.get("salon_code", "") or "",
+            salon_inn=selected.get("salon_inn", "") or "",
+            salon_city=selected.get("salon_city", "") or "",
+            title="Редактирование записи справочника",
             parent=self,
         )
         if dialog.exec_():
@@ -328,6 +402,10 @@ class AddressBookDialog(QDialog):
                 data["address"],
                 data["date"],
                 data["time_window"],
+                data["salon_name"],
+                data["salon_code"],
+                data["salon_inn"],
+                data["salon_city"],
             )
             self._reload_first_page()
 
@@ -339,7 +417,7 @@ class AddressBookDialog(QDialog):
 
         reply = QMessageBox.question(
             self, "Удаление",
-            f"Удалить адрес из справочника?\n\n{selected.get('address', '')}",
+            f"Удалить запись из справочника?\n\n{selected.get('address', '')}",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
@@ -350,6 +428,15 @@ class AddressBookDialog(QDialog):
     # Импорт из Excel
     # ─────────────────────────────────────────────────────────
     def _on_import_excel(self):
+        """
+        Импорт справочника из Excel.
+
+        Графы файла ищутся по ЗАГОЛОВКАМ (db.database.read_salons_rows):
+        КОД → код салона, ИНН → ИНН, «Юр. Лицо» → наименование, Город →
+        город, «Адрес доставки автомобилей» → адрес. Лишние графы
+        (e-mail, телефоны, комментарии, региональный менеджер) не читаются.
+        Если шапка не распознана, работаем как раньше — по первой колонке.
+        """
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Выберите Excel-файл со списком адресов",
@@ -359,25 +446,72 @@ class AddressBookDialog(QDialog):
         if not path:
             return
 
+        rows = read_salons_rows(path)
+        if not rows:
+            rows = self._read_first_column(path)
+            if not rows:
+                QMessageBox.warning(
+                    self, "Импорт",
+                    "В файле не найдено ни одного адреса "
+                    "(нет графы «Адрес доставки» и первая колонка пуста?)."
+                )
+                return
+            logger.info(
+                "Импорт справочника: шапка не распознана — читаю первую колонку"
+            )
+
+        reply = QMessageBox.question(
+            self, "Импорт",
+            f"Найдено записей: {len(rows)}.\n\n"
+            f"Импортировать их в справочник «{self.point_type}»?\n\n"
+            f"Дубликаты будут учтены как «+1 использование».",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        added = import_addresses_from_list(self.point_type, rows)
+
+        QMessageBox.information(
+            self, "Импорт завершён",
+            f"Обработано записей: {len(rows)}\n"
+            f"Добавлено новых: {added}\n"
+            f"Уже были в справочнике: {len(rows) - added}"
+        )
+        logger.info(
+            f"Импорт из Excel: обработано={len(rows)}, добавлено={added}"
+        )
+
+        self._reload_first_page()
+
+    @staticmethod
+    def _read_first_column(path: str) -> List[Dict[str, str]]:
+        """
+        Запасной путь импорта: первая колонка файла как список адресов.
+
+        Так читались файлы прежнего формата (одна колонка «Адрес»). Если
+        файл не похож на справочник салонов (нет ожидаемой шапки), этот
+        путь сохраняет прежнее поведение импорта.
+        """
         try:
             import openpyxl
         except ImportError:
-            QMessageBox.critical(
-                self, "Ошибка",
-                "Не установлен модуль openpyxl.\n\n"
-                "Установите: pip install openpyxl"
-            )
-            return
+            logger.warning("openpyxl не установлен — импорт из Excel невозможен")
+            return []
 
         try:
-            wb = openpyxl.load_workbook(path, data_only=True)
-            ws = wb.active
+            workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        except Exception as e:  # noqa: BLE001 — файл может быть занят или битым
+            logger.error(f"Не удалось прочитать файл импорта ({type(e).__name__})")
+            return []
 
-            addresses = []
+        try:
+            sheet = workbook.active
+            addresses: List[Dict[str, str]] = []
             skipped_header = False
-
-            for row in ws.iter_rows(min_row=1, max_col=1, values_only=True):
-                value = row[0]
+            for row in sheet.iter_rows(min_row=1, max_col=1, values_only=True):
+                value = row[0] if row else None
                 if value is None:
                     continue
                 text = str(value).strip()
@@ -391,47 +525,15 @@ class AddressBookDialog(QDialog):
                     "date": "",
                     "time_window": "",
                 })
-
-            if not addresses:
-                QMessageBox.warning(
-                    self, "Импорт",
-                    "В файле не найдено ни одного адреса "
-                    "(первая колонка пуста?)."
-                )
-                return
-
-            reply = QMessageBox.question(
-                self, "Импорт",
-                f"Найдено адресов: {len(addresses)}.\n\n"
-                f"Импортировать их в справочник «{self.point_type}»?\n\n"
-                f"Дубликаты будут учтены как «+1 использование».",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply != QMessageBox.Yes:
-                return
-
-            added = import_addresses_from_list(self.point_type, addresses)
-
-            QMessageBox.information(
-                self, "Импорт завершён",
-                f"Обработано адресов: {len(addresses)}\n"
-                f"Добавлено новых: {added}\n"
-                f"Уже были в справочнике: {len(addresses) - added}"
-            )
-            logger.info(
-                f"Импорт из Excel: {path}, обработано={len(addresses)}, "
-                f"добавлено={added}"
-            )
-
-            self._reload_first_page()
-
-        except Exception as e:
-            logger.exception("Ошибка импорта из Excel")
-            QMessageBox.critical(
-                self, "Ошибка",
-                f"Не удалось прочитать файл:\n{e}"
-            )
+            return addresses
+        except Exception as e:  # noqa: BLE001 — чтение не должно ронять диалог
+            logger.error(f"Ошибка чтения файла импорта ({type(e).__name__})")
+            return []
+        finally:
+            try:
+                workbook.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     # ─────────────────────────────────────────────────────────
     # Выбор
@@ -441,9 +543,15 @@ class AddressBookDialog(QDialog):
         if not selected:
             QMessageBox.warning(self, "Выбор", "Выберите адрес из списка.")
             return
+        # Наружу отдаётся вся запись: грузополучателю нужны и наименование
+        # салона («Юр. Лицо»), и адрес выгрузки («Адрес доставки»).
         self.selected_address = {
             "address": selected.get("address", ""),
             "date": selected.get("date", "") or "",
             "time_window": selected.get("time_window", "") or "",
+            "salon_name": selected.get("salon_name", "") or "",
+            "salon_code": selected.get("salon_code", "") or "",
+            "salon_inn": selected.get("salon_inn", "") or "",
+            "salon_city": selected.get("salon_city", "") or "",
         }
         self.accept()

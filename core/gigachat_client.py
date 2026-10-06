@@ -121,6 +121,138 @@ def _normalize_document_ids(data: dict) -> dict:
 
 
 # ============================================================
+# СПРАВОЧНИК САЛОНОВ (ШАГ FIX-2.2)
+# ============================================================
+
+#: Маркер в промпте типа: сюда подставляется выдержка из справочника салонов.
+SALONS_DIRECTORY_MARKER = "{{SALONS_DIRECTORY}}"
+
+#: Сколько записей справочника максимум уходит в промпт.
+MAX_DIRECTORY_ROWS = 20
+
+#: Код салона: JMR-A048 (буква латинская, три цифры).
+SALON_CODE_RE = re.compile(r"\bJMR-[A-Za-z]\d{3}\b", re.IGNORECASE)
+
+#: ИНН: 10 цифр у организации, 12 — у ИП. Отдельное число, не часть строки.
+INN_RE = re.compile(r"(?<!\d)(\d{10}|\d{12})(?!\d)")
+
+#: Адрес в тексте, который стоит искать по справочнику: фрагмент от типа
+#: улицы до номера дома. Одиночного «область» мало — оно есть и в правилах
+#: промпта, поэтому в фрагменте должны быть и улица, и дом.
+ADDRESS_LINE_RE = re.compile(
+    r"(?:ул\.|улица|шоссе|пр-т|проспект)[^\n,;]{2,60}?"
+    r"(?:,\s*(?:д\.|дом|стр\.|влд\.)\s*\w{1,6})",
+    re.IGNORECASE,
+)
+
+#: Тип улицы — признак настоящего адреса (в правилах промпта его нет).
+STREET_MARK_RE = re.compile(
+    r"(?:ул\.|улица|шоссе|пр-т|проспект)", re.IGNORECASE
+)
+
+#: Номер дома — вторая половина адресации.
+HOUSE_MARK_RE = re.compile(r"(?:,\s*(?:д\.|дом|стр\.|влд\.)\s*\w{1,6})", re.IGNORECASE)
+
+#: Минимальная длина адресного запроса: короткий фрагмент нашёл бы пол-таблицы.
+MIN_ADDRESS_QUERY = 8
+
+
+def find_salon_directory_rows(text: str, limit: int = MAX_DIRECTORY_ROWS):
+    """
+    Ищет в тексте сигналы справочника салонов и достаёт записи из базы.
+
+    Сигналы (ШАГ FIX-2.2): коды вида JMR-A048, ИНН (10–12 цифр) и адреса
+    (фрагменты с типом улицы И номером дома). По ним справочник выгрузки
+    опрашивается по salon_code / salon_inn / address: если запись нашлась —
+    она попадает в выдержку, которую промпт получает вместо маркера
+    {{SALONS_DIRECTORY}}.
+
+    Сигналов нет — пустой список: промпт уходит без изменений.
+
+    :param text: текст документа (уже обезличенный)
+    :param limit: сколько записей максимум вернуть
+    :return: список записей справочника (словари из address_book)
+    """
+    if not text:
+        return []
+
+    codes = {code.upper() for code in SALON_CODE_RE.findall(text)}
+    inns = set(INN_RE.findall(text))
+
+    # Адрес берём только целиком — «улица + дом»: по одному слову «область»
+    # или «ул.» LIKE нашёл бы случайные записи.
+    addresses = set()
+    for match in ADDRESS_LINE_RE.finditer(text):
+        fragment = match.group(0).strip(" ,;.")
+        if len(fragment) < MIN_ADDRESS_QUERY:
+            continue
+        if not STREET_MARK_RE.search(fragment) or not HOUSE_MARK_RE.search(fragment):
+            continue
+        addresses.add(fragment)
+
+    if not codes and not inns and not addresses:
+        return []
+
+    try:
+        from db.database import get_addresses
+    except Exception:  # noqa: BLE001 — без базы распознавание не должно падать
+        logger.warning("GigaChat: справочник салонов недоступен")
+        return []
+
+    found = {}
+    for query in sorted(codes) + sorted(inns) + sorted(addresses):
+        for row in get_addresses("unloading", search=query, limit=limit):
+            found[row.get("id")] = row
+
+    logger.info(
+        "GigaChat: сигналов справочника — кодов %s, ИНН %s, адресов %s; "
+        "найдено записей %s",
+        len(codes), len(inns), len(addresses), len(found),
+    )
+    return list(found.values())[:limit]
+
+
+def format_salon_directory(rows) -> str:
+    """
+    Выдержка из справочника для промпта: «КОД | Юр. Лицо | Город | Адрес».
+
+    Пустой список даёт пустую строку — промпт тогда уходит без секции.
+    """
+    if not rows:
+        return ""
+
+    lines = [f"СПРАВОЧНИК САЛОНОВ (найдено {len(rows)} записей):"]
+    for row in rows:
+        lines.append(" | ".join((
+            str(row.get("salon_code") or "—"),
+            str(row.get("salon_name") or "—"),
+            str(row.get("salon_city") or row.get("city") or "—"),
+            str(row.get("address") or "—"),
+        )))
+    return "\n".join(lines)
+
+
+def apply_salons_directory(prompt: str, text: str) -> str:
+    """
+    Подставляет выдержку справочника в промпт.
+
+    Маркер {{SALONS_DIRECTORY}} заменяется выдержкой; если маркера нет, но
+    записи нашлись — выдержка дописывается в конец промпта. Сигналов нет —
+    промпт возвращается БЕЗ изменений (поведение остальных типов не меняется).
+    """
+    if not prompt:
+        return prompt
+
+    directory = format_salon_directory(find_salon_directory_rows(text))
+    if not directory:
+        return prompt
+
+    if SALONS_DIRECTORY_MARKER in prompt:
+        return prompt.replace(SALONS_DIRECTORY_MARKER, directory)
+    return prompt + "\n\n" + directory
+
+
+# ============================================================
 # БЕЗОПАСНЫЙ ПАРСИНГ JSON
 # ============================================================
 def _clean_and_parse_json(raw_text: str) -> dict:
@@ -815,6 +947,12 @@ class GigaChatClient:
         Переданный промпт типа обезличиванию не подвергается: это правила
         извлечения, а не данные документа.
 
+        ШАГ FIX-2.2: если промпт типа передан (а не взят SYSTEM_PROMPT),
+        в него подставляется выдержка из справочника салонов —
+        см. apply_salons_directory. Ищутся только те записи, сигналы которых
+        (код JMR-Axxx, ИНН, адрес) есть в тексте; сигналов нет — промпт
+        уходит без изменений.
+
         Шаг 7 оптимизации:
           * при 401 токен сбрасывается и запрос повторяется один раз
             (раньше клиент оставался с «протухшим» токеном до перезапуска);
@@ -843,6 +981,13 @@ class GigaChatClient:
                 "GigaChat: в запрос уходят только плейсхолдеры (%s)",
                 pseudonymizer.describe(mapping),
             )
+
+        # ── Сверка со справочником салонов (ШАГ FIX-2.2) ──
+        # Только для промпта типа: системный промпт перевозки не трогаем,
+        # иначе изменилось бы поведение остальных типов. Смотрим на текст
+        # ПОСЛЕ обезличивания: наружу уходит только то, что и так уходит.
+        if prompt:
+            system_prompt = apply_salons_directory(system_prompt, user_text)
 
         url = f"{self.BASE_URL}/chat/completions"
         payload = {
