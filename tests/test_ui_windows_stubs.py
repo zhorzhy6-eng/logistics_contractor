@@ -136,9 +136,16 @@ def test_window_has_switch_and_exit_signals(make_window, window_class,
 
 @pytest.mark.parametrize("window_class,contract_type,title,tabs",
                          WINDOW_SPECS, ids=SPEC_IDS)
-def test_tabs_are_placeholders(make_window, window_class, contract_type,
-                               title, tabs):
-    """Содержимое вкладок ещё не реализовано — это ожидаемое состояние 2C."""
+def test_every_tab_has_action_buttons(make_window, window_class,
+                                      contract_type, title, tabs):
+    """
+    На каждой вкладке есть панель действий: «Создать договор» и «Очистить».
+
+    Кнопки создаёт сама вкладка (у рабочих вкладок —
+    ui/tabs/base_tab.py::TabMixin._build_tab_actions), а окно только
+    подключает их сигналы. Проверяется наличие и доступность кнопки
+    создания: на ней держится сценарий «заполнил → создал документ».
+    """
     window = make_window(window_class)
 
     for index in range(window.tabs.count()):
