@@ -27,13 +27,17 @@ import pytest  # noqa: E402
 from PyQt5.QtCore import QDate, QTime  # noqa: E402
 from PyQt5.QtTest import QSignalSpy  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
-    QApplication, QComboBox, QDoubleSpinBox, QFrame, QLineEdit, QMessageBox,
-    QPushButton, QTableWidget, QTableWidgetItem, QWidget,
+    QApplication, QComboBox, QDoubleSpinBox, QFrame, QHeaderView, QLineEdit,
+    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QWidget,
 )
 
 from core.contract_data import ContractData  # noqa: E402
+from core.contracts.logistiks_rus.validator import (  # noqa: E402
+    LogistiksRusValidator,
+)
 from ui.tabs.base_tab import TabMixin  # noqa: E402
 from ui.widgets import RecognitionPanel  # noqa: E402
+from ui.widgets.table_helpers import stored_widths  # noqa: E402
 from ui.windows.logistiks_rus import data as data_module  # noqa: E402
 from ui.windows.logistiks_rus.data import build  # noqa: E402
 from ui.windows.logistiks_rus.tabs import (  # noqa: E402
@@ -813,14 +817,145 @@ def test_route_remove_row_in_both_tables(qt_app, quiet_dialogs):
     assert tab.consignees_table.rowCount() == 1
 
 
-def test_route_last_row_cannot_be_removed(qt_app, quiet_dialogs):
-    """Последняя строка остаётся: пустая таблица точку не печатает."""
+def test_route_last_row_can_be_removed(qt_app, quiet_dialogs):
+    """
+    Удалить можно и последнюю строку: пустая таблица — норма.
+
+    ШАГ FIX-5: ограничение «минимум одна строка» убрано (оператор не мог
+    получить пустую таблицу). О пустом разделе заявки скажет валидатор.
+    """
     tab = RouteTab()
     tab.loading_addresses_table.setCurrentCell(0, 0)
+    tab.consignees_table.setCurrentCell(0, 0)
 
     tab.btn_remove_loading_address.click()
+    tab.btn_remove_consignee.click()
+
+    assert tab.loading_addresses_table.rowCount() == 0
+    assert tab.consignees_table.rowCount() == 0
+
+
+def test_route_empty_tables_give_empty_lists(qt_app, quiet_dialogs):
+    """Пустые таблицы отдают пустые списки, а не None (ШАГ FIX-5, часть B.3)."""
+    tab = RouteTab()
+    tab.loading_addresses_table.setCurrentCell(0, 0)
+    tab.consignees_table.setCurrentCell(0, 0)
+    tab.btn_remove_loading_address.click()
+    tab.btn_remove_consignee.click()
+
+    data = tab.get_data()
+
+    assert data["loading_addresses"] == []
+    assert data["consignees"] == []
+
+
+def test_route_empty_points_block_contract_creation(qt_app, quiet_dialogs):
+    """Без грузоотправителя и грузополучателя создание заявки не проходит."""
+    from core.contract_data import ContractData
+
+    tab = RouteTab()
+    tab.loading_addresses_table.setCurrentCell(0, 0)
+    tab.consignees_table.setCurrentCell(0, 0)
+    tab.btn_remove_loading_address.click()
+    tab.btn_remove_consignee.click()
+
+    report = LogistiksRusValidator().check(ContractData.coerce(tab.get_data()))
+
+    assert report.has_errors is True
+    assert "Укажите хотя бы одного грузоотправителя с адресом" in report.errors
+    assert "Укажите хотя бы одного грузополучателя с адресом" in report.errors
+
+
+def test_route_rows_can_be_added_back_after_deleting_all(qt_app, quiet_dialogs):
+    """После удаления всех строк кнопки «Добавить» снова дают строку."""
+    tab = RouteTab()
+    tab.loading_addresses_table.setCurrentCell(0, 0)
+    tab.consignees_table.setCurrentCell(0, 0)
+    tab.btn_remove_loading_address.click()
+    tab.btn_remove_consignee.click()
+
+    tab.btn_add_loading_address.click()
+    tab.btn_add_consignee.click()
 
     assert tab.loading_addresses_table.rowCount() == 1
+    assert tab.consignees_table.rowCount() == 1
+
+
+# ─────────────────────────────────────────────────────────────
+# Ширины колонок и подсказки (ШАГ FIX-5, часть C)
+# ─────────────────────────────────────────────────────────────
+
+def test_consignee_name_is_contents(qt_app):
+    """Наименование юр. лица — по содержимому: длина названий разная."""
+    tab = RouteTab()
+    header = tab.consignees_table.horizontalHeader()
+
+    assert header.sectionResizeMode(route_tab_module.COL_NAME) == (
+        QHeaderView.ResizeToContents
+    )
+
+
+def test_consignee_address_is_stretch(qt_app):
+    """Адрес грузополучателя — главная колонка: тянется по ширине."""
+    tab = RouteTab()
+    header = tab.consignees_table.horizontalHeader()
+
+    assert header.sectionResizeMode(route_tab_module.COL_ADDRESS) == (
+        QHeaderView.Stretch
+    )
+
+
+def test_loading_address_column_is_stretch(qt_app):
+    """Единственная колонка адресов погрузки — stretch, с минимумом 150."""
+    tab = RouteTab()
+    header = tab.loading_addresses_table.horizontalHeader()
+
+    assert header.sectionResizeMode(
+        route_tab_module.COL_LOADING_ADDRESS
+    ) == QHeaderView.Stretch
+    assert header.minimumSectionSize() == 150
+
+
+def test_route_widths_persist_between_sessions(qt_app):
+    """
+    Раскладка колонок переживает перезапуск (QSettings).
+
+    Обе колонки грузополучателей ширину руками не меняют: наименование
+    считается по содержимому, адрес тянется по ширине таблицы (так задано
+    ТЗ шага FIX-5). Поэтому проверяется то, что для этой таблицы значимо:
+    раскладка ЗАПИСЫВАЕТСЯ и следующая сессия (новая вкладка) стартует
+    с той же раскладки. Ручное перетаскивание проверяется на таблицах,
+    у которых есть фиксированные колонки (даты и время).
+    """
+    first = RouteTab()
+    header = first.consignees_table.horizontalHeader()
+    first.consignees_table._widths_saver.flush()
+
+    saved = stored_widths(
+        first.consignees_table, route_tab_module.CONSIGNEES_WIDTHS_KEY
+    )
+    assert saved == [header.sectionSize(0), header.sectionSize(1)]
+
+    second = RouteTab()
+    assert [
+        second.consignees_table.horizontalHeader().sectionSize(column)
+        for column in range(2)
+    ] == saved
+
+
+def test_tooltip_on_long_consignee_address(qt_app):
+    """Наведение на длинный адрес грузополучателя показывает его целиком."""
+    tab = RouteTab()
+    table = tab.consignees_table
+    long_address = (
+        "г. Москва, ул. Перерва, д. 19, стр. 3, въезд со стороны "
+        "Курьяновского бульвара, пост охраны № 2"
+    )
+    table.item(0, route_tab_module.COL_ADDRESS).setText(long_address)
+
+    table.itemEntered.emit(table.item(0, route_tab_module.COL_ADDRESS))
+
+    assert table.item(0, route_tab_module.COL_ADDRESS).toolTip() == long_address
 
 
 def test_route_fill_over_limit_is_truncated(qt_app):

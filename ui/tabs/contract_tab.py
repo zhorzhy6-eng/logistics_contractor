@@ -29,12 +29,16 @@ from PyQt5.QtWidgets import (
     QDateEdit, QTimeEdit, QDoubleSpinBox, QComboBox, QTextEdit,
     QLabel, QGroupBox, QHBoxLayout, QScrollArea, QRadioButton,
     QMessageBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView,
+    QAbstractItemView,
 )
 from PyQt5.QtCore import QDate, QTime, QTimer, pyqtSignal, Qt
 
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
+from ui.widgets.table_helpers import (
+    MODE_CONTENTS, MODE_FIXED, MODE_STRETCH,
+    install_tooltip_on_table, setup_point_table,
+)
 from ui import theme
 from ui.address_book_dialog import AddressBookDialog
 from db.database import get_addresses
@@ -52,6 +56,23 @@ COL_TIME = 3
 
 #: Заголовки колонок таблиц точек маршрута.
 POINT_HEADERS = ("Наименование", "Адрес *", "Дата", "Время")
+
+#: Режимы и ширины колонок таблиц точек (ШАГ FIX-5). Адрес — главная
+#: колонка, она тянется по ширине таблицы; наименование — по содержимому;
+#: дата и время фиксированные: в них 10 и 5 символов, растягивать нечего.
+POINT_COLUMNS_CONFIG = (
+    (COL_NAME, MODE_CONTENTS, 0),
+    (COL_ADDRESS, MODE_STRETCH, 0),
+    (COL_DATE, MODE_FIXED, 90),
+    (COL_TIME, MODE_FIXED, 80),
+)
+
+#: Нижние границы ширин: «Дат» и «Вре» в шапке — это слишком узкие колонки.
+POINT_COLUMN_MINIMUMS = {COL_NAME: 100, COL_DATE: 80, COL_TIME: 70}
+
+#: Ключи QSettings для раскладки колонок (у таблиц она своя).
+LOADINGS_WIDTHS_KEY = "ui/contract_tab/loadings_columns"
+UNLOADINGS_WIDTHS_KEY = "ui/contract_tab/unloadings_columns"
 
 #: Пауза перед поиском салона в справочнике: запрос уходит после того, как
 #: пользователь перестал печатать адрес, а не на каждую букву.
@@ -172,14 +193,7 @@ class ContractTab(TabMixin, QWidget):
         load_btns.addStretch()
         route_layout.addLayout(load_btns)
 
-        self.loadings_table = QTableWidget(1, len(POINT_HEADERS))
-        self.loadings_table.setHorizontalHeaderLabels(list(POINT_HEADERS))
-        self.loadings_table.horizontalHeader().setSectionResizeMode(COL_NAME, QHeaderView.ResizeToContents)
-        self.loadings_table.horizontalHeader().setSectionResizeMode(COL_ADDRESS, QHeaderView.Stretch)
-        self.loadings_table.horizontalHeader().setSectionResizeMode(COL_DATE, QHeaderView.ResizeToContents)
-        self.loadings_table.horizontalHeader().setSectionResizeMode(COL_TIME, QHeaderView.ResizeToContents)
-        self.loadings_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.loadings_table.setMinimumHeight(80)
+        self.loadings_table = self._make_points_table(LOADINGS_WIDTHS_KEY)
         self._init_loading_row(0)
         route_layout.addWidget(self.loadings_table)
 
@@ -204,14 +218,7 @@ class ContractTab(TabMixin, QWidget):
         unload_btns.addStretch()
         route_layout.addLayout(unload_btns)
 
-        self.unloadings_table = QTableWidget(1, len(POINT_HEADERS))
-        self.unloadings_table.setHorizontalHeaderLabels(list(POINT_HEADERS))
-        self.unloadings_table.horizontalHeader().setSectionResizeMode(COL_NAME, QHeaderView.ResizeToContents)
-        self.unloadings_table.horizontalHeader().setSectionResizeMode(COL_ADDRESS, QHeaderView.Stretch)
-        self.unloadings_table.horizontalHeader().setSectionResizeMode(COL_DATE, QHeaderView.ResizeToContents)
-        self.unloadings_table.horizontalHeader().setSectionResizeMode(COL_TIME, QHeaderView.ResizeToContents)
-        self.unloadings_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.unloadings_table.setMinimumHeight(80)
+        self.unloadings_table = self._make_points_table(UNLOADINGS_WIDTHS_KEY)
         self._init_unloading_row(0)
         route_layout.addWidget(self.unloadings_table)
 
@@ -371,6 +378,31 @@ class ContractTab(TabMixin, QWidget):
         self._calculate_price()
 
         logger.debug("ContractTab инициализирована")
+
+    # ─────────────────────────────────────────────────────────
+    # Таблицы точек маршрута
+    # ─────────────────────────────────────────────────────────
+
+    def _make_points_table(self, storage_key: str) -> QTableWidget:
+        """
+        Таблица точек маршрута: четыре колонки, ширины, подсказки, раскладка.
+
+        Обе таблицы вкладки (погрузки и выгрузки) устроены одинаково,
+        отличается только ключ хранения раскладки, поэтому настройка живёт
+        здесь, а не дублируется дважды (ШАГ FIX-5).
+        """
+        table = QTableWidget(1, len(POINT_HEADERS))
+        table.setHorizontalHeaderLabels(list(POINT_HEADERS))
+        setup_point_table(
+            table,
+            POINT_COLUMNS_CONFIG,
+            storage_key=storage_key,
+            minimums=POINT_COLUMN_MINIMUMS,
+        )
+        install_tooltip_on_table(table)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setMinimumHeight(80)
+        return table
 
     # ─────────────────────────────────────────────────────────
     # Инициализация строк
@@ -549,12 +581,15 @@ class ContractTab(TabMixin, QWidget):
         self.loadings_changed.emit()
 
     def _on_remove_loading(self) -> None:
+        """
+        Удаляет выбранную строку погрузки.
+
+        Удалить можно и последнюю строку: пустая таблица — норма, о пустом
+        разделе скажет валидатор при создании договора (ШАГ FIX-5).
+        """
         row = self.loadings_table.currentRow()
         if row < 0:
             QMessageBox.warning(self, "Удаление", "Выберите строку для удаления.")
-            return
-        if self.loadings_table.rowCount() <= 1:
-            QMessageBox.warning(self, "Удаление", "Должно остаться хотя бы одно место погрузки.")
             return
         self.loadings_table.removeRow(row)
         self.loadings_changed.emit()
@@ -569,12 +604,15 @@ class ContractTab(TabMixin, QWidget):
         self.unloadings_changed.emit()
 
     def _on_remove_unloading(self) -> None:
+        """
+        Удаляет выбранную строку выгрузки.
+
+        Последнюю строку удалить тоже можно (см. _on_remove_loading):
+        пустая таблица — норма, за пустой раздел отвечает валидатор.
+        """
         row = self.unloadings_table.currentRow()
         if row < 0:
             QMessageBox.warning(self, "Удаление", "Выберите строку для удаления.")
-            return
-        if self.unloadings_table.rowCount() <= 1:
-            QMessageBox.warning(self, "Удаление", "Должно остаться хотя бы одно место выгрузки.")
             return
         self.unloadings_table.removeRow(row)
         self.unloadings_changed.emit()

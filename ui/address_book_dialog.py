@@ -14,6 +14,11 @@ db.database.read_salons_rows).
 
 Сортировка: включена по клику на заголовок, при загрузке — по алфавиту.
 
+Ширины колонок (ШАГ FIX-5): наименование салона и адрес тянутся по ширине
+таблицы, остальные колонки идут по содержимому; раскладка запоминается в
+QSettings и восстанавливается при следующем открытии, а длинный текст
+ячейки виден целиком во всплывающей подсказке.
+
 В connect — только методы и слоты, без lambda: lambda, захватывающая окно,
 создаёт цикл ссылок Python ↔ Qt.
 """
@@ -23,7 +28,7 @@ from typing import Dict, Any, Optional, List
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
+    QPushButton, QTableWidget, QTableWidgetItem,
     QMessageBox, QLineEdit, QAbstractItemView, QFormLayout, QFileDialog,
 )
 from PyQt5.QtCore import Qt, QTimer
@@ -34,6 +39,10 @@ from db.database import (
 )
 
 from ui import theme
+from ui.widgets.table_helpers import (
+    MODE_CONTENTS, MODE_STRETCH,
+    install_tooltip_on_table, save_column_widths, setup_point_table,
+)
 
 logger = logging.getLogger("ui.address_book_dialog")
 
@@ -47,6 +56,25 @@ COL_USAGE = 5
 
 #: Поля салона, которые диалог хранит и возвращает наружу.
 SALON_FIELDS = ("salon_name", "salon_code", "salon_inn", "salon_city")
+
+#: Режимы колонок таблицы справочника (ШАГ FIX-5): наименование салона и
+#: адрес — главные колонки, обе тянутся по ширине; остальные (код, город,
+#: счётчик) идут по содержимому: значения короткие и постоянной длины.
+COLUMNS_CONFIG = (
+    (COL_ID, MODE_CONTENTS, 0),
+    (COL_CODE, MODE_CONTENTS, 0),
+    (COL_SALON_NAME, MODE_STRETCH, 0),
+    (COL_SALON_CITY, MODE_CONTENTS, 0),
+    (COL_ADDRESS, MODE_STRETCH, 0),
+    (COL_USAGE, MODE_CONTENTS, 0),
+)
+
+#: Нижние границы ширин: наименование и адрес салона длинные, в узкой
+#: колонке видно только начало строки.
+COLUMN_MINIMUMS = {COL_SALON_NAME: 150, COL_ADDRESS: 250}
+
+#: Ключ QSettings для раскладки колонок справочника.
+WIDTHS_KEY = "ui/address_book_dialog/columns"
 
 
 class EditAddressDialog(QDialog):
@@ -185,13 +213,17 @@ class AddressBookDialog(QDialog):
         # ── СОРТИРОВКА ──
         self.table.setSortingEnabled(True)
 
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(COL_ID, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_CODE, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_SALON_NAME, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_SALON_CITY, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_ADDRESS, QHeaderView.Stretch)
-        header.setSectionResizeMode(COL_USAGE, QHeaderView.ResizeToContents)
+        # ── ШИРИНЫ КОЛОНОК, ПОДСКАЗКИ И РАСКЛАДКА (ШАГ FIX-5) ──
+        # Наименование салона и адрес тянутся по ширине, остальные колонки —
+        # по содержимому; раскладка запоминается между сеансами, а длинный
+        # адрес виден целиком во всплывающей подсказке.
+        setup_point_table(
+            self.table,
+            COLUMNS_CONFIG,
+            storage_key=WIDTHS_KEY,
+            minimums=COLUMN_MINIMUMS,
+        )
+        install_tooltip_on_table(self.table)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.doubleClicked.connect(self._on_pick)
@@ -555,3 +587,29 @@ class AddressBookDialog(QDialog):
             "salon_city": selected.get("salon_city", "") or "",
         }
         self.accept()
+
+    # ─────────────────────────────────────────────────────────
+    # Закрытие
+    # ─────────────────────────────────────────────────────────
+    def done(self, result: int) -> None:
+        """
+        Сохраняет раскладку колонок при любом способе закрытия (ШАГ FIX-5).
+
+        Кнопки «Выбрать» и «Закрыть» (и Esc) зовут QDialog.done(), а он
+        прячет диалог, НЕ посылая closeEvent, — на одном closeEvent запись
+        раскладки пропустила бы оба рабочих пути закрытия.
+        """
+        save_column_widths(self.table, WIDTHS_KEY)
+        super().done(result)
+
+    def closeEvent(self, event) -> None:
+        """
+        Сохраняет раскладку колонок при закрытии крестиком (ШАГ FIX-5).
+
+        Диалог модальный: момент закрытия — последний, когда ширины ещё
+        можно записать. Таблицы на вкладках сохраняют раскладку сами, по
+        факту изменения ширины: окна типов не закрываются, а прячутся
+        (см. ui/windows/base_window.py).
+        """
+        save_column_widths(self.table, WIDTHS_KEY)
+        super().closeEvent(event)

@@ -3,6 +3,11 @@
 """
 Кастомные виджеты для UI.
 Добавляет кнопку «📋» к полям ввода для быстрой вставки из буфера.
+
+Пакет, а не модуль (ШАГ FIX-5): рядом с полями живёт настройка таблиц —
+`ui/widgets/table_helpers.py` (режимы колонок, раскладка в QSettings,
+подсказки ячеек). Имена виджетов реэкспортируются отсюда, поэтому
+`from ui.widgets import PasteableLineEdit` работает как раньше.
 """
 
 import logging
@@ -18,6 +23,13 @@ from PyQt5.QtGui import QFont
 
 from core.dates import parse_date
 from ui import theme
+# Настройка таблиц (ШАГ FIX-5): у пакета один вход, как в ui/controls/__init__.py.
+from ui.widgets.table_helpers import (
+    install_tooltip_on_table,
+    restore_column_widths,
+    save_column_widths,
+    setup_point_table,
+)
 
 logger = logging.getLogger("ui.widgets")
 
@@ -443,4 +455,9 @@ __all__ = [
     'PasteableDateEdit',
     'RecognitionPanel',
     'BulkPasteDialog',
+    # Настройка таблиц (ШАГ FIX-5) — реэкспорт из table_helpers.
+    'setup_point_table',
+    'install_tooltip_on_table',
+    'save_column_widths',
+    'restore_column_widths',
 ]

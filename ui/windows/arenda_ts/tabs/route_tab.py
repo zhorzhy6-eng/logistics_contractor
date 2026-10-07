@@ -6,7 +6,9 @@
 Маршрут аренды — направление и точки: в бланке это раздел 3.4 (маршрут),
 3.2 (до 10 точек погрузки) и 3.3 (до 10 точек выгрузки). Образец таблиц с
 точками — ui/tabs/contract_tab.py (loadings_table / unloadings_table):
-кнопки «Добавить» / «Удалить», не больше 10 строк, хотя бы одна строка.
+кнопки «Добавить» / «Удалить», не больше 10 строк. Пустой таблица тоже
+может быть: удалить разрешено и последнюю строку (ШАГ FIX-5), а о пустом
+разделе маршрута скажет валидатор типа.
 Отличие от Логистикс Рус (ui/windows/logistiks_rus/tabs/route_tab.py): там
 у точки только наименование и адрес, а дата и время — общие для всего плана,
 здесь у каждой точки погрузки своя дата и своё время подачи ТС («с» и «по»).
@@ -32,7 +34,7 @@ from typing import Any, Dict, List, Mapping
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QGroupBox, QHBoxLayout, QHeaderView, QMessageBox,
+    QAbstractItemView, QGroupBox, QHBoxLayout, QMessageBox,
     QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -40,6 +42,10 @@ from core.dates import parse_date
 from ui import theme
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import PasteableLineEdit, RecognitionPanel
+from ui.widgets.table_helpers import (
+    MODE_CONTENTS, MODE_FIXED, MODE_STRETCH,
+    install_tooltip_on_table, setup_point_table,
+)
 
 logger = logging.getLogger("ui.windows.arenda_ts.tabs.route_tab")
 
@@ -47,7 +53,9 @@ logger = logging.getLogger("ui.windows.arenda_ts.tabs.route_tab")
 #: Значение совпадает с ui/windows/arenda_ts/data.py::MAX_POINTS.
 MAX_POINTS = 10
 
-#: Сколько строк показывать при открытии вкладки (меньше не бывает).
+#: Сколько строк показывать при открытии вкладки. Это НЕ минимум: строки
+#: можно удалить все — пустая таблица точек норма (ШАГ FIX-5), а пустой
+#: раздел маршрута поймает валидатор типа.
 MIN_ROWS = 1
 
 #: Колонки таблиц точек маршрута.
@@ -60,6 +68,32 @@ COL_TIME_TO = 4
 #: Заголовки колонок: у погрузки есть время подачи ТС, у выгрузки — нет.
 LOADING_HEADERS = ["Наименование", "Адрес", "Дата", "Время с", "Время по"]
 UNLOADING_HEADERS = ["Наименование", "Адрес", "Дата"]
+
+#: Режимы и ширины колонок таблиц точек (ШАГ FIX-5): адрес — главная
+#: колонка, тянется по ширине таблицы; наименование — по содержимому;
+#: дата и время фиксированные: в них 10 и 5 символов.
+LOADING_COLUMNS_CONFIG = (
+    (COL_NAME, MODE_CONTENTS, 0),
+    (COL_ADDRESS, MODE_STRETCH, 0),
+    (COL_DATE, MODE_FIXED, 90),
+    (COL_TIME_FROM, MODE_FIXED, 80),
+    (COL_TIME_TO, MODE_FIXED, 80),
+)
+UNLOADING_COLUMNS_CONFIG = (
+    (COL_NAME, MODE_CONTENTS, 0),
+    (COL_ADDRESS, MODE_STRETCH, 0),
+    (COL_DATE, MODE_FIXED, 90),
+)
+
+#: Нижние границы ширин: «Дат» и «Вре» в шапке — это слишком узкие колонки.
+LOADING_COLUMN_MINIMUMS = {
+    COL_NAME: 100, COL_DATE: 80, COL_TIME_FROM: 70, COL_TIME_TO: 70,
+}
+UNLOADING_COLUMN_MINIMUMS = {COL_NAME: 100, COL_DATE: 80}
+
+#: Ключи QSettings для раскладки колонок (у таблиц она своя).
+LOADINGS_WIDTHS_KEY = "ui/arenda_ts/loadings_columns"
+UNLOADINGS_WIDTHS_KEY = "ui/arenda_ts/unloadings_columns"
 
 #: Пояснение к колонке «Дата» таблицы точек ВЫГРУЗКИ (шаг FIX-1-T2).
 #: В договор эта колонка не идёт: п. 3.3.2 бланка печатает планируемую дату
@@ -179,19 +213,31 @@ class RouteTab(TabMixin, QWidget):
         """
         Пустая таблица точек маршрута с одной строкой.
 
-        Наименование и адрес тянутся по ширине, дата и время — по содержимому:
-        в них всегда 10 и 5 символов. У таблицы точек выгрузки колонка «Дата»
-        получает пояснение (UNLOADING_DATE_TOOLTIP): в договор эта колонка
-        не идёт, а молчащее поле выглядело бы ошибкой.
+        Ширины задаёт общий помощник (ui/widgets/table_helpers.py): адрес
+        тянется по ширине, наименование идёт по содержимому, дата и время
+        фиксированные — в них всегда 10 и 5 символов. Раскладка колонок
+        запоминается между сеансами (ШАГ FIX-5). У таблицы точек выгрузки
+        колонка «Дата» получает пояснение (UNLOADING_DATE_TOOLTIP): в договор
+        эта колонка не идёт, а молчащее поле выглядело бы ошибкой.
         """
         table = QTableWidget(MIN_ROWS, len(headers))
         table.setHorizontalHeaderLabels(headers)
-        table.horizontalHeader().setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
-        table.horizontalHeader().setSectionResizeMode(COL_ADDRESS, QHeaderView.Stretch)
-        for column in range(COL_DATE, len(headers)):
-            table.horizontalHeader().setSectionResizeMode(
-                column, QHeaderView.ResizeToContents
-            )
+        columns_config = (
+            LOADING_COLUMNS_CONFIG if width_for_time else UNLOADING_COLUMNS_CONFIG
+        )
+        table_minimums = (
+            LOADING_COLUMN_MINIMUMS if width_for_time
+            else UNLOADING_COLUMN_MINIMUMS
+        )
+        setup_point_table(
+            table,
+            columns_config,
+            storage_key=(
+                LOADINGS_WIDTHS_KEY if width_for_time else UNLOADINGS_WIDTHS_KEY
+            ),
+            minimums=table_minimums,
+        )
+        install_tooltip_on_table(table)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setMinimumHeight(90)
         table.setMaximumHeight(180 if width_for_time else 160)
@@ -288,16 +334,15 @@ class RouteTab(TabMixin, QWidget):
         logger.debug("Разовая аренда: добавлена строка (%s)", title)
 
     def _remove_point_row(self, table: QTableWidget, title: str) -> None:
-        """Общее удаление строки: последнюю строку таблицы не убираем."""
+        """
+        Общее удаление строки для обеих таблиц.
+
+        Последнюю строку удалить можно (ШАГ FIX-5): пустая таблица — норма,
+        о пустом разделе маршрута скажет валидатор типа.
+        """
         row = table.currentRow()
         if row < 0:
             QMessageBox.warning(self, "Удаление", "Выберите строку для удаления.")
-            return
-        if table.rowCount() <= MIN_ROWS:
-            QMessageBox.warning(
-                self, "Удаление",
-                f"Должна остаться хотя бы одна {title}.",
-            )
             return
 
         table.removeRow(row)
@@ -478,7 +523,18 @@ __all__ = [
     "RouteTab",
     "MAX_POINTS",
     "MIN_ROWS",
+    "COL_NAME",
+    "COL_ADDRESS",
+    "COL_DATE",
+    "COL_TIME_FROM",
+    "COL_TIME_TO",
     "LOADING_HEADERS",
     "UNLOADING_HEADERS",
+    "LOADING_COLUMNS_CONFIG",
+    "UNLOADING_COLUMNS_CONFIG",
+    "LOADING_COLUMN_MINIMUMS",
+    "UNLOADING_COLUMN_MINIMUMS",
+    "LOADINGS_WIDTHS_KEY",
+    "UNLOADINGS_WIDTHS_KEY",
     "UNLOADING_DATE_TOOLTIP",
 ]

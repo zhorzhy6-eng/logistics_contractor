@@ -11,8 +11,9 @@
 «грузополучатель + адрес выгрузки».
 
 Образец таблицы с грузополучателями — ui/tabs/contract_tab.py
-(unloadings_table): до 10 блоков, кнопки «Добавить» / «Удалить», минимум
-одна строка.
+(unloadings_table): до 10 блоков, кнопки «Добавить» / «Удалить». Пустой
+таблица тоже может быть: удалить разрешено и последнюю строку (ШАГ FIX-5),
+а о пустом разделе заявки скажет валидатор типа.
 
 Отличие от ui/windows/formika/tabs/route_tab.py: у Формики точек ровно две
 (адрес погрузки и адрес выгрузки отдельными полями), здесь их списки —
@@ -41,13 +42,17 @@ from typing import Any, Dict, List, Mapping
 from PyQt5.QtCore import QDate, Qt, QTime, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractItemView, QDateEdit, QFormLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QMessageBox, QScrollArea, QTableWidget,
+    QLabel, QMessageBox, QScrollArea, QTableWidget,
     QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from ui import theme
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import PasteableDateEdit, PasteableLineEdit, RecognitionPanel
+from ui.widgets.table_helpers import (
+    MODE_CONTENTS, MODE_STRETCH,
+    install_tooltip_on_table, setup_point_table,
+)
 
 logger = logging.getLogger("ui.windows.logistiks_rus.tabs.route_tab")
 
@@ -55,7 +60,9 @@ logger = logging.getLogger("ui.windows.logistiks_rus.tabs.route_tab")
 #: Значение совпадает с ui/windows/logistiks_rus/data.py::MAX_POINTS.
 MAX_POINTS = 10
 
-#: Сколько строк показывать при открытии вкладки (меньше не бывает).
+#: Сколько строк показывать при открытии вкладки. Это НЕ минимум: строки
+#: можно удалить все — пустая таблица норма (ШАГ FIX-5), а пустой раздел
+#: заявки поймает валидатор типа.
 MIN_ROWS = 1
 
 #: Колонки таблицы грузополучателей: наименование и адрес.
@@ -65,6 +72,22 @@ COL_ADDRESS = 1
 #: Колонка таблицы адресов погрузки — адрес (наименования у неё нет:
 #: грузоотправитель один и стоит отдельным полем).
 COL_LOADING_ADDRESS = 0
+
+#: Режимы и ширины колонок таблиц точек (ШАГ FIX-5): наименование — по
+#: содержимому, адрес — главная колонка, тянется по ширине таблицы.
+LOADING_ADDRESSES_COLUMNS_CONFIG = ((COL_LOADING_ADDRESS, MODE_STRETCH, 0),)
+CONSIGNEES_COLUMNS_CONFIG = (
+    (COL_NAME, MODE_CONTENTS, 0),
+    (COL_ADDRESS, MODE_STRETCH, 0),
+)
+
+#: Нижние границы ширин: адрес обрезался в узкой колонке.
+LOADING_ADDRESSES_COLUMN_MINIMUMS = {COL_LOADING_ADDRESS: 150}
+CONSIGNEES_COLUMN_MINIMUMS = {COL_NAME: 100, COL_ADDRESS: 150}
+
+#: Ключи QSettings для раскладки колонок (у таблиц она своя).
+LOADING_ADDRESSES_WIDTHS_KEY = "ui/logistiks_rus/loading_addresses_columns"
+CONSIGNEES_WIDTHS_KEY = "ui/logistiks_rus/consignees_columns"
 
 #: Грузоотправитель по умолчанию: в заявках этого типа он один и тот же.
 DEFAULT_SHIPPER_NAME = "ООО «ВОТУР МОТОР РУС»"
@@ -254,9 +277,13 @@ class RouteTab(TabMixin, QWidget):
         """Таблица адресов погрузки: одна колонка «Адрес погрузки»."""
         table = QTableWidget(MIN_ROWS, 1)
         table.setHorizontalHeaderLabels(["Адрес погрузки"])
-        table.horizontalHeader().setSectionResizeMode(
-            COL_LOADING_ADDRESS, QHeaderView.Stretch
+        setup_point_table(
+            table,
+            LOADING_ADDRESSES_COLUMNS_CONFIG,
+            storage_key=LOADING_ADDRESSES_WIDTHS_KEY,
+            minimums=LOADING_ADDRESSES_COLUMN_MINIMUMS,
         )
+        install_tooltip_on_table(table)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setMinimumHeight(80)
         table.setMaximumHeight(160)
@@ -268,8 +295,13 @@ class RouteTab(TabMixin, QWidget):
         """Пустая таблица точек маршрута: наименование и адрес."""
         table = QTableWidget(MIN_ROWS, 2)
         table.setHorizontalHeaderLabels(["Наименование", "Адрес"])
-        table.horizontalHeader().setSectionResizeMode(COL_NAME, QHeaderView.Stretch)
-        table.horizontalHeader().setSectionResizeMode(COL_ADDRESS, QHeaderView.Stretch)
+        setup_point_table(
+            table,
+            CONSIGNEES_COLUMNS_CONFIG,
+            storage_key=CONSIGNEES_WIDTHS_KEY,
+            minimums=CONSIGNEES_COLUMN_MINIMUMS,
+        )
+        install_tooltip_on_table(table)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setMinimumHeight(80)
         table.setMaximumHeight(160)
@@ -355,16 +387,15 @@ class RouteTab(TabMixin, QWidget):
         logger.debug("Логистикс Рус: добавлена строка (%s)", title)
 
     def _remove_point_row(self, table: QTableWidget, title: str) -> None:
-        """Общее удаление строки: последнюю строку таблицы не убираем."""
+        """
+        Общее удаление строки для обеих таблиц.
+
+        Последнюю строку удалить можно (ШАГ FIX-5): пустая таблица — норма,
+        о пустом разделе заявки скажет валидатор типа.
+        """
         row = table.currentRow()
         if row < 0:
             QMessageBox.warning(self, "Удаление", "Выберите строку для удаления.")
-            return
-        if table.rowCount() <= MIN_ROWS:
-            QMessageBox.warning(
-                self, "Удаление",
-                f"Должен остаться хотя бы один {title}.",
-            )
             return
 
         table.removeRow(row)
@@ -720,6 +751,12 @@ __all__ = [
     "COL_NAME",
     "COL_ADDRESS",
     "COL_LOADING_ADDRESS",
+    "LOADING_ADDRESSES_COLUMNS_CONFIG",
+    "CONSIGNEES_COLUMNS_CONFIG",
+    "LOADING_ADDRESSES_COLUMN_MINIMUMS",
+    "CONSIGNEES_COLUMN_MINIMUMS",
+    "LOADING_ADDRESSES_WIDTHS_KEY",
+    "CONSIGNEES_WIDTHS_KEY",
     "DEFAULT_SHIPPER_NAME",
     "DEFAULT_UNLOADING_TIME_FROM",
     "DEFAULT_UNLOADING_TIME_TO",

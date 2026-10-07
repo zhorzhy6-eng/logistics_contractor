@@ -37,11 +37,13 @@ import pytest  # noqa: E402
 from PyQt5.QtCore import QDate  # noqa: E402
 from PyQt5.QtTest import QSignalSpy  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
-    QApplication, QComboBox, QDoubleSpinBox, QFrame, QGroupBox, QLineEdit,
-    QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QWidget,
+    QApplication, QComboBox, QDoubleSpinBox, QFrame, QGroupBox, QHeaderView,
+    QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget,
+    QTableWidgetItem, QWidget,
 )
 
 from core.contract_data import ContractData  # noqa: E402
+from core.contracts.arenda_ts.validator import ArendaTsValidator  # noqa: E402
 from ui.tabs.base_tab import TabMixin  # noqa: E402
 from ui.widgets import (  # noqa: E402
     PasteableLineEdit, PasteableTextEdit, RecognitionPanel,
@@ -961,14 +963,164 @@ def test_route_remove_row_in_both_tables(qt_app, quiet_dialogs):
     assert tab.unloadings_table.rowCount() == 1
 
 
-def test_route_last_row_cannot_be_removed(qt_app, quiet_dialogs):
-    """Последняя строка остаётся: пустая таблица точку не печатает."""
+def test_route_last_row_can_be_removed(qt_app, quiet_dialogs):
+    """
+    Удалить можно и последнюю строку: пустая таблица — норма.
+
+    ШАГ FIX-5: ограничение «минимум одна строка» убрано (оператор не мог
+    получить пустую таблицу). О пустом разделе маршрута скажет валидатор.
+    """
     tab = RouteTab()
     tab.loadings_table.setCurrentCell(0, 0)
+    tab.unloadings_table.setCurrentCell(0, 0)
 
     tab.btn_remove_loading.click()
+    tab.btn_remove_unloading.click()
+
+    assert tab.loadings_table.rowCount() == 0
+    assert tab.unloadings_table.rowCount() == 0
+
+
+def test_route_empty_tables_give_empty_lists(qt_app, quiet_dialogs):
+    """Пустые таблицы отдают пустые списки, а не None (ШАГ FIX-5, часть B.3)."""
+    tab = RouteTab()
+    tab.loadings_table.setCurrentCell(0, 0)
+    tab.unloadings_table.setCurrentCell(0, 0)
+    tab.btn_remove_loading.click()
+    tab.btn_remove_unloading.click()
+
+    data = tab.get_data()
+
+    assert data["loadings"] == []
+    assert data["unloadings"] == []
+
+
+def test_route_empty_points_block_contract_creation(qt_app, quiet_dialogs):
+    """Без точек погрузки и выгрузки создание договора аренды не проходит."""
+    from core.contract_data import ContractData
+
+    tab = RouteTab()
+    tab.loadings_table.setCurrentCell(0, 0)
+    tab.unloadings_table.setCurrentCell(0, 0)
+    tab.btn_remove_loading.click()
+    tab.btn_remove_unloading.click()
+
+    report = ArendaTsValidator().check(ContractData.coerce(tab.get_data()))
+
+    assert report.has_errors is True
+    assert "Укажите хотя бы одну точку погрузки" in report.errors
+    assert "Укажите хотя бы одну точку выгрузки" in report.errors
+
+
+def test_route_rows_can_be_added_back_after_deleting_all(qt_app, quiet_dialogs):
+    """После удаления всех строк кнопки «Добавить» снова дают строку."""
+    tab = RouteTab()
+    tab.loadings_table.setCurrentCell(0, 0)
+    tab.unloadings_table.setCurrentCell(0, 0)
+    tab.btn_remove_loading.click()
+    tab.btn_remove_unloading.click()
+
+    tab.btn_add_loading.click()
+    tab.btn_add_unloading.click()
 
     assert tab.loadings_table.rowCount() == 1
+    assert tab.unloadings_table.rowCount() == 1
+
+
+# ─────────────────────────────────────────────────────────────
+# Ширины колонок и подсказки (ШАГ FIX-5, часть C)
+# ─────────────────────────────────────────────────────────────
+
+def test_loadings_name_is_contents(qt_app):
+    """Наименование — по содержимому: длина названий разная."""
+    tab = RouteTab()
+    header = tab.loadings_table.horizontalHeader()
+
+    assert header.sectionResizeMode(route_tab_module.COL_NAME) == (
+        QHeaderView.ResizeToContents
+    )
+
+
+def test_loadings_address_is_stretch(qt_app):
+    """Адрес — главная колонка: тянется по ширине таблицы."""
+    tab = RouteTab()
+
+    assert tab.loadings_table.horizontalHeader().sectionResizeMode(
+        route_tab_module.COL_ADDRESS
+    ) == QHeaderView.Stretch
+    assert tab.unloadings_table.horizontalHeader().sectionResizeMode(
+        route_tab_module.COL_ADDRESS
+    ) == QHeaderView.Stretch
+
+
+def test_loadings_date_and_time_are_fixed(qt_app):
+    """Дата и время подачи ТС — фиксированные колонки, «Дат» не выходит."""
+    tab = RouteTab()
+    header = tab.loadings_table.horizontalHeader()
+
+    for column, width in (
+        (route_tab_module.COL_DATE, 90),
+        (route_tab_module.COL_TIME_FROM, 80),
+        (route_tab_module.COL_TIME_TO, 80),
+    ):
+        assert header.sectionResizeMode(column) == QHeaderView.Interactive
+        assert header.sectionSize(column) == width
+
+    assert header.minimumSectionSize() == 70
+
+
+def test_unloading_date_is_fixed(qt_app):
+    """У выгрузки три колонки: дата тоже фиксированная."""
+    tab = RouteTab()
+    header = tab.unloadings_table.horizontalHeader()
+
+    assert header.sectionResizeMode(route_tab_module.COL_DATE) == (
+        QHeaderView.Interactive
+    )
+    assert header.sectionSize(route_tab_module.COL_DATE) == 90
+
+
+def test_route_widths_persist_between_sessions(qt_app):
+    """
+    Растянутая колонка остаётся растянутой после перезапуска.
+
+    «Новая сессия» — новая вкладка: ширины читаются из QSettings
+    (хранилище тестов изолировано, см. isolated_qsettings).
+    """
+    first = RouteTab()
+    first.loadings_table.horizontalHeader().resizeSection(
+        route_tab_module.COL_TIME_FROM, 120
+    )
+    first.loadings_table._widths_saver.flush()
+
+    second = RouteTab()
+
+    assert second.loadings_table.horizontalHeader().sectionSize(
+        route_tab_module.COL_TIME_FROM
+    ) == 120
+    # У выгрузок свой ключ: чужая раскладка их не трогает.
+    assert second.unloadings_table.horizontalHeader().sectionSize(
+        route_tab_module.COL_DATE
+    ) == 90
+
+
+def test_tooltip_on_long_address_keeps_unloading_date_tooltip(qt_app):
+    """Длинный адрес виден целиком, а пояснение к дате выгрузки не затёрто."""
+    tab = RouteTab()
+    table = tab.unloadings_table
+    long_address = (
+        "г. Москва, ул. Перерва, д. 19, стр. 3, въезд со стороны "
+        "Курьяновского бульвара, пост охраны № 2"
+    )
+    table.item(0, route_tab_module.COL_ADDRESS).setText(long_address)
+
+    table.itemEntered.emit(table.item(0, route_tab_module.COL_ADDRESS))
+    table.itemEntered.emit(table.item(0, route_tab_module.COL_DATE))
+
+    assert table.item(0, route_tab_module.COL_ADDRESS).toolTip() == long_address
+    assert table.item(0, route_tab_module.COL_DATE).toolTip() == (
+        route_tab_module.UNLOADING_DATE_TOOLTIP
+    )
 
 
 def test_route_fill_over_limit_is_truncated(qt_app):

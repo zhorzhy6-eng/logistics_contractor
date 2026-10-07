@@ -27,12 +27,17 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import openpyxl  # noqa: E402
 import pytest  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QDialog  # noqa: E402
+from PyQt5.QtWidgets import (  # noqa: E402
+    QApplication, QDialog, QHeaderView,
+)
 
 from db.database import get_addresses, save_address  # noqa: E402
 from ui.address_book_dialog import (  # noqa: E402
-    COL_ADDRESS, COL_CODE, COL_SALON_CITY, COL_SALON_NAME, COL_USAGE,
-    AddressBookDialog, EditAddressDialog,
+    COL_ADDRESS, COL_CODE, COL_ID, COL_SALON_CITY, COL_SALON_NAME, COL_USAGE,
+    COLUMN_MINIMUMS, WIDTHS_KEY, AddressBookDialog, EditAddressDialog,
+)
+from ui.widgets.table_helpers import (  # noqa: E402
+    STORAGE_KEY_PROPERTY, stored_widths,
 )
 
 #: Заголовки граф тестового файла справочника салонов.
@@ -329,3 +334,155 @@ def test_import_cancelled_does_nothing(
     dialog._on_import_excel()
 
     assert get_addresses("unloading") == []
+
+
+# ─────────────────────────────────────────────────────────────
+# Ширины колонок, подсказки и раскладка (ШАГ FIX-5, часть D)
+# ─────────────────────────────────────────────────────────────
+
+#: Длинный адрес салона: в колонке не помещается — нужен для подсказки.
+LONG_SALON_ADDRESS = (
+    "г. Москва, ул. Перерва, д. 19, стр. 3, въезд со стороны "
+    "Курьяновского бульвара, пост охраны № 2"
+)
+
+
+def test_name_column_is_stretch(qt_app, isolated_db):
+    """Наименование салона — главная колонка: тянется по ширине таблицы."""
+    dialog = AddressBookDialog("unloading")
+
+    assert dialog.table.horizontalHeader().sectionResizeMode(
+        COL_SALON_NAME
+    ) == QHeaderView.Stretch
+
+
+def test_address_column_is_stretch(qt_app, isolated_db):
+    """Адрес салона тоже тянется: он длиннее всех остальных значений."""
+    dialog = AddressBookDialog("unloading")
+
+    assert dialog.table.horizontalHeader().sectionResizeMode(
+        COL_ADDRESS
+    ) == QHeaderView.Stretch
+
+
+def test_code_column_is_contents(qt_app, isolated_db):
+    """Код салона (JMR-Axxx) — короткий и постоянной длины: по содержимому."""
+    dialog = AddressBookDialog("unloading")
+
+    assert dialog.table.horizontalHeader().sectionResizeMode(
+        COL_CODE
+    ) == QHeaderView.ResizeToContents
+
+
+def test_id_city_and_usage_are_contents(qt_app, isolated_db):
+    """Остальные колонки — тоже по содержимому (значения короткие)."""
+    dialog = AddressBookDialog("unloading")
+    header = dialog.table.horizontalHeader()
+
+    for column in (COL_ID, COL_SALON_CITY, COL_USAGE):
+        assert header.sectionResizeMode(column) == QHeaderView.ResizeToContents
+
+
+def test_column_minimums_are_applied(qt_app, isolated_db):
+    """
+    Нижние границы ширин заданы.
+
+    Общий пол (minimumSectionSize) берётся по самой узкой колонке — 150 у
+    наименования салона: ниже него Qt не даёт сжать ни одну колонку.
+    Персональный минимум адреса (250) держится только у перетаскиваемых
+    колонок (режим Interactive); здесь адрес тянется по ширине таблицы,
+    поэтому его ширина — остаток места, но не меньше общего пола.
+    """
+    dialog = AddressBookDialog("unloading")
+    header = dialog.table.horizontalHeader()
+
+    assert header.minimumSectionSize() == COLUMN_MINIMUMS[COL_SALON_NAME] == 150
+    assert header.sectionSize(COL_SALON_NAME) >= COLUMN_MINIMUMS[COL_SALON_NAME]
+    assert header.sectionSize(COL_ADDRESS) >= header.minimumSectionSize()
+
+
+def test_minimum_section_size_protects_columns(qt_app, isolated_db):
+    """
+    Уже общего минимума колонку не сжать (п. D.4 ТЗ).
+
+    Автоподбор ширины по двойному клику по границе заголовка Qt делает для
+    колонок с режимом Interactive; у справочника таких нет — наименование и
+    адрес тянутся по ширине, остальные идут по содержимому. Поэтому руками
+    колонки справочника не растянуть, и защита от «сжатых в нитку» колонок
+    держится на минимальной ширине сечения.
+    """
+    dialog = AddressBookDialog("unloading")
+    header = dialog.table.horizontalHeader()
+
+    for column in range(dialog.table.columnCount()):
+        header.resizeSection(column, 10)
+        assert header.sectionSize(column) >= header.minimumSectionSize()
+
+
+def test_widths_persist_between_sessions(qt_app, isolated_db):
+    """
+    Раскладка колонок переживает перезапуск (QSettings).
+
+    Обе главные колонки справочника тянутся по ширине, остальные считаются
+    по содержимому (ТЗ D.1), поэтому ручная правка ширины здесь ничего не
+    меняет. Проверяется то, что для этой таблицы значимо: раскладка
+    ЗАПИСЫВАЕТСЯ и следующая сессия (новый диалог) стартует с неё же.
+    Применение сохранённой ширины к перетаскиваемой колонке проверяется
+    в tests/test_ui_table_helpers.py.
+    """
+    save_address("unloading", SALON_ROW[4], salon_name=SALON_ROW[2])
+    first = AddressBookDialog("unloading")
+    first.table._widths_saver.flush()
+
+    saved = stored_widths(first.table, WIDTHS_KEY)
+    assert len(saved) == first.table.columnCount()
+    assert first.table.property(STORAGE_KEY_PROPERTY) == WIDTHS_KEY
+
+    second = AddressBookDialog("unloading")
+    assert [
+        second.table.horizontalHeader().sectionSize(column)
+        for column in range(second.table.columnCount())
+    ] == saved
+
+
+def test_closing_dialog_saves_widths(qt_app, isolated_db):
+    """Раскладка записывается и на закрытии диалога (кнопка «Закрыть»)."""
+    dialog = AddressBookDialog("unloading")
+    header = dialog.table.horizontalHeader()
+
+    dialog.reject()
+
+    assert stored_widths(dialog.table, WIDTHS_KEY) == [
+        header.sectionSize(column)
+        for column in range(dialog.table.columnCount())
+    ]
+
+
+def test_tooltip_on_address(qt_app, isolated_db):
+    """Наведение на длинный адрес показывает его целиком."""
+    save_address("unloading", LONG_SALON_ADDRESS, salon_name=SALON_ROW[2])
+    dialog = AddressBookDialog("unloading")
+    table = dialog.table
+    assert table.item(0, COL_ADDRESS).text() == LONG_SALON_ADDRESS
+
+    table.itemEntered.emit(table.item(0, COL_ADDRESS))
+
+    assert table.item(0, COL_ADDRESS).toolTip() == LONG_SALON_ADDRESS
+
+
+def test_tooltip_on_salon_name(qt_app, isolated_db):
+    """Наименование салона тоже видно целиком, а пустая ячейка — без подсказки."""
+    save_address(
+        "unloading", SALON_ROW[4],
+        salon_name="ООО «Очень длинное наименование салона для проверки»",
+    )
+    dialog = AddressBookDialog("unloading")
+    table = dialog.table
+
+    table.itemEntered.emit(table.item(0, COL_SALON_NAME))
+    table.itemEntered.emit(table.item(0, COL_SALON_CITY))
+
+    assert table.item(0, COL_SALON_NAME).toolTip() == (
+        "ООО «Очень длинное наименование салона для проверки»"
+    )
+    assert table.item(0, COL_SALON_CITY).toolTip() == ""
