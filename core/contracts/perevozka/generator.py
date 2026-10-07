@@ -337,6 +337,7 @@ class PerevozkaGenerator(BaseContractGenerator):
         elements = []
         cargo = self._cargo_vehicles(vehicles)
         shown = 0          # порядковый номер выведенного блока
+        numbered = 0       # сколько машин уже пронумеровано в разделе
         hidden_ids = set()  # машины, чья точка пропущена из-за пустого адреса
 
         for index, point in enumerate(points, 1):
@@ -365,7 +366,12 @@ class PerevozkaGenerator(BaseContractGenerator):
                 doc, head_template,
                 self._point_title(title_prefix, shown, point),
             ))
-            elements.append(self._make_vehicle_table(doc, assigned))
+            # Нумерация машин сквозная по разделу (1, 2, 3, 4, 5…), а не
+            # своя в каждой таблице: см. _make_vehicle_table.
+            elements.append(self._make_vehicle_table(
+                doc, assigned, start_number=numbered + 1
+            ))
+            numbered += len(assigned)
             elements.append(self._make_spacer(doc))
 
         # Машины без привязки к конкретной точке («— (все)» в интерфейсе) и
@@ -381,7 +387,9 @@ class PerevozkaGenerator(BaseContractGenerator):
             elements.append(self._make_point_heading(
                 doc, head_template, no_point_title
             ))
-            elements.append(self._make_vehicle_table(doc, unassigned))
+            elements.append(self._make_vehicle_table(
+                doc, unassigned, start_number=numbered + 1
+            ))
             elements.append(self._make_spacer(doc))
 
         if not elements:
@@ -403,12 +411,14 @@ class PerevozkaGenerator(BaseContractGenerator):
         # В лог — только счётчики: адреса, VIN и марки в логах не место.
         logger.info(
             f"Метка {marker_text}: точек {len(points)}, выведено блоков {shown}, "
+            f"машин пронумеровано {numbered + len(unassigned)}, "
             f"без привязки {len(unassigned)}, "
             f"скрыто из-за пустых точек {len(hidden_ids)}"
         )
         return shown
 
-    def _make_vehicle_table(self, doc, vehicles: List[Dict[str, Any]]):
+    def _make_vehicle_table(self, doc, vehicles: List[Dict[str, Any]],
+                            start_number: int = 1):
         """
         Таблица «№ | Марка/Модель | VIN-номер» по списку машин.
 
@@ -417,6 +427,12 @@ class PerevozkaGenerator(BaseContractGenerator):
         и заливку ячейки, и границы. Копировать один шрифт нельзя — в
         шаблоне шапка оформлена белым текстом на тёмной заливке, и без
         заливки белый текст становится невидимым (белое на белом).
+
+        ``start_number`` — номер первой строки таблицы. Нумерация машин
+        СКВОЗНАЯ по всем точкам раздела: три точки по 2 + 2 + 1 машине
+        дают 1, 2, 3, 4, 5, а не 1, 2 / 1, 2 / 1. Раньше счёт начинался
+        заново в каждой таблице, и в договоре пять машин выглядели как три
+        разные группы.
         """
         sample = self._sample_vehicle_table(doc)
 
@@ -440,10 +456,10 @@ class PerevozkaGenerator(BaseContractGenerator):
                 bold=True,
             )
 
-        for number, vehicle in enumerate(vehicles, 1):
+        for offset, vehicle in enumerate(vehicles):
             row = table.add_row()
             values = (
-                str(number),
+                str(start_number + offset),
                 self._get_vehicle_brand(vehicle),
                 self._get_vehicle_vin(vehicle),
             )
@@ -581,6 +597,22 @@ class PerevozkaGenerator(BaseContractGenerator):
         return cls._single_line(vehicle.get("vin") or "")
 
     # ─────────────────────────────────────────────────────────
+    # Числовые реквизиты
+    # ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _digits_only(value: Any) -> str:
+        """
+        Только цифры из значения — для ИНН, КПП, ОГРН, БИК и счетов.
+
+        Числовые реквизиты в бланке печатаются без слов, пробелов и знаков:
+        «Корреспондентский счет БИК 044030786» в поле БИК — это мусор из
+        исходного документа (распознавание или вставка), а не значение.
+        Пустое поле остаётся пустым: ничего не выдумываем.
+        """
+        return re.sub(r"\D", "", "" if value is None else str(value))
+
+    # ─────────────────────────────────────────────────────────
     # УДАЛЕНИЕ ПУСТЫХ СТРОК В ТАБЛИЦЕ ТС
     # ─────────────────────────────────────────────────────────
 
@@ -684,6 +716,7 @@ class PerevozkaGenerator(BaseContractGenerator):
                     point_vehicles[p_idx].append(vin)
 
         lines = []
+        numbered = 0  # сквозная нумерация машин по всем точкам раздела
         for i, p in enumerate(points, 1):
             # Заголовок точки — тем же помощником, что и таблицы по точкам:
             # наименование салона перед адресом, без имени — только адрес.
@@ -698,8 +731,15 @@ class PerevozkaGenerator(BaseContractGenerator):
 
             vins_here = point_vehicles.get(i, [])
             if vins_here:
-                vins_str = ", ".join(vins_here)
-                lines.append(f"  Машины ({len(vins_here)} шт.): {vins_str}")
+                # Номера сквозные по разделу — как в таблицах по точкам:
+                # «Машины (2 шт.): 3. VIN…, 4. VIN…». Иначе плоский блок и
+                # таблицы нумеровали бы одни машины по-разному.
+                marked = [
+                    f"{numbered + offset}. {vin}"
+                    for offset, vin in enumerate(vins_here, 1)
+                ]
+                numbered += len(vins_here)
+                lines.append(f"  Машины ({len(vins_here)} шт.): {', '.join(marked)}")
             else:
                 lines.append("  Машины: —")
 
@@ -753,7 +793,7 @@ class PerevozkaGenerator(BaseContractGenerator):
             pronoun = "именуемое"
             director_position_full = carrier.get("director_position", "директора") or "директора"
             director_position_short = "Директор"
-            kpp = carrier.get("kpp", "")
+            kpp = self._digits_only(carrier.get("kpp"))
             ogrn_label = "ОГРН"
             nds_status_text = ("Перевозчик подтверждает, что применяет общую систему "
                                "налогообложения и является плательщиком НДС.")
@@ -784,17 +824,23 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["carrier_basis"] = basis
         replacements["carrier_full_name"] = carrier.get("full_name", "")
         replacements["carrier_name"] = carrier.get("short_name", "") or carrier.get("full_name", "")
-        replacements["carrier_inn"] = carrier.get("inn", "")
+        # Реквизиты печатаются ТОЛЬКО цифрами. В поля ИНН / КПП / ОГРН / БИК /
+        # корр. счёт могло попасть словосочетание из исходного документа
+        # («Корреспондентский счет БИК 044030786») — из распознавания или
+        # вставки из чужого файла; служебных слов в договоре быть не должно.
+        replacements["carrier_inn"] = self._digits_only(carrier.get("inn"))
         replacements["carrier_kpp"] = kpp
         replacements["carrier_kpp_line"] = f"КПП {kpp}" if kpp else ""
         replacements["carrier_ogrn_label"] = ogrn_label
-        replacements["carrier_ogrn"] = carrier.get("ogrn", "")
+        replacements["carrier_ogrn"] = self._digits_only(carrier.get("ogrn"))
         replacements["carrier_address"] = carrier.get("legal_address", "")
         replacements["carrier_actual_address"] = carrier.get("actual_address", "")
-        replacements["carrier_account"] = carrier.get("bank_account", "")
-        replacements["carrier_bik"] = carrier.get("bik", "")
+        replacements["carrier_account"] = self._digits_only(carrier.get("bank_account"))
+        replacements["carrier_bik"] = self._digits_only(carrier.get("bik"))
         replacements["carrier_bank"] = carrier.get("bank_name", "")
-        replacements["carrier_corr_account"] = carrier.get("correspondent_account", "")
+        replacements["carrier_corr_account"] = self._digits_only(
+            carrier.get("correspondent_account")
+        )
         replacements["carrier_director"] = carrier.get("director_name", "")
         replacements["carrier_director_position"] = director_position_full
         replacements["carrier_director_position_short"] = director_position_short
@@ -814,10 +860,12 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["client_kpp"] = customer.get("kpp", "")
         replacements["client_ogrn"] = customer.get("ogrn", "")
         replacements["client_address"] = customer.get("legal_address", "")
-        replacements["client_account"] = customer.get("bank_account", "")
-        replacements["client_bik"] = customer.get("bik", "")
+        replacements["client_account"] = self._digits_only(customer.get("bank_account"))
+        replacements["client_bik"] = self._digits_only(customer.get("bik"))
         replacements["client_bank"] = customer.get("bank_name", "")
-        replacements["client_corr_account"] = customer.get("correspondent_account", "")
+        replacements["client_corr_account"] = self._digits_only(
+            customer.get("correspondent_account")
+        )
         replacements["client_director"] = customer_director
         replacements["client_director_position"] = customer.get("director_position", "")
         replacements["client_director_position_short"] = customer.get("director_position", "")
@@ -992,6 +1040,18 @@ class PerevozkaGenerator(BaseContractGenerator):
             replacements["sum_total"] = f"{total_amount:.2f}"
             replacements["sum_total_words"] = amount_to_words(total_amount)
 
+        # Синонимы ключей сумм: «wo_nds» — историческое имя перевозки,
+        # «wo_vat» — имя сумм в остальных типах (аренда, Логистикс).
+        # Бланки перевозки читают ключи с «nds», но если в бланк когда-нибудь
+        # добавят сумму прописью из общего ряда — значение уже готово,
+        # и оно ПРОПИСЬЮ, а не цифрами.
+        replacements["sum_wo_vat"] = replacements["sum_wo_nds"]
+        replacements["sum_wo_vat_words"] = replacements["sum_wo_nds_words"]
+        replacements["sum_vat"] = replacements["sum_nds"]
+        replacements["sum_vat_words"] = replacements["sum_nds_words"]
+        replacements["price_without_vat_words"] = replacements["sum_wo_nds_words"]
+        replacements["price_with_vat_words"] = replacements["sum_total_words"]
+
         replacements["nds_status_text"] = nds_status_text
         replacements["vat_rate"] = f"{vat_rate_num:.0f}%"
 
@@ -1002,7 +1062,11 @@ class PerevozkaGenerator(BaseContractGenerator):
 
         payment_days = contract.get("payment_days", 10)
         replacements["payment_days"] = str(payment_days)
-        replacements["payment_days_words"] = self._days_to_words(payment_days)
+        # Срок оплаты прописью — в родительном падеже и для ЛЮБОГО числа:
+        # «10 (десяти)», «25 (двадцати пяти)», «45 (сорока пяти)».
+        # Прежний _days_to_words знает только 1…20 и 30, а на 45 печатал
+        # цифры — в поле «..._words» цифр быть не должно.
+        replacements["payment_days_words"] = self._days_to_words_genitive(payment_days)
         replacements["penalty_rate"] = "5000"
 
         # Данные из справочников и импорта приходят с переносами строк и

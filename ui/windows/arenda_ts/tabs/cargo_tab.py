@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
 from ui import theme
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
+from ui.widgets.table_helpers import install_column_settings_menu
 
 logger = logging.getLogger("ui.windows.arenda_ts.tabs.cargo_tab")
 
@@ -53,6 +54,9 @@ COL_UNLOADING_POINT = 4
 
 #: Заголовки колонок — как в таблице п. 3.1 бланка.
 HEADERS = ["№", "Марка, модель", "VIN", "Точка погрузки", "Точка выгрузки"]
+
+#: Ключ QSettings: состав колонок этой таблицы (ШАГ FIX-6, часть B3).
+COLUMNS_STORAGE_KEY = "ui/arenda_cargo/columns"
 
 
 class _NumberDelegate(QStyledItemDelegate):
@@ -148,6 +152,19 @@ class CargoTab(TabMixin, QWidget):
         self.vehicles_table.setItemDelegateForColumn(
             COL_NUMBER, _NumberDelegate(self.vehicles_table)
         )
+        # ── Состав колонок (ШАГ FIX-6, часть B3) ──
+        # Правый клик по шапке → галочки «какие колонки показывать».
+        # VIN и марка обязательны: без них строка машины теряет смысл.
+        # Колонки прячутся, а не удаляются, поэтому `get_data()` продолжает
+        # читать их значения.
+        install_column_settings_menu(
+            self.vehicles_table,
+            [("number", "№", True), ("brand_model", "Марка, модель", True),
+             ("vin", "VIN", True), ("loading_point", "Точка погрузки", True),
+             ("unloading_point", "Точка выгрузки", True)],
+            storage_key=COLUMNS_STORAGE_KEY,
+            on_changed=self._reapply_column_widths,
+        )
         self.vehicles_table.setMinimumHeight(200)
         for row in range(MIN_ROWS):
             self._init_row(row)
@@ -172,6 +189,19 @@ class CargoTab(TabMixin, QWidget):
         self._update_count()
 
         logger.debug("Разовая аренда CargoTab инициализирована")
+
+    def _reapply_column_widths(self) -> None:
+        """
+        Возвращает режимы колонок после смены их состава (ШАГ FIX-6).
+
+        «№» и VIN — по содержимому, марка и точки маршрута — растянуть:
+        те же режимы, что и при открытии вкладки.
+        """
+        header = self.vehicles_table.horizontalHeader()
+        for column in (COL_NUMBER, COL_VIN):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        for column in (COL_BRAND, COL_LOADING_POINT, COL_UNLOADING_POINT):
+            header.setSectionResizeMode(column, QHeaderView.Stretch)
 
     # ─────────────────────────────────────────────────────────
     # Строки таблицы

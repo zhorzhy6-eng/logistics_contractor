@@ -41,6 +41,7 @@ from PyQt5.QtWidgets import (
 from ui import theme
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import PasteableLineEdit, RecognitionPanel
+from ui.widgets.table_helpers import install_column_settings_menu
 
 logger = logging.getLogger("ui.windows.havaly.tabs.cargo_tab")
 
@@ -58,6 +59,9 @@ COL_BRAND = 2
 COL_MODEL = 3
 COL_DEALER = 4
 COL_DEALER_CODE = 5
+
+#: Ключ QSettings: состав колонок этой таблицы (ШАГ FIX-6, часть B3).
+COLUMNS_STORAGE_KEY = "ui/havaly_cargo/columns"
 
 #: Заголовки колонок — как в шапке бланка (колонки VIN, Марка, Модель,
 #: Дилер, Код дилера). Марка и модель — отдельные колонки, не одна строка.
@@ -169,6 +173,19 @@ class CargoTab(TabMixin, QWidget):
         self.vehicles_table.setItemDelegateForColumn(
             COL_NUMBER, _NumberDelegate(self.vehicles_table)
         )
+        # ── Состав колонок (ШАГ FIX-6, часть B3) ──
+        # Правый клик по шапке → галочки «какие колонки показывать».
+        # VIN и марка обязательны, остальные можно скрыть: колонки прячутся,
+        # а не удаляются, поэтому сборщик (`get_data`) продолжает читать их
+        # значения, и в бланк .xlsx ничего не пропадает.
+        install_column_settings_menu(
+            self.vehicles_table,
+            [("number", "№", True), ("vin", "VIN", True),
+             ("brand", "Марка", True), ("model", "Модель", False),
+             ("dealer", "Дилер", False), ("dealer_code", "Код дилера", False)],
+            storage_key=COLUMNS_STORAGE_KEY,
+            on_changed=self._reapply_column_widths,
+        )
         self.vehicles_table.setMinimumHeight(220)
         for row in range(MIN_ROWS):
             self._init_row(row)
@@ -186,6 +203,19 @@ class CargoTab(TabMixin, QWidget):
         main_layout.addWidget(self._tab_actions)
 
         logger.debug("Хавалы CargoTab инициализирована")
+
+    def _reapply_column_widths(self) -> None:
+        """
+        Возвращает режимы колонок после смены их состава (ШАГ FIX-6).
+
+        «№» и VIN — по содержимому, остальные поля машины — растянуть:
+        те же режимы, что и при открытии вкладки.
+        """
+        header = self.vehicles_table.horizontalHeader()
+        for column in (COL_NUMBER, COL_VIN):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        for column in (COL_BRAND, COL_MODEL, COL_DEALER, COL_DEALER_CODE):
+            header.setSectionResizeMode(column, QHeaderView.Stretch)
 
     # ─────────────────────────────────────────────────────────
     # Строки таблицы

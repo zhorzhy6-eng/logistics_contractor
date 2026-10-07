@@ -22,14 +22,14 @@ from db.database import (
 from core import audit, secrets_store
 from core.contract_data import ContractData
 from core.contracts.contract_types import DEFAULT_CONTRACT_TYPE
-from core.contract_generator import ContractGenerator
+from core.contract_generator import ContractGenerator, PerevozkaValidator
 from core.gigachat_client import GigaChatClient
 from core.mirror import SOURCE_TYPE
 from core.recognizer import filled_only, filled_only_list
 from core.secrets_store import MISSING_KEY_MESSAGE
 from core.settings_service import get_settings_service
 from core.trace import filled_fields_summary
-from core.validator import ValidationReport, Validator
+from core.validator import ValidationReport
 
 from ui import theme
 from ui import system_theme
@@ -1089,7 +1089,8 @@ class MainWindow(QMainWindow):
         box.setText(
             "В данных есть ошибки. Договор можно создать, но проверьте реквизиты."
             if report.has_errors
-            else "В данных есть замечания. Поля, отмеченные ниже, останутся пустыми."
+            else "В данных есть замечания. Поля, отмеченные ниже, останутся пустыми "
+                 "(у денежных полей будет 0.00, у текстовых — пусто)."
         )
         box.setInformativeText(report.format_text())
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
@@ -1112,7 +1113,10 @@ class MainWindow(QMainWindow):
             data = self._collect_data()
 
             logger.info("Создание договора: проверка данных")
-            report = Validator().check(data)
+            # Валидатор ТИПА, а не базовый: у перевозки есть свои замечания
+            # (например, длины БИК и корр. счёта — ШАГ FIX-6, часть A3).
+            # Диалог подтверждения — тот же (_confirm_validation ниже).
+            report = PerevozkaValidator().check(data)
             if not self._confirm_validation(report):
                 logger.info("Генерация договора отменена пользователем после проверки")
                 audit.log_denied("contract_created", "проверка данных не пройдена")

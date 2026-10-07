@@ -11,6 +11,7 @@
 """
 
 import logging
+import re
 from typing import Dict, Any, List
 
 from PyQt5.QtWidgets import (
@@ -25,6 +26,25 @@ from ui.tabs.base_tab import DadataBankMixin, DadataFillMixin
 from ui.widgets import PasteableLineEdit, PasteableTextEdit, PasteableDateEdit, RecognitionPanel
 
 logger = logging.getLogger("ui.tabs.carrier_tab")
+
+#: Поля-реквизиты, в которые пускаются ТОЛЬКО цифры: ИНН, КПП, ОГРН,
+#: расчётный счёт, БИК, корр. счёт. Слова и знаки из них вычищаются.
+DIGITS_ONLY_FIELDS = (
+    "inn", "kpp", "ogrn", "bank_account", "bik", "correspondent_account",
+)
+
+
+def _normalize_digits(value: Any) -> str:
+    """
+    Только цифры из значения — для БИК, счетов, ИНН, КПП и ОГРН.
+
+    Распознавание и вставка из чужого документа приносят поле вместе с его
+    подписью: «Корреспондентский счет БИК 044030786» вместо «044030786».
+    В договоре от такого значения остаётся фраза посреди реквизитов, а поле
+    БИК перестаёт проходить проверку «9 цифр». Пустое значение остаётся
+    пустым — ничего не выдумываем.
+    """
+    return re.sub(r"\D", "", "" if value is None else str(value))
 
 
 class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
@@ -278,18 +298,18 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
         return ["carrier_type"]
 
     def get_data(self) -> Dict[str, Any]:
-        """Собирает данные."""
-        return {
+        """
+        Собирает данные.
+
+        Числовые реквизиты (ИНН, КПП, ОГРН, счета, БИК) уходят ТОЛЬКО
+        цифрами: пробелы и дефисы оператор ставит для читаемости, а в
+        договор и в проверку «9 цифр» они попадать не должны.
+        """
+        data = {
             "full_name": self.full_name.text().strip(),
             "short_name": self.short_name.text().strip(),
-            "inn": self.inn.text().strip(),
-            "kpp": self.kpp.text().strip(),
-            "ogrn": self.ogrn.text().strip(),
             "legal_address": self.legal_address.toPlainText().strip(),
             "actual_address": self.actual_address.toPlainText().strip(),
-            "bank_account": self.bank_account.text().strip(),
-            "bik": self.bik.text().strip(),
-            "correspondent_account": self.correspondent_account.text().strip(),
             "bank_name": self.bank_name.text().strip(),
             "director_name": self.director_name.text().strip(),
             "director_position": self.director_position.text().strip(),
@@ -300,6 +320,10 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
             "carrier_type": self.carrier_type.currentText(),
             "vat_rate": self.vat_rate.text().strip(),
         }
+        for field in DIGITS_ONLY_FIELDS:
+            data[field] = _normalize_digits(getattr(self, field).text())
+
+        return data
 
     def fill_data(self, data: Dict[str, Any]) -> None:
         """
@@ -321,8 +345,22 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
         )
         for field in text_fields:
             value = str(data.get(field) or "").strip()
-            if value:
-                getattr(self, field).setText(value)
+            if not value:
+                continue
+
+            # Реквизиты-числа: «Корреспондентский счет БИК 044030786» в поле
+            # БИК — это подпись вместе со значением, а не значение. В поле
+            # кладутся только цифры; если цифр нет вовсе, поле не трогаем.
+            if field in DIGITS_ONLY_FIELDS:
+                digits = _normalize_digits(value)
+                if not digits:
+                    logger.debug(
+                        "Поле %s: цифр в значении нет — оставлено как было", field
+                    )
+                    continue
+                value = digits
+
+            getattr(self, field).setText(value)
 
         legal_address = str(data.get("legal_address") or "").strip()
         if legal_address:

@@ -157,6 +157,9 @@ def _needs_migration(cursor: sqlite3.Cursor) -> bool:
         ("address_book", "salon_inn"),
         ("address_book", "salon_city"),
         ("vehicles", "contract_id"),
+        # Наименование салона в точке маршрута (ШАГ FIX-6, часть F):
+        # перед этой миграцией тоже делается резервная копия базы.
+        ("contract_points", "name"),
     )
     for table, column in required_columns:
         if not _column_exists(cursor, table, column):
@@ -486,12 +489,16 @@ def init_database() -> None:
     """)
 
     # ── contract_points ──
+    # name — наименование салона точки (ШАГ FIX-6, часть F): в бланк оно
+    # попадает из формы, и без колонки терялось при перезагрузке договора
+    # из базы. У договоров, сохранённых раньше, значение пустое.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS contract_points (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             contract_id INTEGER,
             point_type TEXT,
             sort_order INTEGER,
+            name TEXT,
             address TEXT,
             date TEXT,
             time_window TEXT,
@@ -588,6 +595,19 @@ def init_database() -> None:
             logger.info("Добавлена колонка address_book.city")
         except Exception as e:
             logger.warning(f"Не удалось добавить city: {e}")
+
+    # ── Миграция: contract_points.name (ШАГ FIX-6, часть F) ──
+    # В таблице точек маршрута не было колонки с наименованием салона, хотя
+    # в бланк оно попадает из формы: после перезагрузки сохранённого
+    # договора имя терялось. ALTER TABLE ADD COLUMN добавляет колонку к
+    # существующей таблице и НЕ трогает строки: у уже сохранённых договоров
+    # name = NULL, а `load_contract_points` отдаёт его пустой строкой.
+    if not _column_exists(cursor, "contract_points", "name"):
+        try:
+            cursor.execute("ALTER TABLE contract_points ADD COLUMN name TEXT")
+            logger.info("Добавлена колонка contract_points.name")
+        except Exception as e:
+            logger.warning(f"Не удалось добавить contract_points.name: {e}")
 
     # ── Миграция: address_book — справочник салонов (ШАГ FIX-2.2) ──
     # Справочник адресов стал справочником МЕСТ ВЫГРУЗКИ: у записи появились
@@ -1717,6 +1737,14 @@ def save_contract_points(
     contract_id: int, loadings: List[Dict], unloadings: List[Dict],
     conn: Optional[sqlite3.Connection] = None,
 ) -> None:
+    """
+    Сохраняет точки маршрута договора (ШАГ FIX-6, часть F).
+
+    У точки сохраняется НАИМЕНОВАНИЕ салона (`name`) — раньше колонки не
+    было, и после перезагрузки договора из базы имя терялось, хотя в бланк
+    попадало из формы. Точка без имени пишется пустой строкой: старые
+    вызовы (без ключа `name`) работают как раньше.
+    """
     own_connection = conn is None
     if conn is None:
         conn = get_connection()
@@ -1724,15 +1752,19 @@ def save_contract_points(
     cursor.execute("DELETE FROM contract_points WHERE contract_id = ?", (contract_id,))
     for i, l in enumerate(loadings):
         cursor.execute(
-            "INSERT INTO contract_points (contract_id, point_type, sort_order, address, date, time_window) "
-            "VALUES (?, 'loading', ?, ?, ?, ?)",
-            (contract_id, i, l.get("address", ""), l.get("date", ""), l.get("time_window", ""))
+            "INSERT INTO contract_points "
+            "(contract_id, point_type, sort_order, name, address, date, time_window) "
+            "VALUES (?, 'loading', ?, ?, ?, ?, ?)",
+            (contract_id, i, l.get("name", "") or "", l.get("address", ""),
+             l.get("date", ""), l.get("time_window", ""))
         )
     for i, u in enumerate(unloadings):
         cursor.execute(
-            "INSERT INTO contract_points (contract_id, point_type, sort_order, address, date, time_window) "
-            "VALUES (?, 'unloading', ?, ?, ?, ?)",
-            (contract_id, i, u.get("address", ""), u.get("date", ""), u.get("time_window", ""))
+            "INSERT INTO contract_points "
+            "(contract_id, point_type, sort_order, name, address, date, time_window) "
+            "VALUES (?, 'unloading', ?, ?, ?, ?, ?)",
+            (contract_id, i, u.get("name", "") or "", u.get("address", ""),
+             u.get("date", ""), u.get("time_window", ""))
         )
     if own_connection:
         conn.commit()
@@ -1760,18 +1792,31 @@ def save_contract_with_details(
 
 
 def load_contract_points(contract_id: int) -> Dict[str, List[Dict]]:
+    """
+    Читает точки маршрута договора.
+
+    Точка возвращается ЧЕТЫРЬМЯ полями — с наименованием салона (`name`,
+    ШАГ FIX-6, часть F). У договоров, сохранённых до миграции, колонка
+    добавлена пустой, поэтому имя приходит пустой строкой: данные не
+    теряются и форма заполняется как раньше.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT point_type, sort_order, address, date, time_window "
+        "SELECT point_type, sort_order, name, address, date, time_window "
         "FROM contract_points WHERE contract_id = ? ORDER BY point_type, sort_order",
         (contract_id,)
     )
     rows = cursor.fetchall()
     conn.close()
     loadings, unloadings = [], []
-    for ptype, order, addr, date, tw in rows:
-        item = {"address": addr or "", "date": date or "", "time_window": tw or ""}
+    for ptype, order, name, addr, date, tw in rows:
+        item = {
+            "name": name or "",
+            "address": addr or "",
+            "date": date or "",
+            "time_window": tw or "",
+        }
         if ptype == "loading":
             loadings.append(item)
         else:

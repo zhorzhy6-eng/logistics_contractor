@@ -502,3 +502,49 @@ def test_tooltip_on_long_address(tab):
     table.itemEntered.emit(table.item(0, COL_ADDRESS))
 
     assert table.item(0, COL_ADDRESS).toolTip() == long_address
+
+
+# ─────────────────────────────────────────────────────────────
+# Наименование салона в базе (ШАГ FIX-6, часть F)
+# ─────────────────────────────────────────────────────────────
+
+def test_point_name_round_trip_through_database(tab, isolated_db):
+    """
+    Наименование салона из вкладки доходит до базы и возвращается обратно.
+
+    Стык «вкладка → `save_contract_points` → `load_contract_points` →
+    вкладка»: раньше колонки `name` в базе не было, и имя терялось при
+    перезагрузке сохранённого договора.
+    """
+    tab.loadings_table.item(0, COL_NAME).setText("ООО «Салон Погрузки»")
+    tab.loadings_table.item(0, COL_ADDRESS).setText("Склад А")
+    tab.unloadings_table.item(0, COL_NAME).setText("ООО «Салон Выгрузки»")
+    tab.unloadings_table.item(0, COL_ADDRESS).setText("Склад Б")
+
+    loadings = tab.get_loadings()
+    unloadings = tab.get_unloadings()
+
+    contract_id = isolated_db.save_contract({"number": "ROUND-TRIP-1"})
+    isolated_db.save_contract_points(contract_id, loadings, unloadings)
+
+    saved = isolated_db.load_contract_points(contract_id)
+
+    assert saved["loadings"][0]["name"] == "ООО «Салон Погрузки»"
+    assert saved["unloadings"][0]["name"] == "ООО «Салон Выгрузки»"
+
+    # И обратно во вкладку: имя заполняет свою колонку.
+    restored = ContractTab()
+    try:
+        restored.fill_data({
+            "loadings": saved["loadings"],
+            "unloadings": saved["unloadings"],
+        })
+
+        assert restored.loadings_table.item(0, COL_NAME).text() == (
+            "ООО «Салон Погрузки»"
+        )
+        assert restored.unloadings_table.item(0, COL_NAME).text() == (
+            "ООО «Салон Выгрузки»"
+        )
+    finally:
+        restored.deleteLater()

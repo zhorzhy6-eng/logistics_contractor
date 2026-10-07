@@ -31,6 +31,7 @@ from PyQt5.QtWidgets import (
 from ui import theme
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
+from ui.widgets.table_helpers import install_column_settings_menu
 
 logger = logging.getLogger("ui.windows.logistiks_rus.tabs.cargo_tab")
 
@@ -45,6 +46,9 @@ MIN_ROWS = 3
 COL_NUMBER = 0
 COL_BRAND = 1
 COL_VIN = 2
+
+#: Ключ QSettings: состав колонок этой таблицы (ШАГ FIX-6, часть B3).
+COLUMNS_STORAGE_KEY = "ui/logistiks_cargo/columns"
 
 
 class _NumberDelegate(QStyledItemDelegate):
@@ -119,6 +123,18 @@ class CargoTab(TabMixin, QWidget):
         self.vehicles_table.setItemDelegateForColumn(
             COL_NUMBER, _NumberDelegate(self.vehicles_table)
         )
+        # ── Состав колонок (ШАГ FIX-6, часть B3) ──
+        # Правый клик по шапке → галочки «какие колонки показывать».
+        # VIN и марка обязательны: без них строка машины теряет смысл.
+        # Колонки прячутся, а не удаляются, поэтому `get_data()` продолжает
+        # читать их значения.
+        install_column_settings_menu(
+            self.vehicles_table,
+            [("number", "№", True), ("brand_model", "Марка, модель", True),
+             ("vin", "VIN", True)],
+            storage_key=COLUMNS_STORAGE_KEY,
+            on_changed=self._reapply_column_widths,
+        )
         self.vehicles_table.setMinimumHeight(200)
         for row in range(MIN_ROWS):
             self._init_row(row)
@@ -136,6 +152,13 @@ class CargoTab(TabMixin, QWidget):
         main_layout.addWidget(self._tab_actions)
 
         logger.debug("Логистикс Рус CargoTab инициализирована")
+
+    def _reapply_column_widths(self) -> None:
+        """Возвращает режимы колонок после смены их состава (ШАГ FIX-6)."""
+        header = self.vehicles_table.horizontalHeader()
+        header.setSectionResizeMode(COL_NUMBER, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_BRAND, QHeaderView.Stretch)
+        header.setSectionResizeMode(COL_VIN, QHeaderView.ResizeToContents)
 
     # ─────────────────────────────────────────────────────────
     # Строки таблицы

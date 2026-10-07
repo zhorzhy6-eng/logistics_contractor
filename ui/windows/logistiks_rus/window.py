@@ -392,7 +392,8 @@ class LogistiksRusWindow(BaseContractWindow):
         box.setText(
             "В данных есть ошибки. Заявку можно создать, но проверьте реквизиты."
             if report.has_errors
-            else "В данных есть замечания. Поля, отмеченные ниже, останутся пустыми."
+            else "В данных есть замечания. Поля, отмеченные ниже, останутся пустыми "
+                 "(у денежных полей будет 0.00, у текстовых — пусто)."
         )
         box.setInformativeText(report.format_text())
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)

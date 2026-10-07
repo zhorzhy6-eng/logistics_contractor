@@ -25,10 +25,16 @@ from core.dates import parse_date
 from ui import theme
 # Настройка таблиц (ШАГ FIX-5): у пакета один вход, как в ui/controls/__init__.py.
 from ui.widgets.table_helpers import (
+    apply_column_checks,
+    apply_column_selection,
+    apply_minimum_widths,
+    hidden_column_keys,
+    install_column_settings_menu,
     install_tooltip_on_table,
     restore_column_widths,
     save_column_widths,
     setup_point_table,
+    visible_column_keys,
 )
 
 logger = logging.getLogger("ui.widgets")
@@ -460,4 +466,11 @@ __all__ = [
     'install_tooltip_on_table',
     'save_column_widths',
     'restore_column_widths',
+    # Состав колонок (ШАГ FIX-6, часть B3) — тоже реэкспорт.
+    'install_column_settings_menu',
+    'apply_column_selection',
+    'apply_column_checks',
+    'apply_minimum_widths',
+    'visible_column_keys',
+    'hidden_column_keys',
 ]

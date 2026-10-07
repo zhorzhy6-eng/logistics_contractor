@@ -184,12 +184,12 @@
           "VIN-номер"
         ],
         [
-          "1",
+          "2",
           "МОДЕЛЬ 2",
           "EC3TEUMB0T0000002"
         ],
         [
-          "2",
+          "3",
           "МОДЕЛЬ 3",
           "EC3TEUMB0T0000003"
         ]
@@ -229,7 +229,7 @@
           "VIN-номер"
         ],
         [
-          "1",
+          "2",
           "МОДЕЛЬ 2",
           "EC3TEUMB0T0000002"
         ]
@@ -249,7 +249,7 @@
           "VIN-номер"
         ],
         [
-          "1",
+          "3",
           "МОДЕЛЬ 3",
           "EC3TEUMB0T0000003"
         ]
@@ -770,6 +770,6 @@
     }
   ],
   "placeholders_left": [],
-  "sha256_docx": "15fec941c7eabaa412afbe2fd06736364daf69b5e1951a7cbe3be5cc23c8394a",
-  "sha256_text": "214d6bff1b9ecfb153fd8b975144af05f3f3d0e5eeb16c8192d58ada23a25c09"
+  "sha256_docx": "4b15b0d27564959517cff393bcd88afd8926b9768820ff0c8feb371a0e42fda4",
+  "sha256_text": "8ee1b0358f548e4b0289ae523ba6678cd649c1e41752c74151add8a797c2e9b1"
 }

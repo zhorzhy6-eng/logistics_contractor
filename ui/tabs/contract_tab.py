@@ -296,7 +296,10 @@ class ContractTab(TabMixin, QWidget):
         self.price_input.setRange(0, 100000000)
         self.price_input.setDecimals(2)
         self.price_input.setSuffix(" ₽")
-        self.price_input.setValue(400000)
+        # Стоимость НЕ подставляется: пустое поле — ноль, о незаполненной
+        # стоимости скажет валидатор. Раньше здесь стояло 400 000 ₽ —
+        # число выглядело как введённое оператором (ШАГ FIX-6, часть C).
+        self.price_input.setValue(0)
         price_layout.addRow("Стоимость *", self.price_input)
 
         self.vat_rate = QLineEdit()
@@ -1019,7 +1022,9 @@ class ContractTab(TabMixin, QWidget):
         self.vat_rate.setReadOnly(False)
         self.vat_rate.setText("22")
 
-        self.price_input.setValue(400000)
+        # Стоимость возвращается к ПУСТОМУ значению (0), а не к 400 000 ₽:
+        # подстановка выглядела как ввод оператора (ШАГ FIX-6, часть C).
+        self.price_input.setValue(0)
         self.payment_days.setText("10")
         self.special_conditions.clear()
         self.radio_without_vat.setChecked(True)
