@@ -17,9 +17,11 @@
 
 import logging
 import threading
+import types
 
 import pytest
 
+import core.pseudonymizer as pseudonymizer
 from core.pseudonymizer import Pseudonymizer, TOKEN_TYPES, token_name
 
 # ── Синтетические данные ─────────────────────────────────────
@@ -496,3 +498,312 @@ def test_document_tokens_contain_no_original_digits(pseudo):
                 assert digits not in token
                 assert digits not in safe
         assert pseudo.restore(safe, mapping) == text
+
+
+# ─────────────────────────────────────────────────────────────
+# Слой Natasha (опциональный)
+# ─────────────────────────────────────────────────────────────
+# Ядро маскирования — регулярки; Natasha ДОПОЛНЯЕТ их и нужна там, где
+# регулярка молчит: иностранные имена без отчества, фамилии без контекста,
+# цельные адреса. Все тексты синтетические.
+#
+# По умолчанию слой выключен (autouse-фикстура `natasha_layer_off`
+# в tests/conftest.py): юнит-тесты проверяют логику, а не чужую NER-модель.
+# Тесты самого слоя просят фикстуру `natasha_layer` и помечены `slow`.
+
+#: Иностранное имя без отчества — регулярка его не видит вовсе.
+FOREIGN_NAME = "Харуки Мураками"
+#: Цельный адрес: регулярка режет его на «ул. Тверская» и «д. 5».
+WHOLE_ADDRESS = "г. Москва, ул. Тверская, д. 5"
+
+
+@pytest.fixture
+def natasha_layer(natasha_warmed_up, monkeypatch):
+    """
+    Включает реальный слой Natasha для одного теста.
+
+    ``natasha_warmed_up`` (tests/conftest.py) строит модели один раз на
+    прогон. Если библиотеки нет или модели не поднялись — тест
+    пропускается: маскирование обязано работать и без Natasha.
+    """
+    monkeypatch.setattr(pseudonymizer, "_NATASHA_AVAILABLE", None)
+    if pseudonymizer._natasha_pipeline() is None:
+        pytest.skip("natasha недоступна — маскирование работает на регулярках")
+    return pseudonymizer
+
+
+class _FakeAddrMatch:
+    """Заглушка совпадения AddrExtractor: границы и тип части адреса."""
+
+    def __init__(self, start: int, stop: int, part_type):
+        self.start = start
+        self.stop = stop
+        self.fact = types.SimpleNamespace(type=part_type)
+
+
+class _FakeExtractor:
+    """Заглушка AddressExtractor: отдаёт заранее заданные части."""
+
+    def __init__(self, parts):
+        self._parts = parts
+
+    def __call__(self, text):
+        return [_FakeAddrMatch(start, stop, part_type)
+                for start, stop, part_type in self._parts]
+
+
+def test_pseudonymizer_works_without_natasha(monkeypatch):
+    """Без Natasha маскирование работает на регулярках и не падает."""
+    monkeypatch.setattr(pseudonymizer, "_NATASHA_AVAILABLE", False)
+    monkeypatch.setattr(pseudonymizer, "_NATASHA", {})
+
+    pseudo = Pseudonymizer()
+    safe, mapping = pseudo.anonymize(FULL_TEXT)
+
+    assert pseudonymizer._natasha_pipeline() is None
+    kinds = {token_name(token).rsplit("_", 1)[0] for token in mapping}
+    assert {"PERSON", "PASSPORT", "LICENSE", "PHONE", "EMAIL",
+            "INN", "SNILS", "VIN", "GOSNOMER", "ADDRESS"} <= kinds
+    for secret in ALL_SECRETS:
+        assert secret not in safe
+    assert pseudo.restore(safe, mapping) == FULL_TEXT
+
+
+def test_broken_natasha_does_not_break_masking(monkeypatch, caplog):
+    """Сломанный слой Natasha не роняет маскирование: работает регулярка."""
+    class _BrokenExtractor:
+        def __call__(self, text):
+            raise RuntimeError("сломанный извлекатель")
+
+    monkeypatch.setattr(pseudonymizer, "_NATASHA_AVAILABLE", None)
+    monkeypatch.setattr(pseudonymizer, "_NATASHA", {
+        "ready": True,
+        "segmenter": object(),
+        "ner_tagger": object(),
+        "addr_extractor": _BrokenExtractor(),
+    })
+
+    with caplog.at_level(logging.DEBUG, logger="core.pseudonymizer"):
+        safe, mapping = Pseudonymizer().anonymize(f"Водитель {PERSON}, тел {PHONE}")
+
+    assert pseudonymizer._natasha_pipeline() is not None
+    assert PERSON not in safe and PHONE not in safe
+    assert "<<PERSON_1>>" in safe
+    assert PERSON not in caplog.text
+
+
+def test_address_parts_are_merged_into_one_span():
+    """Части одного адреса склеиваются в один span — токен будет один."""
+    text = "г. Москва, ул. Тверская, д. 5, кв. 17"
+    matches = [
+        _FakeAddrMatch(0, 9, "город"),
+        _FakeAddrMatch(11, 23, "улица"),
+        _FakeAddrMatch(25, 29, "дом"),
+        _FakeAddrMatch(31, 37, "квартира"),
+    ]
+    assert pseudonymizer._merge_addr_parts(text, matches) == [(0, 37)]
+
+
+def test_address_parts_separated_by_words_are_different_addresses():
+    """Между частями стоит слово — это уже не один адрес."""
+    text = "ул. Тверская, склад, ул. Центральная"
+    matches = [
+        _FakeAddrMatch(0, 12, "улица"),
+        _FakeAddrMatch(21, 36, "улица"),
+    ]
+    assert pseudonymizer._merge_addr_parts(text, matches) == [(0, 12), (21, 36)]
+
+
+def test_address_part_without_type_is_not_an_address():
+    """Часть без типа — просто слово с заглавной буквы, а не адрес."""
+    text = "Иванов Иван Иванович, ул. Тверская"
+    matches = [
+        _FakeAddrMatch(0, 6, None),
+        _FakeAddrMatch(22, 34, "улица"),
+    ]
+    assert pseudonymizer._merge_addr_parts(text, matches) == [(22, 34)]
+
+
+def test_address_without_street_is_not_an_address():
+    """
+    Без улицы адреса нет: город, индекс и номер дома — не адрес.
+
+    Так отсекаются ложные срабатывания AddrExtractor: «180300» в «Стоимость
+    180300 руб.» он считает индексом, «с Остапом Бендером» — селом
+    (маркер «с» — сокращение от «село»), «д. 53» без улицы закрывает
+    регулярка.
+    """
+    assert pseudonymizer._merge_addr_parts(
+        "Стоимость 180300 руб.", [_FakeAddrMatch(10, 16, "индекс")]
+    ) == []
+    assert pseudonymizer._merge_addr_parts(
+        "д. 53", [_FakeAddrMatch(0, 5, "дом")]
+    ) == []
+    assert pseudonymizer._merge_addr_parts(
+        "г. Москва", [_FakeAddrMatch(0, 9, "город")]
+    ) == []
+    assert pseudonymizer._merge_addr_parts(
+        "Договор заключён с Остапом Бендером.",
+        [_FakeAddrMatch(17, 35, "село")],
+    ) == []
+
+
+def test_index_and_city_join_the_street_group():
+    """Индекс и город — часть того же адреса, что и улица."""
+    text = "183052, г. Мурманск, ул. Тестовая"
+    matches = [
+        _FakeAddrMatch(0, 6, "индекс"),
+        _FakeAddrMatch(8, 19, "город"),
+        _FakeAddrMatch(21, 33, "улица"),
+    ]
+    assert pseudonymizer._merge_addr_parts(text, matches) == [(0, 33)]
+
+
+def test_address_span_is_widened_over_regular_house_number():
+    """
+    Номер дома, который нашла регулярка, не остаётся открытым.
+
+    «Бештаугорское шоссе 17»: Natasha закрывает только название улицы,
+    а «шоссе 17» ловит регулярка — span адреса обязан дойти до номера.
+    """
+    text = "г. Пятигорск, Бештаугорское шоссе 17"
+    regular = [
+        pseudonymizer._Candidate(29, 36, "ADDRESS", "шоссе 17"),
+    ]
+    assert pseudonymizer._widen_addr_over_regular(0, 33, regular) == (0, 36)
+
+    # Совпадение с тем же началом span не расширяет: там выигрывает регулярка.
+    same_start = [pseudonymizer._Candidate(0, 12, "ADDRESS", "г. Пятигорск")]
+    assert pseudonymizer._widen_addr_over_regular(0, 33, same_start) == (0, 33)
+
+
+def test_natasha_address_path_without_models(monkeypatch):
+    """Полный путь «адрес → один токен» на заглушке, без реальных моделей."""
+    text = "г. Пятигорск, Бештаугорское шоссе 17"
+    monkeypatch.setattr(pseudonymizer, "_NATASHA_AVAILABLE", None)
+    monkeypatch.setattr(pseudonymizer, "_NATASHA", {
+        "ready": True,
+        "addr_extractor": _FakeExtractor([(0, 12, "город"), (14, 33, "шоссе")]),
+    })
+
+    safe, mapping = Pseudonymizer().anonymize(text)
+
+    assert safe == "<<ADDRESS_1>>"
+    assert list(mapping.values()) == [text]
+
+    # Ложное «село» из предлога «с» адресом не становится.
+    monkeypatch.setattr(pseudonymizer, "_NATASHA", {
+        "ready": True,
+        "addr_extractor": _FakeExtractor([(17, 35, "село")]),
+    })
+    assert Pseudonymizer().anonymize("Договор заключён с Остапом Бендером.")[1] == {}
+
+
+def test_natasha_kinds_are_not_token_types():
+    """Natasha-типы нужны только для приоритета, в TOKEN_TYPES их нет."""
+    assert [kind for kind in TOKEN_TYPES if "NATASHA" in kind] == []
+    assert pseudonymizer._PRIORITY["PERSON_NATASHA"] < pseudonymizer._PRIORITY["PERSON"]
+    assert pseudonymizer._PRIORITY["ADDRESS_NATASHA"] < pseudonymizer._PRIORITY["ADDRESS"]
+    # Natasha-детекторы идут ПОСЛЕ всех регулярных.
+    assert pseudonymizer._DETECTORS[-2:] == (
+        pseudonymizer._find_person_natasha,
+        pseudonymizer._find_address_natasha,
+    )
+
+
+@pytest.mark.slow
+def test_natasha_finds_foreign_name(pseudo, natasha_layer):
+    """Иностранное имя без отчества регулярка пропускает, Natasha — нет."""
+    text = f"{FOREIGN_NAME} прибыл с визитом."
+    safe, mapping = pseudo.anonymize(text)
+
+    assert "<<PERSON_1>>" in safe
+    assert mapping["<<PERSON_1>>"] == FOREIGN_NAME
+    assert "Мураками" not in safe
+    assert pseudo.restore(safe, mapping) == text
+
+
+@pytest.mark.slow
+def test_natasha_finds_last_name_without_context(pseudo, natasha_layer):
+    """Фамилия без слов-маркеров рядом («водитель», «ФИО») — тоже ПДн."""
+    text = "В анкете указано Сергеев Сергей"
+    safe, mapping = pseudo.anonymize(text)
+
+    assert list(mapping.values()) == ["Сергеев Сергей"]
+    assert "Сергеев" not in safe
+    assert pseudo.restore(safe, mapping) == text
+
+
+@pytest.mark.slow
+def test_natasha_oblique_case_is_a_person_not_an_address(pseudo, natasha_layer):
+    """
+    Косвенный падеж без слов-маркеров: регулярка молчит, Natasha находит.
+
+    Регресс-проверка: AddrExtractor считает «с Остапом Бендером» селом
+    («с» — сокращение от «село»), поэтому без якоря-улицы имя уходило бы
+    в адрес вместе с предлогом.
+    """
+    text = "Договор заключён с Остапом Бендером."
+    safe, mapping = pseudo.anonymize(text)
+
+    assert list(mapping.values()) == ["Остапом Бендером"]
+    assert "<<PERSON_1>>" in safe
+    assert "Бендером" not in safe
+    assert pseudo.restore(safe, mapping) == text
+
+
+@pytest.mark.slow
+def test_natasha_finds_whole_address(pseudo, natasha_layer):
+    """Один токен на ВЕСЬ адрес, а не по токену на улицу и дом."""
+    safe, mapping = pseudo.anonymize(WHOLE_ADDRESS)
+
+    assert list(mapping.values()) == [WHOLE_ADDRESS]
+    assert "<<ADDRESS_1>>" in safe
+    assert "Тверская" not in safe and "Москва" not in safe
+    assert pseudo.restore(safe, mapping) == WHOLE_ADDRESS
+
+
+def test_regular_wins_over_natasha(natasha_layer):
+    """При пересечении выигрывает регулярка: тип PERSON, не PERSON_NATASHA."""
+    candidates = pseudonymizer._detect(PERSON)
+    assert [item.kind for item in candidates] == ["PERSON"]
+
+    safe, mapping = Pseudonymizer().anonymize(PERSON)
+    assert list(mapping.values()) == [PERSON]
+    assert not [token for token in mapping if "NATASHA" in token]
+
+
+@pytest.mark.slow
+def test_restore_roundtrip_with_natasha(pseudo, natasha_layer):
+    """Обратимость сохраняется и на сущностях Natasha."""
+    text = (
+        f"{FOREIGN_NAME} прибыл в {WHOLE_ADDRESS}, кв. 17.\n"
+        "Остап Бендер подписал договор.\n"
+        f"Водитель: {PERSON}, тел {PHONE}, паспорт {PASSPORT}\n"
+        "Адрес: 183052, г. Мурманск, ул. Тестовая, д. 53, кв. 12\n"
+    )
+    assert pseudo.restore(*pseudo.anonymize(text)) == text
+
+    safe, mapping = pseudo.anonymize(text)
+    for secret in (FOREIGN_NAME, "Остап Бендер", PERSON, PHONE, PASSPORT,
+                   "Тверская", "Тестовая", "926830", "123-45-67"):
+        assert secret not in safe
+
+
+@pytest.mark.slow
+def test_logs_contain_no_pii_with_natasha(pseudo, natasha_layer, caplog):
+    """В логах Natasha-прогона — только типы и количества, без значений."""
+    text = f"{FOREIGN_NAME} прибыл в {WHOLE_ADDRESS}.\nВодитель: {PERSON}, тел {PHONE}\n"
+    with caplog.at_level(logging.DEBUG, logger="core.pseudonymizer"):
+        safe, mapping = pseudo.anonymize(text)
+        pseudo.restore(safe, mapping)
+
+    records = [r for r in caplog.records if r.name == "core.pseudonymizer"]
+    assert records, "модуль не записал в лог ни одной строки"
+    for record in records:
+        rendered = f"{record.getMessage()} {record.args}"
+        for secret in (FOREIGN_NAME, WHOLE_ADDRESS, PERSON, PHONE,
+                       "Мураками", "Тверская", "123-45-67"):
+            assert secret not in rendered
+    assert "PERSON=" in caplog.text
+    assert "ADDRESS=" in caplog.text

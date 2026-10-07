@@ -17,12 +17,19 @@
   * **Никаких ПДн в логах.** В DEBUG пишутся только типы найденных сущностей
     и их количество (``PERSON=2, PHONE=1``), в WARNING — только имя токена,
     который не удалось восстановить. Значения не логируются никогда.
-  * **Без внешних зависимостей.** Только стандартная библиотека (``re``,
-    ``logging``) — детекторы построены на регулярных выражениях,
-    контрольных суммах (ИНН, СНИЛС) и контекстных проверках.
+  * **Без обязательных внешних зависимостей.** Ядро детекторов построено
+    на стандартной библиотеке (``re``, ``logging``, ``threading``):
+    регулярные выражения, контрольные суммы (ИНН, СНИЛС) и контекстные
+    проверки. Natasha подключается опционально (см. ниже).
   * **Обратимость.** ``restore(anonymize(text)[0], anonymize(text)[1]) == text``
     для любого текста: совпадения не пересекаются, а токен хранит точную
     исходную подстроку.
+
+Слой Natasha включается опционально. Если библиотека не установлена
+или модель не загружена — маскирование работает на регулярках.
+Natasha ловит иностранные имена, фамилии без контекста и цельные
+адреса, которые регулярка разбивает на куски. Приоритет при
+пересечении: регулярное совпадение выигрывает у Natasha.
 
 Устойчивость к «испорченным» токенам: модель может вернуть ``<<PERSON 1>>``,
 ``<<person-1>>`` или ``PERSON_1`` вместо ``<<PERSON_1>>`` — при
@@ -39,7 +46,8 @@ WARNING с именем токена — без оригинала.
 
 import logging
 import re
-from typing import Any, Dict, List, Tuple
+import threading
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("core.pseudonymizer")
 
@@ -61,6 +69,9 @@ TOKEN_TYPES = (
 #: Приоритет при пересечении совпадений: больше — важнее.
 #: Специализированные форматы (СНИЛС, VIN, паспорт) перебивают общие
 #: (телефон, ФИО, адрес), чтобы «хвост» одного не съел другой.
+#: Natasha-типы стоят НИЖЕ своих регулярных собратьев: если оба нашли одно
+#: и то же место, выигрывает регулярка (она точнее по формату). Natasha
+#: нужна там, где регулярка молчит вовсе.
 _PRIORITY = {
     "EMAIL": 100,
     "SNILS": 90,
@@ -71,8 +82,93 @@ _PRIORITY = {
     "INN": 65,
     "PHONE": 55,
     "PERSON": 45,
+    "PERSON_NATASHA": 44,
     "ADDRESS": 30,
+    "ADDRESS_NATASHA": 29,
 }
+
+# ─────────────────────────────────────────────────────────────
+# Опциональная зависимость: Natasha
+# ─────────────────────────────────────────────────────────────
+
+#: None = не проверяли, True/False = проверено.
+_NATASHA_AVAILABLE: Optional[bool] = None
+
+#: Модульный кэш моделей Natasha: создаются один раз, живут до конца
+#: процесса. Повторная инициализация — это секунды и десятки мегабайт.
+_NATASHA: Dict[str, Any] = {}
+
+#: Инициализация идёт из нескольких потоков (распознавание в QThreadPool),
+#: поэтому модели строятся под замком: иначе два потока загрузят их дважды.
+_NATASHA_LOCK = threading.Lock()
+
+
+def _natasha_ready() -> bool:
+    """Проверяет наличие Natasha лениво, один раз за процесс."""
+    global _NATASHA_AVAILABLE
+    if _NATASHA_AVAILABLE is None:
+        try:
+            from natasha import (  # noqa: F401
+                Doc, Segmenter, MorphVocab,
+                NewsEmbedding, NewsNERTagger,
+                NamesExtractor, AddrExtractor,
+            )
+            _NATASHA_AVAILABLE = True
+        except Exception as exc:
+            # Ловим не только ImportError: сломанная установка (например,
+            # отсутствующий pkg_resources при setuptools>=81) не должна
+            # ронять распознавание — слой просто выключается.
+            _NATASHA_AVAILABLE = False
+            logger.info(
+                "Natasha не установлена (%s) — маскирование работает "
+                "на регулярках (pip install natasha)",
+                type(exc).__name__,
+            )
+    return _NATASHA_AVAILABLE
+
+
+def _natasha_pipeline() -> Optional[Dict[str, Any]]:
+    """Ленивая инициализация Natasha (один раз на процесс)."""
+    if "ready" in _NATASHA:
+        return _NATASHA if _NATASHA["ready"] else None
+
+    if not _natasha_ready():
+        _NATASHA["ready"] = False
+        return None
+
+    with _NATASHA_LOCK:
+        # Пока ждали замок, модели мог построить другой поток.
+        if "ready" in _NATASHA:
+            return _NATASHA if _NATASHA["ready"] else None
+
+        try:
+            from natasha import (
+                Segmenter, MorphVocab,
+                NewsEmbedding, NewsNERTagger,
+                NamesExtractor, AddrExtractor,
+            )
+            morph_vocab = MorphVocab()
+            embedding = NewsEmbedding()
+            _NATASHA.update({
+                "ready": True,
+                "segmenter": Segmenter(),
+                "morph_vocab": morph_vocab,
+                "ner_tagger": NewsNERTagger(embedding),
+                # Оба извлекателя требуют морфологию: в natasha 1.6
+                # MorphVocab — обязательный позиционный аргумент.
+                "names_extractor": NamesExtractor(morph_vocab),
+                "addr_extractor": AddrExtractor(morph_vocab),
+            })
+            logger.info("Natasha инициализирована (NER + AddressExtractor)")
+        except Exception as exc:
+            _NATASHA["ready"] = False
+            logger.warning(
+                "Natasha недоступна (%s): маскирование на регулярках",
+                type(exc).__name__,
+            )
+            return None
+
+    return _NATASHA
 
 # ─────────────────────────────────────────────────────────────
 # Токены
@@ -432,6 +528,172 @@ def _find_address(text: str, out: List[_Candidate]) -> None:
             _add(out, match, "ADDRESS")
 
 
+#: Что допустимо между двумя частями одного адреса. Между «г. Москва» и
+#: «ул. Тверская» стоит «, » — это тот же адрес. Если между частями
+#: оказалось слово, склеивать нельзя: это уже другой фрагмент текста.
+_ADDR_GAP_RE = re.compile(r"^[\s,;.\-–—/]{0,4}$")
+
+#: Части, которые сами по себе делают группу адресом: улица и её аналоги.
+#: Города, области, сёла и индексы — это ГЕОГРАФИЯ: модуль их не маскирует
+#: (они не идентифицируют человека и нужны модели для маршрута и поля city),
+#: но в составе адреса с улицей они закрываются вместе с ним.
+#: Правило заодно отсекает ложные срабатывания AddrExtractor: «с Остапом
+#: Бендером» он считает селом (маркер «с» — сокращение от «село»), а «180300»
+#: в «Стоимость 180300 руб.» — индексом. Улицы в таких фрагментах нет.
+_ADDR_ANCHOR_TYPES = frozenset({
+    "улица", "проспект", "шоссе", "проезд", "переулок",
+    "набережная", "площадь", "бульвар",
+})
+
+
+def _merge_addr_parts(text: str, matches) -> List[Tuple[int, int]]:
+    """
+    Склеивает части адреса Natasha в цельные адреса.
+
+    ``AddrExtractor`` отдаёт адрес ПО ЧАСТЯМ (``г. Москва``, ``ул. Тверская``,
+    ``д. 5``), а нужен один span на весь адрес: иначе на месте адреса
+    получилось бы три токена вместо одного. Части склеиваются, только если
+    между ними нет ничего, кроме разделителей, — иначе это разные адреса.
+
+    Отбрасываются две вещи:
+
+      * части без типа (``type is None``) — так Natasha помечает любое
+        слово с заглавной буквы, и «Иванов Иван Иванович, г. Москва»
+        превратилось бы в один «адрес» вместе с ФИО;
+      * группы без «якоря» (``_ADDR_ANCHOR_TYPES``) — без улицы это
+        география или прямое ложное срабатывание.
+    """
+    merged: List[List[Any]] = []
+    current: Optional[List[Any]] = None
+    for match in matches:
+        part_type = getattr(getattr(match, "fact", None), "type", None)
+        if part_type is None:
+            continue
+        start, end = match.start, match.stop
+        anchor = part_type in _ADDR_ANCHOR_TYPES
+        if current is None:
+            current = [start, end, anchor]
+            continue
+        if _ADDR_GAP_RE.match(text[current[1]:start]):
+            current[1] = end
+            current[2] = current[2] or anchor
+            continue
+        merged.append(current)
+        current = [start, end, anchor]
+    if current is not None:
+        merged.append(current)
+    return [(item[0], item[1]) for item in merged if item[2]]
+
+
+def _widen_addr_over_regular(start: int, end: int,
+                             regular: List[_Candidate]) -> Tuple[int, int]:
+    """
+    Расширяет span Natasha до регулярных находок ВНУТРИ него.
+
+    «Бештаугорское шоссе 17»: Natasha закрывает только название улицы,
+    а номер дома ловит регулярка («шоссе 17»). Без расширения номер ушёл бы
+    в модель открытым текстом. Совпадение с тем же началом, что и у Natasha,
+    не трогаем: там по приоритету выигрывает регулярка.
+    """
+    changed = True
+    while changed:
+        changed = False
+        for item in regular:
+            if start < item.start < end and item.end > end:
+                end = item.end
+                changed = True
+    return start, end
+
+
+def _find_person_natasha(text: str, out: List[_Candidate]) -> None:
+    """
+    ФИО через Natasha NER.
+
+    Ловит то, что регулярка пропускает: иностранные имена без отчества,
+    фамилии без контекстных слов. Приоритет ниже регулярного PERSON:
+    если оба нашли одно и то же — выиграет регулярка (она точнее
+    по формату).
+
+    Из разметки берутся только PER: LOC («Россия», «Москва») и ORG
+    («ООО «Ромашка»») не маскируются.
+    """
+    nlp = _natasha_pipeline()
+    if nlp is None:
+        return
+
+    try:
+        from natasha import Doc, PER
+    except ImportError:
+        return
+
+    try:
+        doc = Doc(text)
+        doc.segment(nlp["segmenter"])
+        doc.tag_ner(nlp["ner_tagger"])
+    except Exception as exc:
+        logger.debug("Natasha NER не сработал (%s)", type(exc).__name__)
+        return
+
+    for span in doc.spans:
+        if span.type != PER:
+            continue
+        value = (span.text or "").strip()
+        if not value:
+            continue
+        # NER иногда принимает за фамилию слово-метку («Водитель»,
+        # «Директор») или название организации. Отсекаем их тем же
+        # списком стоп-слов, что и регулярный детектор ФИО; сам список
+        # не меняется — регулярный слой работает как раньше.
+        words = re.split(r"[\s\-]+", value)
+        if any(word.casefold() in _PERSON_STOPWORDS for word in words if word):
+            continue
+        out.append(_Candidate(span.start, span.stop, "PERSON_NATASHA", value))
+
+
+def _find_address_natasha(text: str, out: List[_Candidate]) -> None:
+    """
+    Адрес через Natasha AddressExtractor.
+
+    Даёт ЦЕЛЬНЫЙ span («г. Москва, ул. Тверская, д. 5»), а не отдельные
+    «ул. Тверская» и «д. 5». Это то, что нужно: один токен <<ADDRESS_N>>
+    на весь адрес.
+    """
+    nlp = _natasha_pipeline()
+    if nlp is None:
+        return
+
+    extractor = nlp.get("addr_extractor")
+    if extractor is None:
+        return
+
+    try:
+        matches = list(extractor(text))
+    except Exception as exc:
+        logger.debug(
+            "Natasha AddressExtractor не сработал (%s)",
+            type(exc).__name__,
+        )
+        return
+
+    # Регулярные находки нужны, чтобы Natasha не отменила ни одну из них:
+    # номер дома, который регулярка поймала, обязан остаться закрытым.
+    regular: List[_Candidate] = []
+    _find_address(text, regular)
+
+    for start, end in _merge_addr_parts(text, matches):
+        start, end = _widen_addr_over_regular(start, end, regular)
+        raw = text[start:end]
+        value = raw.strip()
+        if not value:
+            continue
+        # Как и в _add: окружающие пробелы в токен не попадают.
+        offset = len(raw) - len(raw.lstrip())
+        out.append(_Candidate(
+            start + offset, start + offset + len(value),
+            "ADDRESS_NATASHA", value,
+        ))
+
+
 _DETECTORS = (
     _find_email,
     _find_snils,
@@ -442,6 +704,8 @@ _DETECTORS = (
     _find_phones,
     _find_person,
     _find_address,
+    _find_person_natasha,
+    _find_address_natasha,
 )
 
 
@@ -505,11 +769,15 @@ class Pseudonymizer:
         parts: List[str] = []
         cursor = 0
         for item in candidates:
-            key = (item.kind, item.value)
+            # Natasha-типы нужны только для приоритета: в маппинг и в токены
+            # они попадают как PERSON и ADDRESS (иначе в describe() и в логах
+            # появились бы отдельные категории, которых нет в TOKEN_TYPES).
+            kind = item.kind.replace("_NATASHA", "")
+            key = (kind, item.value)
             token = tokens_by_value.get(key)
             if token is None:
-                counters[item.kind] = counters.get(item.kind, 0) + 1
-                token = f"<<{item.kind}_{counters[item.kind]}>>"
+                counters[kind] = counters.get(kind, 0) + 1
+                token = f"<<{kind}_{counters[kind]}>>"
                 tokens_by_value[key] = token
                 mapping[token] = item.value
             parts.append(original[cursor:item.start])
