@@ -1775,14 +1775,21 @@ SALON_POINT = {
 
 
 def _payload_with_named_unloading(route_payload) -> dict:
-    """Маршрут, у которого первая выгрузка пришла со справочником салонов."""
+    """
+    Маршрут, у которого первая выгрузка пришла со справочником салонов.
+
+    Машины делятся между двумя выгрузками: точка без машин в документе не
+    выводится вовсе — ни заголовка, ни таблицы, — поэтому «Выгрузку 2» надо
+    кем-то занять, иначе её заголовка в документе просто не будет.
+    """
     payload = dict(route_payload)
     payload["unloadings"] = [
         dict(SALON_POINT),
         dict(route_payload["unloadings"][1]),
     ]
     payload["vehicles"] = [
-        dict(vehicle, unloading_index=1) for vehicle in route_payload["vehicles"]
+        dict(vehicle, unloading_index=1 if index < 3 else 2)
+        for index, vehicle in enumerate(route_payload["vehicles"])
     ]
     return payload
 
@@ -1826,14 +1833,6 @@ def test_point_title_collapses_name_linebreaks(generator):
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "БЛОКЕР: core/contract_data.py::_as_point_list строит точку только "
-        "из address/date/time_window — ключ name теряется ещё до генератора "
-        "(правка core/contract_data.py на шаге не разрешена)"
-    ),
-    strict=True,
-)
 def test_unloading_name_from_data(marker_generator, route_payload, work_file):
     """Готовый документ печатает наименование салона перед адресом."""
     payload = _payload_with_named_unloading(route_payload)
@@ -1871,14 +1870,6 @@ def test_empty_name_prints_no_placeholder_text(marker_generator, route_payload,
     assert "Выгрузка 1: —" not in text
 
 
-@pytest.mark.xfail(
-    reason=(
-        "БЛОКЕР: core/contract_data.py::_as_point_list строит точку только "
-        "из address/date/time_window — ключ name теряется ещё до генератора "
-        "(правка core/contract_data.py на шаге не разрешена)"
-    ),
-    strict=True,
-)
 def test_point_title_with_name_reaches_flat_block(generator, route_payload):
     """Плоский legacy-блок ({{unloading_block}}) тоже печатает наименование."""
     payload = _payload_with_named_unloading(route_payload)
@@ -1888,14 +1879,6 @@ def test_point_title_with_name_reaches_flat_block(generator, route_payload):
     assert "Выгрузка 1: ООО «Тестовый Салон» г. Москва" in block
 
 
-@pytest.mark.xfail(
-    reason=(
-        "БЛОКЕР: core/contract_data.py::_as_point_list строит точку только "
-        "из address/date/time_window — ключ name теряется ещё до генератора "
-        "(правка core/contract_data.py на шаге не разрешена)"
-    ),
-    strict=True,
-)
 def test_unloading_name_survives_contract_data(route_payload):
     """Наименование салона обязано дойти до генератора через ContractData."""
     payload = _payload_with_named_unloading(route_payload)

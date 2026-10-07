@@ -827,6 +827,7 @@ def test_all_tabs_feed_collect_formika_data(qt_app):
     assert data.vehicles[0]["vin"] == VIN_OK
 
     assert data.loadings == [{
+        "name": "",
         "address": "183052, г. Мурманск, пр. Кольский, д. 53",
         "date": "2026-09-24",
         "time_window": "09:00-18:00",
@@ -834,7 +835,9 @@ def test_all_tabs_feed_collect_formika_data(qt_app):
     # Выгрузка получает плановую дату выгрузки вкладки «Маршрут»: в бланке
     # Формики она печатается, хотя и не вводится вручную. Вкладка показывает
     # её по умолчанию как «сегодня + 3 дня»; окна времени у выгрузки нет.
+    # Ключ name у точки есть всегда (ШАГ FIX-2.5) — пустой строкой.
     assert data.unloadings == [{
+        "name": "",
         "address": "г. Пятигорск, Бештаугорское шоссе 17",
         "date": QDate.currentDate().addDays(3).toString("yyyy-MM-dd"),
         "time_window": "",

@@ -117,6 +117,7 @@ class LogistiksRusValidator(BaseValidator):
             self._shipper_points(cd),
             "Укажите хотя бы одного грузоотправителя с адресом",
             "грузоотправителя",
+            "Грузоотправители",
         )
 
     def _check_consignees(self, cd: ContractData, report: ValidationReport) -> None:
@@ -126,6 +127,7 @@ class LogistiksRusValidator(BaseValidator):
             self._consignee_points(cd),
             "Укажите хотя бы одного грузополучателя с адресом",
             "грузополучателя",
+            "Грузополучатели",
         )
 
     @classmethod
@@ -256,26 +258,52 @@ class LogistiksRusValidator(BaseValidator):
         points: List[Dict[str, Any]],
         required_message: str,
         title: str,
+        section: str,
     ) -> None:
         """
         Общая проверка списка точек: адрес минимум у одной, имя и адрес —
         либо вместе, либо ни одного (половина блока в бланке выглядит
         недозаполненной, но печатать её можно).
 
-        Замечание о пустом наименовании выдаётся только тогда, когда
-        наименование вообще присутствует в данных (см. _point_name_is_known):
-        у распознанных точек ключа name может не быть вовсе.
+        Замечание о пустом наименовании выдаётся, если у точки есть поле
+        наименования (см. _point_name_is_known): оно подтягивается из
+        справочника салонов, и пустое значение означает «не заполнено».
+
+        Если наименования нет НИ У ОДНОЙ точки раздела, вместо перечисления
+        по каждой точке печатается ОДНО общее замечание: пользователь,
+        который справочником не пользуется, не получает строку на каждую
+        точку. Как только наименование есть хотя бы у одной — замечания идут
+        по каждой незаполненной точке: там это сигнал, что салон не подтянулся.
         """
         if not any(cls._point_address(point) for point in points):
             report.errors.append(required_message)
 
+        unnamed: List[int] = []
         for number, point in enumerate(points, 1):
             name = cls._point_name(point)
             address = cls._point_address(point)
             if name and not address:
                 report.warnings.append(f"{number}-й {title}: не указан адрес")
             elif address and not name and cls._point_name_is_known(point):
-                report.warnings.append(f"{number}-й {title}: не указано наименование")
+                unnamed.append(number)
+
+        if not unnamed:
+            return
+
+        if len(unnamed) == len(points):
+            report.warnings.append(
+                f"{cls._case_title(section)}: не указаны наименования — "
+                f"выберите точки из справочника салонов"
+            )
+            return
+
+        for number in unnamed:
+            report.warnings.append(f"{number}-й {title}: не указано наименование")
+
+    @staticmethod
+    def _case_title(title: str) -> str:
+        """Название раздела с заглавной буквы: «грузоотправителя» → «Грузоотправителя»."""
+        return title[:1].upper() + title[1:] if title else title
 
     @classmethod
     def _points_with_names(cls, *sources: Any) -> List[Dict[str, Any]]:
@@ -286,14 +314,16 @@ class LogistiksRusValidator(BaseValidator):
         затем вложенные в contract списки), берётся первый непустой — как в
         core.contract_data.coerce.
 
-        ContractData хранит точки как {address, date, time_window} — поле name
-        при приведении отбрасывается (core.contract_data._as_point_list).
-        Поэтому наименования доливаются из исходных списков, как это делает
-        генератор (LogistiksRusGenerator._points_with_names).
+        Наименования доливаются из исходных списков, если у приведённой точки
+        своего имени нет: так делает и генератор
+        (LogistiksRusGenerator._points_with_names). После ШАГА FIX-2.5
+        ContractData имя точки сохраняет (core.contract_data._as_point_list),
+        но запасной путь остаётся: он работает и на данных, где имя лежит
+        только во вложенном списке contract.
 
-        Если наименований в данных нет вовсе (ключ name отсутствует),
-        проверка наименования не навязывается: у точки без ключа name
-        значение считается неизвестным, а не пустым.
+        Если наименований в данных нет вовсе (ключа name нет ни в одной
+        записи), проверка наименования не навязывается: значение считается
+        неизвестным, а не пустым.
         """
         for source in sources:
             points = cls._point_list(source)
@@ -366,11 +396,16 @@ class LogistiksRusValidator(BaseValidator):
     @classmethod
     def _point_name_is_known(cls, point: Mapping[str, Any]) -> bool:
         """
-        Задано ли наименование точки в данных.
+        Есть ли у точки поле наименования — то есть можно ли о нём спросить.
 
-        Ключ name есть (пусть и пустой) — наименование задано и может быть
-        незаполненным; ключа нет — наименование просто не пришло в этих
-        данных, и замечание о нём было бы навязанным.
+        Ключ name (или его синонимы shipper_name / consignee_name) есть —
+        наименование в этих данных предусмотрено, и пустое значение означает
+        «не заполнено»: о нём и сообщается. Ключа нет вовсе — наименование
+        в этих данных не предусмотрено, и замечание было бы навязанным.
+
+        После ШАГА FIX-2.5 приведённые точки ContractData несут ключ name
+        всегда (пустой строкой), поэтому наименование проверяется и у
+        распознанных точек, где справочник салонов не сработал.
         """
         return (
             "name" in point

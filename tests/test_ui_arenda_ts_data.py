@@ -597,8 +597,10 @@ def test_points_are_stored_twice(full_tabs):
     Точки лежат и в contract (полный набор), и в ContractData (приведённые).
 
     ContractData._as_point_list оставляет у точки только
-    {address, date, time_window}: если бы точки клались лишь наверх, генератор
-    не увидел бы ни названий, ни времени подачи ТС.
+    {name, address, date, time_window}: если бы точки клались лишь наверх,
+    генератор не увидел бы ни названий, ни времени подачи ТС. Ключ name
+    добавлен ШАГОМ FIX-2.5 и у аренды несёт название груза из заявки —
+    наименование салона к этому типу не относится, но поле одно и то же.
     """
     cd = collect_arenda_ts_data(full_tabs)
 
@@ -607,7 +609,7 @@ def test_points_are_stored_twice(full_tabs):
     assert set(cd.contract["loadings"][0]) == {
         "name", "address", "date", "time_from", "time_to", "time_window",
     }
-    assert set(cd.loadings[0]) == {"address", "date", "time_window"}
+    assert set(cd.loadings[0]) == {"name", "address", "date", "time_window"}
 
 
 def test_loading_points_keep_time_from_and_time_to(full_tabs):
@@ -620,9 +622,11 @@ def test_loading_points_keep_time_from_and_time_to(full_tabs):
     assert point["time_from"] == LOADING_TIME_FROM
     assert point["time_to"] == LOADING_TIME_TO
 
-    # В приведённой точке время подачи ТС остаётся только окном одной строкой.
+    # В приведённой точке время подачи ТС остаётся только окном одной строкой,
+    # а имя точки сохраняется (ШАГ FIX-2.5): у аренды это название груза из
+    # заявки. Ключ time_from в приведённый вид не переносится.
     assert cd.loadings[0]["time_window"] == f"{LOADING_TIME_FROM}-{LOADING_TIME_TO}"
-    assert "name" not in cd.loadings[0]
+    assert cd.loadings[0]["name"] == LOADING_NAME_1
     assert "time_from" not in cd.loadings[0]
 
 

@@ -64,7 +64,21 @@ def _as_vehicle_list(value: Any) -> List[Dict[str, Any]]:
 def _as_point_list(value: Any) -> List[Dict[str, str]]:
     """
     Приводит список точек маршрута к виду
-    [{"address": str, "date": str, "time_window": str}].
+    [{"name": str, "address": str, "date": str, "time_window": str}].
+
+    `name` — наименование салона точки (ШАГ FIX-2.5): его подтягивает из
+    справочника вкладка «Условия договора», а печатает генератор перевозки
+    в заголовке блока («Выгрузка 1: <наименование> <адрес>»). Поле
+    НЕОБЯЗАТЕЛЬНОЕ: точка без справочника приходит с пустой строкой, и
+    генератор печатает только адрес, как раньше.
+
+    Ключ `name` есть у точки ВСЕГДА — пустой строкой, если имени нет. На это
+    опирается валидатор Логистикса (`_point_name_is_known`): пустое
+    наименование он показывает замечанием, а отсутствие самого поля означало
+    бы, что наименование в этих данных не предусмотрено.
+
+    `date` и `time_window` по-прежнему строки: генератор и валидаторы
+    разбирают их сами.
     """
     result: List[Dict[str, str]] = []
     if isinstance(value, (list, tuple)):
@@ -72,6 +86,7 @@ def _as_point_list(value: Any) -> List[Dict[str, str]]:
             if not isinstance(item, Mapping):
                 continue
             result.append({
+                "name": str(item.get("name", "") or ""),
                 "address": str(item.get("address", "") or ""),
                 "date": str(item.get("date", "") or ""),
                 "time_window": str(item.get("time_window", "") or ""),

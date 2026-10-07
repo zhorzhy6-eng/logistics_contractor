@@ -270,7 +270,14 @@ def test_manual_customer_is_saved_to_db(window, isolated_db):
 
 
 def test_saving_contract_keeps_route_points(window, isolated_db, monkeypatch):
-    """Маршрут из формы должен быть доступен по ID сохранённого договора."""
+    """
+    Маршрут из формы должен быть доступен по ID сохранённого договора.
+
+    В хранилище лежат три поля точки — address / date / time_window: колонки
+    name у таблицы contract_points нет (ШАГ FIX-2.5 наименование салона в базу
+    не добавлял). Приведённая же точка несёт ещё и name — пустой строкой,
+    поэтому сравниваются только сохраняемые поля.
+    """
     from core.contract_data import ContractData
 
     data = ContractData(
@@ -294,7 +301,16 @@ def test_saving_contract_keeps_route_points(window, isolated_db, monkeypatch):
     finally:
         conn.close()
     assert row is not None
+
+    def _persisted(points):
+        """Точка в том виде, в каком её хранит contract_points."""
+        return [
+            {key: point[key] for key in ("address", "date", "time_window")}
+            for point in points
+        ]
+
     points = isolated_db.load_contract_points(row[0])
-    assert points["loadings"] == data.loadings
-    assert points["unloadings"] == data.unloadings
+    assert points["loadings"] == _persisted(data.loadings)
+    assert points["unloadings"] == _persisted(data.unloadings)
+    assert points["loadings"][0]["address"] == "Склад А"
     assert vehicles == [("XTEST000000000001",)]

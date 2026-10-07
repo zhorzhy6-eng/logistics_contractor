@@ -389,29 +389,32 @@ def test_points_in_contract_keep_name_date_and_time_window(route_tab,
     }
 
 
-def test_top_level_points_stay_without_name(route_tab, customer_tab):
+def test_top_level_points_keep_shipper_name(route_tab, customer_tab):
     """
-    Верхнеуровневые точки — в приведённом виде, без name.
+    Верхнеуровневые точки несут имя грузоотправителя.
 
-    ContractData хранит точки как {address, date, time_window}: название
-    в них теряется (core.contract_data._as_point_list) — поэтому названия
-    и кладутся отдельно, в contract["loadings"] / ["unloadings"].
+    Раньше оно терялось: ContractData хранил точки как
+    {address, date, time_window} (core.contract_data._as_point_list) — поэтому
+    названия и кладутся отдельно, в contract["loadings"] / ["unloadings"].
+    ШАГ FIX-2.5 научил _as_point_list сохранять name, и теперь имя точки
+    доживает и наверху, а не только во вложенном списке.
     """
     cd = collect_logistiks_rus_data({
         "customer": customer_tab, "route": route_tab,
     })
 
     assert cd.loadings == [
-        {"address": "г. Москва, ул. Складская, д. 1",
+        {"name": SHIPPER_NAME, "address": "г. Москва, ул. Складская, д. 1",
          "date": "2026-09-26", "time_window": "08:00-20:00"},
-        {"address": "г. Москва, ул. Южная, д. 2",
+        {"name": SHIPPER_NAME, "address": "г. Москва, ул. Южная, д. 2",
          "date": "2026-09-26", "time_window": "08:00-20:00"},
     ]
     assert cd.unloadings == [
-        {"address": "г. Казань, ул. Приёмная, д. 3",
+        {"name": "ООО «Приёмка»", "address": "г. Казань, ул. Приёмная, д. 3",
          "date": "2026-10-01", "time_window": "09:00-18:00"},
     ]
-    assert "name" not in cd.loadings[0]
+    # Верхнеуровневая точка и точка во вложенном списке — одни и те же данные.
+    assert cd.loadings[0]["name"] == cd.contract["loadings"][0]["name"] == SHIPPER_NAME
 
 
 def test_address_without_shipper_name_is_kept():

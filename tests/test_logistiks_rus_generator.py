@@ -650,16 +650,15 @@ def test_empty_blocks_removed_in_generated_document(generator, work_dir):
 
 def test_points_from_top_level_still_render_addresses(generator, work_dir):
     """
-    Точки верхнего уровня: адреса доходят до бланка.
+    Точки верхнего уровня: и адреса, и имя грузоотправителя доходят до бланка.
 
-    Имя грузоотправителя при этом теряется — ContractData хранит точки как
+    Раньше имя на этом пути ТЕРЯЛОСЬ: ContractData хранил точки как
     {address, date, time_window} (core.contract_data._as_point_list), и по
-    пути generate() исходный словарь с name до генератора не доживает.
-    Чтобы имя доживало и здесь, нужно расширить _as_point_list; на этом шаге
-    core/contract_data.py не трогаем и фиксируем фактическое поведение:
-    строка «Грузоотправитель:» пустая, адреса — на месте. Так выглядит
-    только чужой (верхнеуровневый) формат данных; вкладка и распознавание
-    кладут точки в contract["loadings"], где имя сохраняется.
+    пути generate() исходный словарь с name до генератора не доживал —
+    строка «Грузоотправитель:» выходила пустой. ШАГ FIX-2.5 научил
+    _as_point_list сохранять name, поэтому теперь заполнены и адреса, и имя.
+    Вкладка и распознавание по-прежнему кладут точки в contract["loadings"];
+    этот тест держит второй, «чужой» формат данных.
     """
     output_dir = work_dir / "lr_top_level"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -672,7 +671,7 @@ def test_points_from_top_level_still_render_addresses(generator, work_dir):
     texts = _body_texts(doc)
 
     assert _count_lines(doc, "Грузоотправитель:") == 1
-    assert "Грузоотправитель:" in texts
+    assert "Грузоотправитель: ООО «Грузоотправитель 1»" in texts
     assert "Адрес погрузки №1: Адрес shipper 1" in texts
     assert "Адрес погрузки №2: Адрес shipper 2" in texts
 

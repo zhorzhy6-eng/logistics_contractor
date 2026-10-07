@@ -241,13 +241,15 @@ def test_route_is_collected():
     assert cd.contract["loading_plan_time_to"] == "18:00"
 
     assert cd.loadings == [{
+        "name": "",
         "address": "183052, г.Мурманск, пр.Кольский, д.53",
         "date": "2026-09-24",
         "time_window": "09:00-18:00",
     }]
-    # ContractData приводит точки к одному виду (address/date/time_window),
-    # поэтому у выгрузки, кроме адреса, стоят пустые дата и окно времени.
+    # ContractData приводит точки к одному виду (name/address/date/time_window),
+    # поэтому у выгрузки, кроме адреса, стоят пустые имя, дата и окно времени.
     assert cd.unloadings == [{
+        "name": "",
         "address": "г. Пятигорск, Бештаугорское шоссе 17",
         "date": "",
         "time_window": "",

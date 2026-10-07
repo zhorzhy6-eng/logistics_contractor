@@ -337,11 +337,30 @@ def test_shipper_with_name_only_is_warning_when_another_has_address(validator, p
 
 
 def test_shipper_with_address_only_is_warning(validator, payload):
+    """
+    Единственный грузоотправитель с адресом, но без имени — замечание есть.
+
+    Формулировка — общая на раздел (ШАГ FIX-2.5): наименования нет ни у одной
+    точки, значит справочник салонов, скорее всего, просто не использовали.
+    """
     payload["contract"]["loadings"] = [_point("shipper", 1, name="")]
     report = validator.check(payload)
 
     assert report.errors == [], _errors(report)
-    assert any("не указано наименование" in w for w in report.warnings)
+    assert "Грузоотправители: не указаны наименования — " \
+           "выберите точки из справочника салонов" in report.warnings
+
+
+def test_shipper_name_missing_among_named_is_warning(validator, payload):
+    """Имя есть у части точек — замечание адресное, по номеру точки."""
+    payload["contract"]["loadings"] = [
+        _point("shipper", 1),
+        _point("shipper", 2, name=""),
+    ]
+    report = validator.check(payload)
+
+    assert report.errors == [], _errors(report)
+    assert "2-й грузоотправителя: не указано наименование" in report.warnings
 
 
 def test_empty_shipper_rows_are_ignored(validator, payload):
@@ -426,8 +445,16 @@ def test_points_can_come_from_recognized_shippers(validator, payload):
 
 def test_points_without_names_are_not_scolded(validator, payload):
     """
-    Точки без ключа name (распознавание их не нашло) — адрес есть,
-    наименование неизвестно: замечания о нём нет.
+    Точки без наименования — адрес есть, наименование неизвестно.
+
+    С ШАГА FIX-2.5 приведённая точка несёт ключ name всегда (пустой строкой,
+    см. core.contract_data._as_point_list), поэтому валидатор о незаполненном
+    наименовании СООБЩАЕТ: пользователь увидит, что салон из справочника не
+    подтянулся, и сможет выбрать его вручную.
+
+    Если без наименования ВСЕ точки раздела, замечание печатается одно на
+    раздел, а не по строке на точку (см. _check_points): справочником
+    пользуются не все, и повторять одно и то же десять раз незачем.
     """
     payload["contract"]["loadings"] = [
         {"address": "Адрес погрузки 1", "date": "2026-09-26", "time_window": ""}
@@ -436,7 +463,63 @@ def test_points_without_names_are_not_scolded(validator, payload):
     report = validator.check(payload)
 
     assert report.errors == [], _errors(report)
-    assert not any("наименование" in w for w in report.warnings)
+    assert report.warnings == [
+        "Грузоотправители: не указаны наименования — "
+        "выберите точки из справочника салонов",
+        "Грузополучатели: не указаны наименования — "
+        "выберите точки из справочника салонов",
+    ]
+
+
+def test_one_unnamed_point_among_named_ones_is_reported(validator, payload):
+    """
+    Часть точек без наименования — замечание по КАЖДОЙ такой точке.
+
+    Здесь пустое наименование — сигнал, что салон не подтянулся, а не
+    «справочником не пользуются»: остальные точки имя имеют.
+    """
+    payload["contract"]["loadings"] = [
+        {"name": "ООО «Салон 1»", "address": "Адрес погрузки 1"},
+        {"name": "", "address": "Адрес погрузки 2"},
+        {"address": "Адрес погрузки 3"},
+    ]
+    payload["contract"]["unloadings"] = [
+        {"name": "ООО «Салон 2»", "address": "Адрес выгрузки 1"},
+    ]
+    report = validator.check(payload)
+
+    assert report.errors == [], _errors(report)
+    assert report.warnings == [
+        "2-й грузоотправителя: не указано наименование",
+        "3-й грузоотправителя: не указано наименование",
+    ]
+
+
+def test_single_unnamed_point_gets_general_warning(validator, payload):
+    """Одна точка без имени в разделе — тоже одно общее замечание, не «1-й»."""
+    payload["contract"]["loadings"] = [{"address": "Единственная погрузка"}]
+    payload["contract"]["unloadings"] = [
+        {"name": "ООО «Салон»", "address": "Адрес выгрузки 1"},
+    ]
+    report = validator.check(payload)
+
+    assert report.warnings == [
+        "Грузоотправители: не указаны наименования — "
+        "выберите точки из справочника салонов",
+    ]
+
+
+def test_points_with_names_are_not_scolded(validator, payload):
+    """Все точки с наименованиями — замечаний о них нет."""
+    payload["contract"]["loadings"] = [
+        {"name": "ООО «Салон 1»", "address": "Адрес погрузки 1"},
+    ]
+    payload["contract"]["unloadings"] = [
+        {"name": "ООО «Салон 2»", "address": "Адрес выгрузки 1"},
+    ]
+    report = validator.check(payload)
+
+    assert not any("наименован" in w for w in report.warnings)
 
 
 # ─────────────────────────────────────────────────────────────
