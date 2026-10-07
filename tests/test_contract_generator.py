@@ -18,6 +18,7 @@ import re
 import shutil
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -1678,6 +1679,230 @@ def test_payment_days(generator, contract_payload):
     assert replacements["payment_days"] == "10"
     assert replacements["payment_days_words"] == "десяти"
     assert replacements["penalty_rate"] == "5000"
+
+
+# ─────────────────────────────────────────────────────────────
+# Год договора и пробел перед сроком оплаты (ШАГ FIX-2.5)
+# ─────────────────────────────────────────────────────────────
+
+def test_contract_year_from_date(generator, contract_payload):
+    """Дата договора 2026-09-23 → год «2026», а не текущий."""
+    replacements = generator._build_replacements_map(contract_payload)
+
+    assert replacements["contract_year"] == "2026"
+
+
+def test_contract_year_fallback_to_now(generator, contract_payload):
+    """Пустая или неразбираемая дата → текущий год (число не выдумываем)."""
+    now_year = str(datetime.now().year)
+
+    for date_value in ("", None, "не дата", "23.09.2026"):
+        payload = dict(contract_payload)
+        payload["contract"] = dict(contract_payload["contract"], date=date_value)
+
+        assert generator._build_replacements_map(payload)["contract_year"] == now_year, (
+            f"дата {date_value!r}: год должен быть текущим"
+        )
+
+
+def test_contract_year_helper(generator):
+    """Помощник года: ISO-дата, обрезанный ISO, мусор."""
+    assert generator._contract_year("2025-09-01") == "2025"
+    assert generator._contract_year("2026-01-01T00:00:00") == "2026"
+    assert generator._contract_year("") == str(datetime.now().year)
+    assert generator._contract_year(None) == str(datetime.now().year)
+
+
+def test_document_year_comes_from_contract_date(light_generator, contract_payload,
+                                                work_file):
+    """
+    В готовом документе год — из даты договора, а не из сегодняшнего.
+
+    Дата стоит в первой таблице шапки («г. Москва | «05» марта 2024»),
+    поэтому ищем по всему тексту документа, включая таблицы. Хвост « г.»
+    в бланке не напечатан — так ячейка выглядит и в золотом эталоне.
+    """
+    payload = dict(contract_payload)
+    payload["contract"] = dict(contract_payload["contract"], date="2024-03-05")
+
+    output = work_file("year_from_date.docx")
+    light_generator.generate_docx(payload, str(output))
+
+    text = document_text(output)
+    assert "«05» марта 2024" in text
+    assert f"«05» марта {datetime.now().year}" not in text
+
+
+def test_payment_days_with_space_in_document(light_generator, contract_payload,
+                                             work_file):
+    """
+    П. 4.4: «в течение 10 (десяти)», а не «в течение10».
+
+    Пробел стоит в бланке (перед плейсхолдером), поэтому проверяется именно
+    готовый документ, а не карта замен.
+    """
+    output = work_file("payment_space.docx")
+    light_generator.generate_docx(contract_payload, str(output))
+
+    text = document_text(output)
+    assert "в течение 10 (десяти) банковских дней" in text
+    assert "в течение10" not in text
+    assert "в течение{{" not in text
+
+
+@pytest.mark.parametrize("template_name", TEMPLATES)
+def test_templates_have_space_before_payment_placeholder(templates_dir, template_name):
+    """В каждом бланке перевозки пробел перед плейсхолдером стоит уже в XML."""
+    doc = Document(str(templates_dir / template_name))
+    line = next(p.text for p in doc.paragraphs
+                if p.text.startswith("4.4. Оплата производится"))
+
+    assert "в течение {{payment_days}}" in line
+    assert "в течение{{payment_days}}" not in line
+
+
+# ─────────────────────────────────────────────────────────────
+# Наименование салона в заголовках блоков 3.2 / 3.3 (ШАГ FIX-2.5)
+# ─────────────────────────────────────────────────────────────
+
+#: Точка выгрузки с наименованием салона — как её отдаёт вкладка «Договор».
+SALON_POINT = {
+    "name": "ООО «Тестовый Салон»",
+    "address": "г. Москва, ул. Перерва, д. 19, стр. 3",
+    "date": "2026-10-05",
+    "time_window": "09:00-18:00",
+}
+
+
+def _payload_with_named_unloading(route_payload) -> dict:
+    """Маршрут, у которого первая выгрузка пришла со справочником салонов."""
+    payload = dict(route_payload)
+    payload["unloadings"] = [
+        dict(SALON_POINT),
+        dict(route_payload["unloadings"][1]),
+    ]
+    payload["vehicles"] = [
+        dict(vehicle, unloading_index=1) for vehicle in route_payload["vehicles"]
+    ]
+    return payload
+
+
+def test_point_title_puts_name_before_address(generator):
+    """Заголовок точки: «Выгрузка 1: <наименование> <адрес>»."""
+    assert generator._point_title("Выгрузка", 1, SALON_POINT) == (
+        "Выгрузка 1: ООО «Тестовый Салон» г. Москва, ул. Перерва, д. 19, стр. 3"
+    )
+
+
+def test_point_title_without_name_prints_address_only(generator):
+    """Наименования нет — печатается только адрес, как было до FIX-2.5."""
+    point = {"address": "г. Пятигорск, Бештаугорское шоссе 17"}
+
+    assert generator._point_title("Выгрузка", 2, point) == (
+        "Выгрузка 2: г. Пятигорск, Бештаугорское шоссе 17"
+    )
+
+
+def test_point_title_accepts_salon_name_key(generator):
+    """Запасной ключ `salon_name` (справочник адресов) тоже принимается."""
+    point = {"salon_name": "ООО «Салон»", "address": "Адрес"}
+
+    assert generator._point_title("Погрузка", 1, point) == "Погрузка 1: ООО «Салон» Адрес"
+
+
+def test_point_title_ignores_blank_name(generator):
+    """Пустое или пробельное наименование — как отсутствующее."""
+    for name in ("", "   ", None):
+        point = {"name": name, "address": "Адрес"}
+        assert generator._point_title("Выгрузка", 1, point) == "Выгрузка 1: Адрес"
+
+
+def test_point_title_collapses_name_linebreaks(generator):
+    """Перенос строки в наименовании не рвёт заголовок абзаца."""
+    point = {"name": "ООО «Салон»\nДоп", "address": "Адрес"}
+
+    assert generator._point_title("Выгрузка", 1, point) == (
+        "Выгрузка 1: ООО «Салон» Доп Адрес"
+    )
+
+
+@pytest.mark.xfail(
+    reason=(
+        "БЛОКЕР: core/contract_data.py::_as_point_list строит точку только "
+        "из address/date/time_window — ключ name теряется ещё до генератора "
+        "(правка core/contract_data.py на шаге не разрешена)"
+    ),
+    strict=True,
+)
+def test_unloading_name_from_data(marker_generator, route_payload, work_file):
+    """Готовый документ печатает наименование салона перед адресом."""
+    payload = _payload_with_named_unloading(route_payload)
+
+    output = work_file("salon_heading.docx")
+    marker_generator.generate_docx(payload, str(output))
+
+    titles = headings(Document(output), "Выгрузка ")
+    assert titles[0] == (
+        "Выгрузка 1: ООО «Тестовый Салон» "
+        "г. Москва, ул. Перерва, д. 19, стр. 3"
+    )
+    # вторая выгрузка имени не имеет — печатается только адрес
+    assert titles[1] == "Выгрузка 2: Выгрузка два, склад Б"
+
+
+def test_empty_name_prints_no_placeholder_text(marker_generator, route_payload,
+                                               work_file):
+    """Пустое наименование не печатает ни «None», ни прочерк, ни лишний пробел."""
+    payload = dict(route_payload)
+    payload["unloadings"] = [
+        {"name": "", "address": "Точка без имени", "date": "", "time_window": ""},
+    ]
+    payload["vehicles"] = [
+        dict(vehicle, unloading_index=1) for vehicle in route_payload["vehicles"]
+    ]
+
+    output = work_file("empty_name.docx")
+    marker_generator.generate_docx(payload, str(output))
+
+    text = document_text(output)
+    assert "Выгрузка 1: Точка без имени" in text
+    assert "None" not in text
+    assert "Выгрузка 1:  " not in text
+    assert "Выгрузка 1: —" not in text
+
+
+@pytest.mark.xfail(
+    reason=(
+        "БЛОКЕР: core/contract_data.py::_as_point_list строит точку только "
+        "из address/date/time_window — ключ name теряется ещё до генератора "
+        "(правка core/contract_data.py на шаге не разрешена)"
+    ),
+    strict=True,
+)
+def test_point_title_with_name_reaches_flat_block(generator, route_payload):
+    """Плоский legacy-блок ({{unloading_block}}) тоже печатает наименование."""
+    payload = _payload_with_named_unloading(route_payload)
+
+    block = generator._build_replacements_map(payload)["unloading_block"]
+
+    assert "Выгрузка 1: ООО «Тестовый Салон» г. Москва" in block
+
+
+@pytest.mark.xfail(
+    reason=(
+        "БЛОКЕР: core/contract_data.py::_as_point_list строит точку только "
+        "из address/date/time_window — ключ name теряется ещё до генератора "
+        "(правка core/contract_data.py на шаге не разрешена)"
+    ),
+    strict=True,
+)
+def test_unloading_name_survives_contract_data(route_payload):
+    """Наименование салона обязано дойти до генератора через ContractData."""
+    payload = _payload_with_named_unloading(route_payload)
+
+    data = ContractData.coerce(payload)
+
+    assert data.unloadings[0].get("name") == "ООО «Тестовый Салон»"
 
 
 # ─────────────────────────────────────────────────────────────

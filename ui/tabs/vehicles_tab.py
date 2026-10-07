@@ -14,6 +14,10 @@
 
 Колонки можно перетаскивать за заголовки (кроме фиксированных).
 Ширина колонок настраивается вручную.
+
+Списки точек маршрута в колонках «Погрузка» / «Выгрузка» строятся из данных
+вкладки «Условия договора»: если у точки есть наименование салона
+(ШАГ FIX-2.5), оно показывается перед адресом.
 """
 
 import logging
@@ -157,7 +161,10 @@ class VehiclesTab(TabMixin, QWidget):
     def update_loadings_list(self, loadings: List[Dict[str, str]]) -> None:
         """
         Обновляет выпадающий список погрузок в каждой строке.
-        loadings — список словарей {'address', 'date', 'time_window'}.
+
+        loadings — список словарей {'name', 'address', 'date', 'time_window'}.
+        Наименование салона необязательно (ШАГ FIX-2.5): точка, введённая
+        руками, приходит без него, и список выглядит как раньше.
         """
         self._loadings_points = loadings or []
         self._refresh_all_combos(
@@ -179,7 +186,9 @@ class VehiclesTab(TabMixin, QWidget):
     def _build_point_items(points: List[Dict[str, str]], title: str) -> List[str]:
         """
         Строит список отображаемых строк для QComboBox.
-        Первый элемент — «— (все)», далее «Погрузка 1 (адрес...)» и т.д.
+        Первый элемент — «— (все)», далее «Погрузка 1 (наименование, адрес)».
+        Наименование салона идёт первым — как в заголовке блока договора;
+        без него в скобках остаётся только адрес.
         Адрес обрезается до 60 символов (было 40 — теперь длиннее, т.к. колонка шире).
         """
         items = [NO_POINT]
@@ -187,7 +196,10 @@ class VehiclesTab(TabMixin, QWidget):
             address = (p.get("address") or "").strip()
             if len(address) > 60:
                 address = address[:60] + "…"
-            items.append(f"{title} {i} ({address})")
+
+            name = (p.get("name") or p.get("salon_name") or "").strip()
+            label = f"{name}, {address}" if name else address
+            items.append(f"{title} {i} ({label})")
         return items
 
     def _refresh_all_combos(self, column: int, items: List[str]) -> None:
