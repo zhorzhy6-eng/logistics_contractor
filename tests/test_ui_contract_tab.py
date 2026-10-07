@@ -25,7 +25,7 @@ import pytest
 
 pytest.importorskip("PyQt5")
 
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QHeaderView  # noqa: E402
 
 from db.database import save_address  # noqa: E402
 from ui.tabs import contract_tab as tab_module  # noqa: E402
@@ -294,3 +294,211 @@ def test_clear_resets_name_column(tab):
     tab.clear()
 
     assert tab.unloadings_table.item(0, COL_NAME).text() == ""
+
+
+# ─────────────────────────────────────────────────────────────
+# Удаление последней строки (ШАГ FIX-5, часть B)
+# ─────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def quiet_dialogs(monkeypatch):
+    """
+    Модальные окна не должны останавливать тест.
+
+    В offscreen-режиме модальный QMessageBox роняет прогон (access
+    violation), поэтому тексты перехватываются: словарь со списками
+    warning / information.
+    """
+    from PyQt5.QtWidgets import QMessageBox
+
+    seen = {"warning": [], "information": []}
+
+    def recorder(kind):
+        def _record(parent, title, text, *args, **kwargs):
+            seen[kind].append(text)
+            return QMessageBox.Ok
+        return staticmethod(_record)
+
+    for kind in seen:
+        monkeypatch.setattr(QMessageBox, kind, recorder(kind))
+    return seen
+
+
+def _delete_all_points(tab: ContractTab) -> None:
+    """Удаляет все строки обеих таблиц — как оператор: строка выбрана."""
+    for table, remove in (
+        (tab.loadings_table, tab._on_remove_loading),
+        (tab.unloadings_table, tab._on_remove_unloading),
+    ):
+        while table.rowCount():
+            table.setCurrentCell(0, COL_ADDRESS)
+            remove()
+
+
+def test_can_delete_last_loading_row(tab):
+    """Последнюю строку погрузки удалить можно: пустая таблица — норма."""
+    table = tab.loadings_table
+    table.setCurrentCell(0, COL_ADDRESS)
+
+    tab._on_remove_loading()
+
+    assert table.rowCount() == 0
+
+
+def test_can_delete_last_unloading_row(tab):
+    """Последнюю строку выгрузки удалить тоже можно."""
+    table = tab.unloadings_table
+    table.setCurrentCell(0, COL_ADDRESS)
+
+    tab._on_remove_unloading()
+
+    assert table.rowCount() == 0
+
+
+def test_delete_without_selection_warns(tab, quiet_dialogs):
+    """Без выбранной строки удаление не идёт — но и не падает."""
+    table = tab.loadings_table
+    table.clearSelection()
+    table.setCurrentCell(-1, -1)
+
+    tab._on_remove_loading()
+
+    assert table.rowCount() == 1
+    assert quiet_dialogs["warning"] == ["Выберите строку для удаления."]
+
+
+def test_delete_leaves_no_empty_row_behind(tab):
+    """После удаления пустая строка НЕ добавляется автоматически."""
+    _delete_all_points(tab)
+
+    assert tab.loadings_table.rowCount() == 0
+    assert tab.unloadings_table.rowCount() == 0
+
+
+def test_empty_loadings_table_returns_empty_list(tab):
+    """Пустая таблица отдаёт пустой список (не None, без падения)."""
+    _delete_all_points(tab)
+
+    assert tab.get_loadings() == []
+    assert tab.get_unloadings() == []
+
+    data = tab.get_data()
+    assert data["loadings"] == []
+    assert data["unloadings"] == []
+    assert data["loading_address"] == ""
+    assert data["unloading_address_1"] == ""
+
+
+def test_empty_points_reach_contract_data_as_empty_list(tab):
+    """Пустые таблицы доходят до ContractData пустыми списками, а не None."""
+    from core.contract_data import ContractData
+
+    _delete_all_points(tab)
+
+    contract_data = ContractData.coerce(tab.get_data())
+
+    assert contract_data.loadings == []
+    assert contract_data.unloadings == []
+
+
+def test_create_contract_blocked_on_empty_loadings(tab):
+    """
+    Пустая таблица погрузок — путь создания договора закрыт.
+
+    Диалог «Проверьте данные» печатает ошибки валидатора; при пустой
+    таблице в нём есть строка про место погрузки (ШАГ FIX-5, часть B.4).
+    """
+    from core.contract_data import ContractData
+    from core.contracts.perevozka.validator import PerevozkaValidator
+
+    _delete_all_points(tab)
+
+    report = PerevozkaValidator().check(ContractData.coerce(tab.get_data()))
+
+    assert report.has_errors is True
+    assert "Укажите хотя бы одно место погрузки" in report.errors
+    assert "Укажите хотя бы одно место выгрузки" in report.errors
+
+
+def test_deleted_rows_can_be_added_back(tab):
+    """После удаления всех строк «Добавить погрузку» снова даёт строку."""
+    _delete_all_points(tab)
+
+    tab._on_add_loading()
+    tab._on_add_unloading()
+
+    assert tab.loadings_table.rowCount() == 1
+    assert tab.unloadings_table.rowCount() == 1
+
+
+# ─────────────────────────────────────────────────────────────
+# Ширины колонок и подсказки (ШАГ FIX-5, часть C)
+# ─────────────────────────────────────────────────────────────
+
+def test_loadings_address_is_stretch(tab):
+    """Адрес — главная колонка: тянется по ширине таблицы."""
+    header = tab.loadings_table.horizontalHeader()
+
+    assert header.sectionResizeMode(COL_ADDRESS) == QHeaderView.Stretch
+    assert (
+        tab.unloadings_table.horizontalHeader().sectionResizeMode(COL_ADDRESS)
+        == QHeaderView.Stretch
+    )
+
+
+def test_loadings_name_is_contents(tab):
+    """Наименование салона — по содержимому: длина у названий разная."""
+    header = tab.loadings_table.horizontalHeader()
+
+    assert header.sectionResizeMode(COL_NAME) == QHeaderView.ResizeToContents
+    assert (
+        tab.unloadings_table.horizontalHeader().sectionResizeMode(COL_NAME)
+        == QHeaderView.ResizeToContents
+    )
+
+
+def test_loadings_date_is_fixed(tab):
+    """Дата и время — фиксированные колонки: 90 и 80 пикселей, не меньше."""
+    for table in (tab.loadings_table, tab.unloadings_table):
+        header = table.horizontalHeader()
+
+        assert header.sectionResizeMode(COL_DATE) == QHeaderView.Interactive
+        assert header.sectionResizeMode(COL_TIME) == QHeaderView.Interactive
+        assert header.sectionSize(COL_DATE) == 90
+        assert header.sectionSize(COL_TIME) == 80
+        assert header.minimumSectionSize() == 70
+
+
+def test_loadings_widths_persist_between_sessions(qapp, isolated_db):
+    """
+    Растянутая колонка остаётся растянутой после перезапуска.
+
+    «Новая сессия» — новая вкладка: ширины читаются из QSettings
+    (хранилище тестов изолировано, см. isolated_qsettings).
+    """
+    first = ContractTab()
+    first.loadings_table.horizontalHeader().resizeSection(COL_DATE, 130)
+    first.loadings_table._widths_saver.flush()
+
+    second = ContractTab()
+
+    assert second.loadings_table.horizontalHeader().sectionSize(COL_DATE) == 130
+    # Выгрузки хранятся отдельным ключом: чужая раскладка их не трогает.
+    assert second.unloadings_table.horizontalHeader().sectionSize(COL_DATE) == 90
+
+    first.deleteLater()
+    second.deleteLater()
+
+
+def test_tooltip_on_long_address(tab):
+    """Наведение на длинный адрес показывает его целиком."""
+    table = tab.loadings_table
+    long_address = (
+        "183052, Мурманская область, г. Мурманск, пр. Кольский, д. 53, "
+        "строение 2, склад № 17"
+    )
+    table.item(0, COL_ADDRESS).setText(long_address)
+
+    table.itemEntered.emit(table.item(0, COL_ADDRESS))
+
+    assert table.item(0, COL_ADDRESS).toolTip() == long_address

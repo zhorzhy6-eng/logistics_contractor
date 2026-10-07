@@ -202,3 +202,40 @@ def isolated_db(work_file, monkeypatch):
 
     database.init_database()
     yield database
+
+
+# ─────────────────────────────────────────────────────────────
+# Настройки интерфейса (QSettings)
+# ─────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def isolated_qsettings(work_dir):
+    """
+    QSettings — в файл в tests/_tmp, а не в реестр Windows.
+
+    Ширины колонок таблиц (ШАГ FIX-5) живут в QSettings. Тесты не должны
+    ни читать рабочие настройки оператора, ни перезаписывать их: раскладка
+    из теста попала бы в настоящий интерфейс. Хранилище чистится перед
+    каждым тестом, иначе ширины одного теста «протекли» бы в другой.
+    """
+    try:
+        from PyQt5.QtCore import QSettings
+    except ImportError:  # Qt не установлен — этим тестам он и не нужен
+        yield
+        return
+
+    directory = work_dir / "qsettings"
+    directory.mkdir(parents=True, exist_ok=True)
+
+    # Перенаправляем ровно то хранилище, которым пользуется
+    # ui/widgets/table_helpers.py: INI-файл в папке настроек пользователя.
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(directory))
+
+    settings = QSettings(
+        QSettings.IniFormat, QSettings.UserScope,
+        "logistics_contractor", "logistics_contractor",
+    )
+    settings.clear()
+    settings.sync()
+
+    yield
