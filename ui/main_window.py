@@ -24,6 +24,7 @@ from core.contract_data import ContractData
 from core.contracts.contract_types import DEFAULT_CONTRACT_TYPE
 from core.contract_generator import ContractGenerator
 from core.gigachat_client import GigaChatClient
+from core.mirror import SOURCE_TYPE
 from core.recognizer import filled_only, filled_only_list
 from core.secrets_store import MISSING_KEY_MESSAGE
 from core.settings_service import get_settings_service
@@ -162,6 +163,12 @@ class MainWindow(QMainWindow):
     #: Пользователь нажал «Выход».
     exit_requested = pyqtSignal()
 
+    #: Ключ типа договора (ШАГ FIX-4). У окон типов это атрибут
+    #: BaseContractWindow; здесь он нужен зеркалу данных: окно-цель ищет
+    #: источник по значению CONTRACT_TYPE, а не по имени класса —
+    #: ui/windows не должен зависеть от ui/main_window.
+    CONTRACT_TYPE = SOURCE_TYPE
+
     # Ожидаемые разделы ответа модели. Нужны для debug-лога: видно не только
     # то, что распознано, но и то, что модель вообще не вернула.
     _RECOGNITION_SECTIONS = (
@@ -212,6 +219,14 @@ class MainWindow(QMainWindow):
         self.system_theme_watcher = SystemThemeWatcher(self)
         self.system_theme_watcher.theme_changed.connect(self._on_system_theme_changed)
         self._sync_system_theme_watcher()
+
+        # ── Зеркало данных (ШАГ FIX-4): окно сообщает о себе ──
+        # MainWindow — источник переноса в Формику и Логистикс. Окна типов
+        # находят его по реестру (ui/windows/base_window.py), а не по классу:
+        # им нужен только CONTRACT_TYPE и методы вкладок.
+        from ui.windows.base_window import register_source_window
+
+        register_source_window(self)
 
         logger.info("MainWindow инициализировано")
 
