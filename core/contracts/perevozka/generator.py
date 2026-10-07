@@ -20,6 +20,7 @@
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -265,6 +266,7 @@ class PerevozkaGenerator(BaseContractGenerator):
 
         if not loadings and contract.get("loading_address"):
             loadings = [{
+                "name": contract.get("loading_name", ""),
                 "address": contract.get("loading_address", ""),
                 "date": contract.get("loading_date", ""),
                 "time_window": contract.get("loading_time_window", ""),
@@ -274,12 +276,14 @@ class PerevozkaGenerator(BaseContractGenerator):
             legacy = []
             if contract.get("unloading_address_1"):
                 legacy.append({
+                    "name": contract.get("unloading_name_1", ""),
                     "address": contract.get("unloading_address_1", ""),
                     "date": contract.get("unloading_date", ""),
                     "time_window": contract.get("unloading_time_window", ""),
                 })
             if contract.get("unloading_address_2"):
                 legacy.append({
+                    "name": contract.get("unloading_name_2", ""),
                     "address": contract.get("unloading_address_2", ""),
                     "date": contract.get("unloading_date", ""),
                     "time_window": contract.get("unloading_time_window", ""),
@@ -359,7 +363,7 @@ class PerevozkaGenerator(BaseContractGenerator):
             shown += 1
             elements.append(self._make_point_heading(
                 doc, head_template,
-                f"{title_prefix} {shown}: {address}".strip(),
+                self._point_title(title_prefix, shown, point),
             ))
             elements.append(self._make_vehicle_table(doc, assigned))
             elements.append(self._make_spacer(doc))
@@ -605,6 +609,42 @@ class PerevozkaGenerator(BaseContractGenerator):
         return False
 
     # ─────────────────────────────────────────────────────────
+    # НАИМЕНОВАНИЕ САЛОНА В ЗАГОЛОВКЕ ТОЧКИ
+    # ─────────────────────────────────────────────────────────
+
+    @classmethod
+    def _normalized_point_name(cls, point: Dict[str, Any]) -> str:
+        """
+        Наименование салона точки одной строкой.
+
+        Ключ называется `name` (так его отдаёт вкладка «Условия договора»),
+        но принимается и `salon_name`: так поле называется в справочнике
+        адресов и в блоке грузополучателя Логистикса — если точка пришла
+        оттуда, имя не потеряется. Поле необязательное: точку можно ввести
+        руками, и тогда наименования у неё просто нет.
+        """
+        name = point.get("name")
+        if not name:
+            name = point.get("salon_name")
+        return re.sub(r"\s+", " ", str(name or "")).strip()
+
+    @classmethod
+    def _point_title(cls, prefix: str, number: int, point: Dict[str, Any]) -> str:
+        """
+        Заголовок блока точки: «Выгрузка 1: ООО «Салон» г. Москва, Перерва 19».
+
+        Наименование салона идёт ПЕРЕД адресом через пробел — как в заявке
+        заказчика. Если наименования нет (записи в справочнике не нашлось
+        или точку вводили руками), печатается только адрес, как раньше:
+        ни прочерка, ни пустого места вместо имени в бланке не будет.
+        """
+        address = cls._normalized_point_address(point)
+        name = cls._normalized_point_name(point)
+
+        body = f"{name} {address}".strip() if name else address
+        return f"{prefix} {number}: {body}".strip()
+
+    # ─────────────────────────────────────────────────────────
     # БЛОК ТОЧЕК С ПРИВЯЗКОЙ МАШИН
     # ─────────────────────────────────────────────────────────
 
@@ -645,7 +685,9 @@ class PerevozkaGenerator(BaseContractGenerator):
 
         lines = []
         for i, p in enumerate(points, 1):
-            parts = [f"{title} {i}: {p.get('address', '').strip()}"]
+            # Заголовок точки — тем же помощником, что и таблицы по точкам:
+            # наименование салона перед адресом, без имени — только адрес.
+            parts = [self._point_title(title, i, p)]
             date_str = self._format_date_full(p.get("date", ""))
             if date_str:
                 parts.append(date_str)
@@ -678,7 +720,10 @@ class PerevozkaGenerator(BaseContractGenerator):
         date_iso = contract.get("date", "")
         replacements["contract_date"] = self._day_of_month(date_iso) if date_iso else ""
         replacements["contract_month"] = self._month_name(date_iso)
-        replacements["contract_year"] = str(datetime.now().year)
+        # Год договора — из ЕГО даты, а не из сегодняшнего числа: договор
+        # от 23.09.2026 не должен печатать «2027», если его распечатали
+        # в январе. Даты нет или она не разбирается — текущий год.
+        replacements["contract_year"] = self._contract_year(date_iso)
 
         # Город заключения: явное поле → город первой погрузки →
         # юр. адрес перевозчика → «Москва» (историческое поведение, баг 2.9).
@@ -969,6 +1014,30 @@ class PerevozkaGenerator(BaseContractGenerator):
 
         logger.debug(f"Сформировано {len(replacements)} плейсхолдеров")
         return replacements
+
+    # ─────────────────────────────────────────────────────────
+    # Год договора
+    # ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _contract_year(date_iso: Any) -> str:
+        """
+        Год договора из его даты; если даты нет — текущий год.
+
+        Дата приходит из UI в ISO («2026-09-23»), из справочников и
+        распознавания — в любом виде, поэтому строку разбирает только
+        строгий ISO-разбор, а остальное («23.09.2026», мусор, None) даёт
+        текущий год. Год из даты всегда четыре цифры, как в бланке.
+
+        Раньше здесь стояло `datetime.now().year`: договор, подготовленный
+        в декабре, а напечатанный в январе, уезжал в новый год.
+        """
+        if date_iso:
+            try:
+                return str(datetime.strptime(str(date_iso)[:10], "%Y-%m-%d").year)
+            except (ValueError, TypeError):
+                pass
+        return str(datetime.now().year)
 
     # ─────────────────────────────────────────────────────────
     # Краткая метка точки для таблицы ТС

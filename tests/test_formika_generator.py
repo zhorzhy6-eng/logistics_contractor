@@ -6,9 +6,11 @@
 Проверяют: тип больше не заглушка; плейсхолдеры шаблона заменяются;
 таблица груза рассчитана на переменное число машин (лишние строки
 удаляются постобработкой); тягач и полуприцеп в груз не попадают;
-стоимость выводится одной суммой с НДС; логи идут в канал
-«core.contract_generator» и не содержат персональных данных;
-готовый документ совпадает с золотым эталоном
+стоимость выводится одной суммой с НДС; срок оплаты берётся из поля
+«Срок оплаты (дней)» и печатается с прописью в родительном падеже
+(ШАГ FIX-2.4: константы «3 (трех) банковских дней» в бланке больше нет);
+логи идут в канал «core.contract_generator» и не содержат персональных
+данных; готовый документ совпадает с золотым эталоном
 tests/data/golden/formika_sample.* (4 машины).
 
 Все данные синтетические, реальных ПДн нет.
@@ -299,6 +301,105 @@ def test_contract_year_comes_from_contract_date(generator):
     assert replacements["contract_year"] == "2026"
     assert replacements["contract_month"] == "июля"
     assert replacements["contract_date"] == "24"
+
+
+# ─────────────────────────────────────────────────────────────
+# Срок оплаты (ШАГ FIX-2.4)
+# ─────────────────────────────────────────────────────────────
+
+#: Константа, стоявшая в бланке до шага FIX-2.4. Её не должно быть ни в
+#: одном сгенерированном документе — ни при каком сроке оплаты.
+OLD_PAYMENT_CONSTANT = "3 (трех) банковских дней"
+
+
+def _payment_clause(text: str) -> str:
+    """Строка «Порядок оплаты: …» из готового документа."""
+    return next(line for line in text.splitlines()
+                if line.startswith("Порядок оплаты:"))
+
+
+def _payload_with_payment_days(payment_days):
+    """Данные договора; payment_days=None — поле не задано вовсе."""
+    payload = _payload(1)
+    if payment_days is None:
+        payload["contract"].pop("payment_days", None)
+    else:
+        payload["contract"]["payment_days"] = payment_days
+    return payload
+
+
+def test_payment_days_forty_five(generator, work_dir):
+    """payment_days=45 → «45 (сорока пяти) банковских дней»."""
+    path = _generate(generator, _payload_with_payment_days(45), work_dir)
+    clause = _payment_clause(_document_text(Document(path)))
+
+    assert "в течение 45 (сорока пяти) банковских дней" in clause
+    assert OLD_PAYMENT_CONSTANT not in clause
+
+
+def test_payment_days_thirty(generator, work_dir):
+    """payment_days=30 → «30 (тридцати) банковских дней»."""
+    path = _generate(generator, _payload_with_payment_days(30), work_dir)
+    clause = _payment_clause(_document_text(Document(path)))
+
+    assert "в течение 30 (тридцати) банковских дней" in clause
+
+
+def test_payment_days_ten_matches_default_field(generator, work_dir):
+    """Значение по умолчанию вкладки «Стоимость» (10) доходит до бланка."""
+    path = _generate(generator, _payload_with_payment_days(10), work_dir)
+    clause = _payment_clause(_document_text(Document(path)))
+
+    assert "в течение 10 (десяти) банковских дней" in clause
+
+
+def test_payment_days_empty_leaves_blank_not_three(generator, work_dir):
+    """
+    Незаданный срок оплаты — пустое место, а не «3 (трех)».
+
+    docxtpl съедает пробелы вокруг пустого плейсхолдера, поэтому в бланке
+    остаётся «в течение  () банковских дней» — цифр там нет. Число
+    генератор не выдумывает: о незаполненном сроке скажет валидатор.
+    """
+    path = _generate(generator, _payload_with_payment_days(None), work_dir)
+    text = _document_text(Document(path))
+    clause = _payment_clause(text)
+
+    assert OLD_PAYMENT_CONSTANT not in text
+    assert "в течение  () банковских дней" in clause, clause
+    assert "3" not in clause.split("после получения")[0]
+
+
+def test_payment_days_empty_in_replacements(generator):
+    """Пустой payment_days → обе замены пустые (в бланке пробел, не «3»)."""
+    replacements = generator._build_replacements_map(_payload_with_payment_days(None))
+
+    assert replacements["payment_days"] == ""
+    assert replacements["payment_days_words"] == ""
+
+
+def test_payment_days_replacements_are_numeric_and_words(generator):
+    """Карта замен: цифры числом, скобки — родительным падежом прописью."""
+    replacements = generator._build_replacements_map(_payload_with_payment_days(45))
+
+    assert replacements["payment_days"] == "45"
+    assert replacements["payment_days_words"] == "сорока пяти"
+
+
+@pytest.mark.parametrize("cars", [1, 4])
+def test_old_payment_constant_absent_from_every_document(generator, work_dir, cars):
+    """«3 (трех) банковских дней» больше не встречается ни в одном документе."""
+    for payment_days in (None, 0, 5, 30, 45, 365):
+        payload = _payload(cars)
+        if payment_days is None:
+            payload["contract"].pop("payment_days", None)
+        else:
+            payload["contract"]["payment_days"] = payment_days
+
+        path = _generate(generator, payload, work_dir)
+        assert OLD_PAYMENT_CONSTANT not in _document_text(Document(path)), (
+            f"константа вернулась при payment_days={payment_days!r}"
+        )
 
 
 # ─────────────────────────────────────────────────────────────

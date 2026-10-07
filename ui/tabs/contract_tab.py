@@ -6,10 +6,15 @@
   - тип перевозчика (единый источник истины)
   - ставку НДС
   - маршрут
-  - места погрузки/выгрузки (таблицы)
+  - места погрузки/выгрузки (таблицы «Наименование | Адрес | Дата | Время»)
   - ПЛАНОВЫЕ даты подачи ТС и завершения выгрузки (для шаблона)
   - стоимость и порядок оплаты
   - особые условия
+
+Наименование салона (ШАГ FIX-2.5) подтягивается из справочника адресов:
+при вводе адреса вкладка ищет запись с похожим адресом и, если наименование
+в строке ещё пустое, подставляет его. Ручной ввод не затирается: любое
+заполненное наименование остаётся как есть.
 
 Отправляет сигналы loadings_changed / unloadings_changed при изменении
 таблиц погрузок/выгрузок, чтобы другие вкладки могли обновить свои списки.
@@ -17,7 +22,7 @@
 
 import logging
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QLineEdit,
@@ -26,16 +31,40 @@ from PyQt5.QtWidgets import (
     QMessageBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView,
 )
-from PyQt5.QtCore import QDate, QTime, pyqtSignal, Qt
+from PyQt5.QtCore import QDate, QTime, QTimer, pyqtSignal, Qt
 
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
 from ui import theme
 from ui.address_book_dialog import AddressBookDialog
+from db.database import get_addresses
 
 logger = logging.getLogger("ui.tabs.contract_tab")
 
 MAX_POINTS = 10
+
+#: Колонки таблиц погрузок и выгрузок (порядок — как в бланке договора:
+#: сначала наименование салона, затем адрес).
+COL_NAME = 0
+COL_ADDRESS = 1
+COL_DATE = 2
+COL_TIME = 3
+
+#: Заголовки колонок таблиц точек маршрута.
+POINT_HEADERS = ("Наименование", "Адрес *", "Дата", "Время")
+
+#: Пауза перед поиском салона в справочнике: запрос уходит после того, как
+#: пользователь перестал печатать адрес, а не на каждую букву.
+SALON_LOOKUP_DELAY_MS = 400
+
+#: Сколько первых полей адреса участвует в запасном запросе («г. Москва,
+#: ул. Перерва, д. 19» → «г. Москва, ул. Перерва»): полный адрес из UI
+#: почти никогда не совпадает с адресом справочника посимвольно.
+SALON_FALLBACK_PARTS = 2
+
+#: Размер выборки при поиске салона: имя ищем среди первых совпадений —
+#: страница справочника целиком здесь не нужна.
+SALON_SEARCH_LIMIT = 20
 
 
 class PlanDateEdit(QDateEdit):
@@ -143,11 +172,12 @@ class ContractTab(TabMixin, QWidget):
         load_btns.addStretch()
         route_layout.addLayout(load_btns)
 
-        self.loadings_table = QTableWidget(1, 3)
-        self.loadings_table.setHorizontalHeaderLabels(["Адрес *", "Дата", "Время"])
-        self.loadings_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.loadings_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.loadings_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.loadings_table = QTableWidget(1, len(POINT_HEADERS))
+        self.loadings_table.setHorizontalHeaderLabels(list(POINT_HEADERS))
+        self.loadings_table.horizontalHeader().setSectionResizeMode(COL_NAME, QHeaderView.ResizeToContents)
+        self.loadings_table.horizontalHeader().setSectionResizeMode(COL_ADDRESS, QHeaderView.Stretch)
+        self.loadings_table.horizontalHeader().setSectionResizeMode(COL_DATE, QHeaderView.ResizeToContents)
+        self.loadings_table.horizontalHeader().setSectionResizeMode(COL_TIME, QHeaderView.ResizeToContents)
         self.loadings_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.loadings_table.setMinimumHeight(80)
         self._init_loading_row(0)
@@ -174,11 +204,12 @@ class ContractTab(TabMixin, QWidget):
         unload_btns.addStretch()
         route_layout.addLayout(unload_btns)
 
-        self.unloadings_table = QTableWidget(1, 3)
-        self.unloadings_table.setHorizontalHeaderLabels(["Адрес *", "Дата", "Время"])
-        self.unloadings_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.unloadings_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.unloadings_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.unloadings_table = QTableWidget(1, len(POINT_HEADERS))
+        self.unloadings_table.setHorizontalHeaderLabels(list(POINT_HEADERS))
+        self.unloadings_table.horizontalHeader().setSectionResizeMode(COL_NAME, QHeaderView.ResizeToContents)
+        self.unloadings_table.horizontalHeader().setSectionResizeMode(COL_ADDRESS, QHeaderView.Stretch)
+        self.unloadings_table.horizontalHeader().setSectionResizeMode(COL_DATE, QHeaderView.ResizeToContents)
+        self.unloadings_table.horizontalHeader().setSectionResizeMode(COL_TIME, QHeaderView.ResizeToContents)
         self.unloadings_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.unloadings_table.setMinimumHeight(80)
         self._init_unloading_row(0)
@@ -327,6 +358,15 @@ class ContractTab(TabMixin, QWidget):
         self.loadings_table.itemChanged.connect(self._on_table_item_changed)
         self.unloadings_table.itemChanged.connect(self._on_table_item_changed)
 
+        # ── Поиск салона в справочнике (одна ячейка за раз) ──
+        # Таймер один на вкладку: ввод идёт в одну ячейку, а держать
+        # таймер на каждую строку обеих таблиц — лишние объекты.
+        self._salon_cell: Optional[tuple] = None
+        self._salon_timer = QTimer(self)
+        self._salon_timer.setSingleShot(True)
+        self._salon_timer.setInterval(SALON_LOOKUP_DELAY_MS)
+        self._salon_timer.timeout.connect(self._lookup_salon_name)
+
         self._generate_contract_number()
         self._calculate_price()
 
@@ -336,26 +376,126 @@ class ContractTab(TabMixin, QWidget):
     # Инициализация строк
     # ─────────────────────────────────────────────────────────
 
-    def _init_loading_row(self, row: int, address: str = "", date_str: str = "", time_str: str = "") -> None:
-        self.loadings_table.setItem(row, 0, QTableWidgetItem(address))
-        self.loadings_table.setItem(row, 1, QTableWidgetItem(date_str))
-        self.loadings_table.setItem(row, 2, QTableWidgetItem(time_str))
+    def _init_loading_row(self, row: int, address: str = "", date_str: str = "",
+                          time_str: str = "", name: str = "") -> None:
+        self.loadings_table.setItem(row, COL_NAME, QTableWidgetItem(name))
+        self.loadings_table.setItem(row, COL_ADDRESS, QTableWidgetItem(address))
+        self.loadings_table.setItem(row, COL_DATE, QTableWidgetItem(date_str))
+        self.loadings_table.setItem(row, COL_TIME, QTableWidgetItem(time_str))
 
-    def _init_unloading_row(self, row: int, address: str = "", date_str: str = "", time_str: str = "") -> None:
-        self.unloadings_table.setItem(row, 0, QTableWidgetItem(address))
-        self.unloadings_table.setItem(row, 1, QTableWidgetItem(date_str))
-        self.unloadings_table.setItem(row, 2, QTableWidgetItem(time_str))
+    def _init_unloading_row(self, row: int, address: str = "", date_str: str = "",
+                            time_str: str = "", name: str = "") -> None:
+        self.unloadings_table.setItem(row, COL_NAME, QTableWidgetItem(name))
+        self.unloadings_table.setItem(row, COL_ADDRESS, QTableWidgetItem(address))
+        self.unloadings_table.setItem(row, COL_DATE, QTableWidgetItem(date_str))
+        self.unloadings_table.setItem(row, COL_TIME, QTableWidgetItem(time_str))
 
     # ─────────────────────────────────────────────────────────
     # Сигналы при изменении таблиц
     # ─────────────────────────────────────────────────────────
 
     def _on_table_item_changed(self, item) -> None:
-        """Отправляет сигнал при любом изменении ячеек таблиц."""
-        sender = self.sender()
-        if sender is self.loadings_table:
+        """
+        Реагирует на правку ячейки таблицы точек маршрута.
+
+        Изменение адреса дополнительно запускает поиск салона: адрес —
+        ключ, по которому наименование берётся из справочника. Остальные
+        колонки (и ручная правка наименования) только оповещают соседние
+        вкладки.
+        """
+        table = self.sender()
+        if table is self.loadings_table:
             self.loadings_changed.emit()
-        elif sender is self.unloadings_table:
+        elif table is self.unloadings_table:
+            self.unloadings_changed.emit()
+        else:
+            return
+
+        if item.column() == COL_ADDRESS:
+            self._salon_cell = (table, item.row())
+            self._salon_timer.start()
+
+    # ─────────────────────────────────────────────────────────
+    # Подтягивание наименования салона из справочника
+    # ─────────────────────────────────────────────────────────
+
+    def _lookup_salon_name(self) -> None:
+        """
+        Ищет салон по адресу и подставляет наименование в соседнюю колонку.
+
+        Правила (ШАГ FIX-2.5):
+          * ищем только когда адрес заполнен, а наименование ПУСТОЕ —
+            ручной ввод и уже подставленное значение не затираются;
+          * ничего не нашли — оставляем пустое наименование, адрес не трогаем.
+        """
+        cell = self._salon_cell
+        self._salon_cell = None
+        if cell is None:
+            return
+
+        table, row = cell
+        if row < 0 or row >= table.rowCount():
+            return
+
+        address = self._get_cell(table, row, COL_ADDRESS).strip()
+        name = self._get_cell(table, row, COL_NAME).strip()
+        if not address or name:
+            return
+
+        salon_name = self._find_salon_name(table, address)
+        if not salon_name:
+            return
+
+        # Сигналы блокируем: подстановка не должна запускать новый поиск
+        # и рассылать сигналы соседним вкладкам.
+        table.blockSignals(True)
+        table.setItem(row, COL_NAME, QTableWidgetItem(salon_name))
+        table.blockSignals(False)
+
+        # Список точек у соседней вкладки изменился (в нём есть наименование).
+        self._emit_points_changed(table)
+        logger.info(f"Салон подтянут из справочника: строка {row}")
+
+    def _find_salon_name(self, table: QTableWidget, address: str) -> str:
+        """
+        Первое наименование салона из справочника по адресу.
+
+        Справочник ищет подстроку: сначала пробуем адрес целиком, затем —
+        его начало (первые два поля). Ошибки чтения базы не поднимаются
+        наверх: без справочника вкладка должна работать как раньше.
+        """
+        point_type = "loading" if table is self.loadings_table else "unloading"
+
+        for query in self._salon_queries(address):
+            try:
+                records = get_addresses(point_type, search=query, limit=SALON_SEARCH_LIMIT)
+            except Exception as e:  # noqa: BLE001 — справочник может быть недоступен
+                logger.error(
+                    f"Поиск салона в справочнике не удался ({type(e).__name__})"
+                )
+                return ""
+
+            for record in records:
+                salon_name = str(record.get("salon_name") or "").strip()
+                if salon_name:
+                    return salon_name
+
+        return ""
+
+    @staticmethod
+    def _salon_queries(address: str) -> List[str]:
+        """Запросы к справочнику: адрес целиком, затем его начало."""
+        queries = [address]
+        parts = [part.strip() for part in address.split(",") if part.strip()]
+        if len(parts) > SALON_FALLBACK_PARTS:
+            queries.append(", ".join(parts[:SALON_FALLBACK_PARTS]))
+        return queries
+
+    def _emit_points_changed(self, table: QTableWidget) -> None:
+        """Сигнал «точки изменились» — тот же, что при правке ячейки."""
+        if table is self.loadings_table:
+            self.loadings_changed.emit()
+        else:
             self.unloadings_changed.emit()
 
     # ─────────────────────────────────────────────────────────
@@ -444,6 +584,13 @@ class ContractTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
 
     def _on_open_book(self, point_type: str) -> None:
+        """
+        Выбор точки из справочника: в строку идут И наименование, И адрес.
+
+        У справочника выгрузки это справочник салонов (ШАГ FIX-2.2), поэтому
+        вместе с адресом берётся наименование юр. лица — ровно то, что
+        печатается в заголовке блока выгрузки.
+        """
         dialog = AddressBookDialog(point_type, parent=self)
         if dialog.exec_():
             selected = dialog.selected_address
@@ -455,7 +602,7 @@ class ContractTab(TabMixin, QWidget):
             row = table.currentRow()
 
             def _row_is_empty(r: int) -> bool:
-                addr = table.item(r, 0)
+                addr = table.item(r, COL_ADDRESS)
                 return not addr or not addr.text().strip()
 
             if row < 0 or not _row_is_empty(row):
@@ -476,20 +623,18 @@ class ContractTab(TabMixin, QWidget):
                     else:
                         self._init_unloading_row(row)
 
-            # ── Блокируем сигналы, чтобы не было 4 emit-ов подряд ──
+            # ── Блокируем сигналы, чтобы не было лишних emit-ов и поиска ──
             table.blockSignals(True)
-            table.setItem(row, 0, QTableWidgetItem(selected.get("address", "")))
-            table.setItem(row, 1, QTableWidgetItem(selected.get("date", "")))
-            table.setItem(row, 2, QTableWidgetItem(selected.get("time_window", "")))
+            table.setItem(row, COL_NAME, QTableWidgetItem(selected.get("salon_name", "")))
+            table.setItem(row, COL_ADDRESS, QTableWidgetItem(selected.get("address", "")))
+            table.setItem(row, COL_DATE, QTableWidgetItem(selected.get("date", "")))
+            table.setItem(row, COL_TIME, QTableWidgetItem(selected.get("time_window", "")))
             table.blockSignals(False)
 
             table.selectRow(row)
 
             # ── Один явный emit ──
-            if point_type == "loading":
-                self.loadings_changed.emit()
-            else:
-                self.unloadings_changed.emit()
+            self._emit_points_changed(table)
 
             logger.info(f"Адрес из справочника вставлен в строку {row} ({point_type})")
 
@@ -498,13 +643,21 @@ class ContractTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
 
     def _read_table(self, table: QTableWidget) -> List[Dict[str, str]]:
+        """
+        Строки таблицы точками маршрута.
+
+        Наименование салона уходит ключом `name` (как его ждёт генератор);
+        строка без адреса точкой не считается — она пустая.
+        """
         result = []
         for row in range(table.rowCount()):
-            address = self._get_cell(table, row, 0)
-            date_str = self._get_cell(table, row, 1)
-            time_str = self._get_cell(table, row, 2)
+            name = self._get_cell(table, row, COL_NAME)
+            address = self._get_cell(table, row, COL_ADDRESS)
+            date_str = self._get_cell(table, row, COL_DATE)
+            time_str = self._get_cell(table, row, COL_TIME)
             if address.strip():
                 result.append({
+                    "name": name.strip(),
                     "address": address.strip(),
                     "date": date_str.strip(),
                     "time_window": time_str.strip(),
@@ -524,7 +677,7 @@ class ContractTab(TabMixin, QWidget):
         table.blockSignals(True)
         table.setRowCount(0)
         if not items:
-            items = [{"address": "", "date": "", "time_window": ""}]
+            items = [{"name": "", "address": "", "date": "", "time_window": ""}]
         for item in items:
             row = table.rowCount()
             table.insertRow(row)
@@ -533,8 +686,21 @@ class ContractTab(TabMixin, QWidget):
                 item.get("address", ""),
                 item.get("date", ""),
                 item.get("time_window", ""),
+                self._point_name(item),
             )
         table.blockSignals(False)
+
+    @staticmethod
+    def _point_name(item: Dict[str, Any]) -> str:
+        """
+        Наименование салона из данных точки.
+
+        Ключ `name` — свой для вкладки; `salon_name` принимается как
+        запасной (так поле называется в справочнике салонов и в ответе
+        распознавания Логистикса).
+        """
+        name = item.get("name") or item.get("salon_name") or ""
+        return str(name).strip()
 
     # ─────────────────────────────────────────────────────────
     # Автогенерация номера
@@ -681,6 +847,7 @@ class ContractTab(TabMixin, QWidget):
         loadings = data.get("loadings")
         if not loadings and data.get("loading_address"):
             loadings = [{
+                "name": self._point_name(data),
                 "address": data.get("loading_address", ""),
                 "date": data.get("loading_date", ""),
                 "time_window": data.get("loading_time_window", ""),
@@ -694,12 +861,14 @@ class ContractTab(TabMixin, QWidget):
             legacy = []
             if data.get("unloading_address_1"):
                 legacy.append({
+                    "name": data.get("unloading_name_1", ""),
                     "address": data.get("unloading_address_1", ""),
                     "date": data.get("unloading_date", ""),
                     "time_window": data.get("unloading_time_window", ""),
                 })
             if data.get("unloading_address_2"):
                 legacy.append({
+                    "name": data.get("unloading_name_2", ""),
                     "address": data.get("unloading_address_2", ""),
                     "date": data.get("unloading_date", ""),
                     "time_window": data.get("unloading_time_window", ""),

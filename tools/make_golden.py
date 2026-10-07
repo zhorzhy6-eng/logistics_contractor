@@ -112,6 +112,8 @@ def base_payload(carrier_type: str, vat_rate: str, vat_rate_num) -> dict:
         "tractor": TRACTOR,
         "trailer": TRAILER,
         "contract": {
+            # Дата фиксирована: от неё зависят месяц, число И ГОД в шапке
+            # (FIX-2.5). Иначе эталон «поехал» бы 1 января.
             "number": "23092026-74", "date": "2026-09-23",
             "route": "Мурманск - Пятигорск", "carrier_type": carrier_type,
             "vat_rate": vat_rate, "vat_rate_num": vat_rate_num,
@@ -206,6 +208,7 @@ def formika_payload() -> dict:
             "route": "г. Воронеж - г. Москва", "carrier_type": "ООО (с НДС)",
             "vat_rate": "22%", "vat_rate_num": 22,
             "price_without_vat": 180300.0, "price_with_vat": 219966.0,
+            "payment_days": 10,
             "loading_plan_date": "2026-07-27",
             "loading_plan_time_from": "", "loading_plan_time_to": "",
         },

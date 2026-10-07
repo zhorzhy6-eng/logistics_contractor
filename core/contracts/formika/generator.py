@@ -16,6 +16,8 @@
   * точек маршрута ровно по одной (погрузка и выгрузка) — таблиц
     по погрузкам/выгрузкам нет, поэтому _insert_route_tables() пуст;
   * стоимость в документе — ОДНА сумма, уже включающая НДС;
+  * срок оплаты берётся из поля UI «Срок оплаты (дней)»: бланк печатает
+    «в течение {{payment_days}} ({{payment_days_words}}) банковских дней»;
   * нет реквизитов сторон, банковских полей и блока НДС по ставке.
 
 Логгер остаётся «core.contract_generator»: тесты и UI ловят сообщения
@@ -337,11 +339,17 @@ class FormikaGenerator(BaseContractGenerator):
 
     def _fill_cost(self, replacements: Dict[str, str], contract: Dict[str, Any]) -> None:
         """
-        Стоимость: одна сумма, УЖЕ ВКЛЮЧАЮЩАЯ НДС, и ставка.
+        Стоимость: одна сумма, УЖЕ ВКЛЮЧАЮЩАЯ НДС, ставка и срок оплаты.
 
         В образце Формики «Стоимость перевозки составляет: 75 000,00 руб.
         (семьдесят пять тысяч рублей 00 копеек), включая НДС 22%» — то есть
         в бланк идёт сумма с НДС, а не ставка без НДС, как в перевозке.
+
+        Срок оплаты (п. «Порядок оплаты»): число банковских дней из поля UI
+        и то же число прописью в родительном падеже — «45 (сорока пяти)».
+        Пока в бланке стояла константа «3 (трех)», поле вкладки на документ
+        не влияло; теперь незаданный срок печатается пустым местом, и о нём
+        скажет валидатор — число генератор не выдумывает.
         """
         vat_rate_num, vat_rate_text = self._resolve_vat(contract)
         total = self._total_with_vat(contract, vat_rate_num)
@@ -350,8 +358,14 @@ class FormikaGenerator(BaseContractGenerator):
         replacements["sum_total_words"] = amount_to_words(total)
         replacements["vat_rate"] = vat_rate_text
 
+        replacements["payment_days"] = str(contract.get("payment_days") or "")
+        replacements["payment_days_words"] = self._days_to_words_genitive(
+            contract.get("payment_days")
+        )
+
         logger.info(
-            f"Формика: сумма с НДС={total:.2f}, НДС={vat_rate_text}"
+            f"Формика: сумма с НДС={total:.2f}, НДС={vat_rate_text}, "
+            f"срок оплаты (дней)={replacements['payment_days'] or '—'}"
         )
 
     # ─────────────────────────────────────────────────────────

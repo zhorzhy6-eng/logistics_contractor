@@ -15,6 +15,9 @@
     сумма, адреса) и нет незакрытых «{{»;
   * оформление повторяет образец: A4, те же поля, Times New Roman,
     заголовок 18 pt полужирный по центру;
+  * п. «Порядок оплаты» печатает срок оплаты плейсхолдерами, а не
+    константой «3 (трех) банковских дней» (шаг FIX-2.4);
+  * бланк закреплён по SHA256 (TEMPLATE_SHA256);
   * образец-источник не изменён (сверка по SHA256);
   * docxtpl рендерит шаблон без остатка плейсхолдеров.
 
@@ -35,6 +38,13 @@ SAMPLE_NAME = "Заявка_ТЛ_447 Формика_Технологистика
 
 #: SHA256 образца на момент создания шаблона (ЭТАП 3.1.A.1).
 SAMPLE_SHA256 = "d5441240c8cdaad730a039ae07c7673c6c1fc72fbc4a5b68a4dd6080264e85b8"
+
+#: SHA256 собранного бланка (обновлён на шаге FIX-2.4: п. «Порядок оплаты»
+#: печатает {{payment_days}} + {{payment_days_words}} вместо константы
+#: «3 (трех) банковских дней»).
+#: Если тест упал после правки tools/make_formika_template.py — пересобери
+#: бланк (python tools/make_formika_template.py) и обнови константу.
+TEMPLATE_SHA256 = "3436cffee2e443c561f67cc3d2dba8d0db2d1c5c91ad220a75ad2bb194c85345"
 
 #: Заголовки таблицы груза — по ним таблица ищется в документе
 #: (индекс таблицы не используем: в бланке их две).
@@ -74,6 +84,8 @@ REQUIRED_PLACEHOLDERS = (
     "sum_total",
     "sum_total_words",
     "vat_rate",
+    "payment_days",
+    "payment_days_words",
 )
 
 #: Данные образца, которых в бланке быть не должно.
@@ -269,6 +281,36 @@ def test_cargo_header_is_bold_and_centered(template_doc):
         assert all(run.bold for run in paragraph.runs), "шапка не полужирная"
 
 
+def test_payment_clause_uses_placeholders_not_constant(template_doc):
+    """
+    П. 4 «Порядок оплаты» — плейсхолдеры, а не константа «3 (трех)».
+
+    Формулировка та же, что в перевозке (п. 4.4) и в аренде ТС (п. 4.5):
+    цифры, затем прописью в скобках, затем «банковских дней». Срок оплаты
+    задаётся на вкладке «Стоимость», поэтому числа в бланке быть не должно.
+    """
+    line = next(
+        p.text for p in template_doc.paragraphs if p.text.startswith("Порядок оплаты:")
+    )
+
+    assert line.startswith(
+        "Порядок оплаты: в течение {{payment_days}} "
+        "({{payment_days_words}}) банковских дней после получения"
+    )
+    assert "3 (трех)" not in line
+
+
+def test_payment_placeholders_are_single_run(template_doc):
+    """Оба плейсхолдера обязаны лежать целиком в одном run (иначе docxtpl молчит)."""
+    paragraph = next(
+        p for p in template_doc.paragraphs if p.text.startswith("Порядок оплаты:")
+    )
+    runs = [run.text for run in paragraph.runs]
+
+    assert any("{{payment_days}}" in text for text in runs)
+    assert any("{{payment_days_words}}" in text for text in runs)
+
+
 # ─────────────────────────────────────────────────────────────
 # Отсутствие данных образца
 # ─────────────────────────────────────────────────────────────
@@ -344,6 +386,22 @@ def test_sample_document_untouched(templates_dir):
     assert digest == SAMPLE_SHA256, (
         "образец Формики изменён: "
         f"ожидался {SAMPLE_SHA256}, получен {digest}"
+    )
+
+
+def test_template_sha256_unchanged(template_path):
+    """
+    Бланк закреплён по SHA256 (шаг FIX-2.4).
+
+    Тест ловит ЛЮБУЮ правку templates/shablon_formika.docx, сделанную в
+    обход сборщика. Если бланк пересобран осознанно — сначала
+    python tools/make_formika_template.py, затем обнови TEMPLATE_SHA256.
+    """
+    digest = hashlib.sha256(template_path.read_bytes()).hexdigest()
+    assert digest == TEMPLATE_SHA256, (
+        "бланк Формики изменился: "
+        f"ожидался {TEMPLATE_SHA256}, получен {digest}. "
+        "Пересобери его сборщиком и обнови TEMPLATE_SHA256."
     )
 
 
