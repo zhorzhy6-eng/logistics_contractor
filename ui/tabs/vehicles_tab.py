@@ -1,19 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Вкладка «Перевозимые автомобили».
-Таблица с колонками:
-  - VIN-код
-  - Марка/Модель
-  - Госномер
-  - Год выпуска (по умолчанию — текущий год)
-  - Цвет
-  - Тип ТС
-  - Погрузка  (выпадающий список)
-  - Выгрузка (выпадающий список)
+Вкладка «Перевозимые автомобили» (Экспедиторство).
 
-Колонки можно перетаскивать за заголовки (кроме фиксированных).
-Ширина колонок настраивается вручную.
+Таблица машин с колонками:
+  - VIN-код            (обязательная)
+  - Марка/Модель       (обязательная)
+  - Тип ТС             (обязательная)
+  - Погрузка           (выпадающий список точек маршрута)
+  - Выгрузка           (выпадающий список точек маршрута)
+  - Госномер, Год выпуска, Цвет — необязательные: элементы справочной
+    карточки машины, в бланк договора перевозки они не печатаются
+    (см. `ui/widgets/columns.py::VEHICLE_COLUMNS`).
+
+ШАГ FIX-6 (часть B):
+  * колонки «Госномер», «Цвет» и «Год выпуска» убраны из таблицы
+    по умолчанию — оператор их не заполнял, а дефолт «текущий год»
+    вводил в заблуждение;
+  * состав колонок настраивается: правый клик по шапке → «Какие колонки
+    показывать» (галочки), выбор сохраняется в QSettings;
+  * ширины: VIN 180, Марка 180, Тип ТС 140, Погрузка 250, Выгрузка 350 —
+    все колонки тянутся мышью, лишнее уходит в горизонтальную прокрутку;
+  * подсказка показывает полный текст ячейки.
+
+Скрытая колонка НЕ теряет данные: значения лежат в `self._store`
+(по строке таблицы) и читаются `get_data()` независимо от того, видна
+колонка или нет. Показать колонку обратно — тем же меню.
 
 Списки точек маршрута в колонках «Погрузка» / «Выгрузка» строятся из данных
 вкладки «Условия договора»: если у точки есть наименование салона
@@ -21,8 +33,7 @@
 """
 
 import logging
-from datetime import datetime
-from typing import Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
@@ -33,6 +44,15 @@ from PyQt5.QtCore import pyqtSignal
 
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
+from ui.widgets.columns import (
+    FIELD_BRAND, FIELD_COLOR, FIELD_LOADING, FIELD_PLATE, FIELD_TYPE,
+    FIELD_UNLOADING, FIELD_VIN, FIELD_YEAR,
+    VEHICLE_COLUMNS,
+)
+from ui.widgets.table_helpers import (
+    MODE_FIXED, install_column_settings_menu, install_tooltip_on_table,
+    setup_keyed_table,
+)
 from ui import theme
 
 logger = logging.getLogger("ui.tabs.vehicles_tab")
@@ -40,10 +60,65 @@ logger = logging.getLogger("ui.tabs.vehicles_tab")
 # Значение «не привязано» — попадает во все точки
 NO_POINT = "— (все)"
 
+#: Типы ТС для выпадающего списка колонки «Тип ТС».
+VEHICLE_TYPES = ["Легковой автомобиль", "Тягач", "Прицеп", "Фургон", "Автобус"]
 
-def _current_year() -> int:
-    """Возвращает текущий год. Используется как дефолт для поля 'Год выпуска'."""
-    return datetime.now().year
+#: Ключ QSettings: состав колонок и раскладка ширин этой таблицы.
+COLUMNS_STORAGE_KEY = "ui/vehicles/columns"
+WIDTHS_STORAGE_KEY = "ui/vehicles/widths"
+
+#: Ширины колонок по умолчанию (ШАГ FIX-6, часть B2).
+COLUMN_WIDTHS: Dict[str, int] = {
+    FIELD_VIN: 180,
+    FIELD_BRAND: 180,
+    FIELD_TYPE: 140,
+    FIELD_LOADING: 250,
+    FIELD_UNLOADING: 350,
+    FIELD_PLATE: 140,
+    FIELD_YEAR: 100,
+    FIELD_COLOR: 120,
+}
+
+#: Нижние границы: уже этого колонка не сжимается (шапка не «схлопывается»).
+COLUMN_MINIMUMS: Dict[str, int] = {
+    FIELD_VIN: 120,
+    FIELD_BRAND: 140,
+    FIELD_TYPE: 110,
+    FIELD_LOADING: 160,
+    FIELD_UNLOADING: 200,
+    FIELD_PLATE: 100,
+    FIELD_YEAR: 80,
+    FIELD_COLOR: 90,
+}
+
+
+class _NoDefaultSpin(QSpinBox):
+    """
+    Поле года выпуска без «дефолтного» значения.
+
+    Год не подставляется сам: пустое поле печатает прочерк
+    (`setSpecialValueText("—")`), а не текущий год. Раньше вкладка ставила
+    текущий год всем машинам — в договоре это выглядело как заполненное
+    поле, которого оператор не вводил.
+    """
+
+    def __init__(self, year: Any = None):
+        super().__init__()
+        self.setRange(0, 2100)
+        self.setSpecialValueText("—")
+        self.set_year(year)
+
+    def set_year(self, year: Any) -> None:
+        """Ставит год; пустое или неразбираемое значение — прочерк."""
+        try:
+            value = int(year or 0)
+        except (TypeError, ValueError):
+            value = 0
+        self.setValue(value if 0 <= value <= 2100 else 0)
+
+    def year(self) -> int:
+        """Год числом; 0 — «не указан»."""
+        return int(self.value())
 
 
 class VehiclesTab(TabMixin, QWidget):
@@ -57,26 +132,35 @@ class VehiclesTab(TabMixin, QWidget):
     create_contract_requested = pyqtSignal()
     clear_requested = pyqtSignal()
 
-    # Колонки таблицы
+    #: Описание колонок: ключ, заголовок, обязательность (ШАГ FIX-6, часть B3).
+    #: Номера колонок НЕ меняются при настройке состава — колонки прячутся,
+    #: а не удаляются (иначе съехали бы делегаты и сохранённая раскладка).
+    COLUMN_SPECS = VEHICLE_COLUMNS
+
+    # Колонки таблицы — номера внутренние, стабильные.
     COL_VIN = 0
     COL_BRAND = 1
-    COL_PLATE = 2
-    COL_YEAR = 3
-    COL_COLOR = 4
-    COL_TYPE = 5
-    COL_LOADING = 6
-    COL_UNLOADING = 7
+    COL_TYPE = 2
+    COL_LOADING = 3
+    COL_UNLOADING = 4
+    COL_PLATE = 5
+    COL_YEAR = 6
+    COL_COLOR = 7
 
-    COLUMNS = [
-        "VIN-код",
-        "Марка/Модель",
-        "Госномер",
-        "Год выпуска",
-        "Цвет",
-        "Тип ТС",
-        "Погрузка",
-        "Выгрузка",
-    ]
+    #: Заголовки по номерам колонок.
+    COLUMNS = [spec.title for spec in VEHICLE_COLUMNS]
+
+    #: Номер колонки по ключу поля (для чтения/записи ячеек).
+    COLUMN_INDEX: Dict[str, int] = {
+        FIELD_VIN: COL_VIN,
+        FIELD_BRAND: COL_BRAND,
+        FIELD_TYPE: COL_TYPE,
+        FIELD_LOADING: COL_LOADING,
+        FIELD_UNLOADING: COL_UNLOADING,
+        FIELD_PLATE: COL_PLATE,
+        FIELD_YEAR: COL_YEAR,
+        FIELD_COLOR: COL_COLOR,
+    }
 
     def __init__(self):
         super().__init__()
@@ -114,29 +198,11 @@ class VehiclesTab(TabMixin, QWidget):
         # ── Колонки можно двигать за заголовки ──
         header.setSectionsMovable(True)
 
-        # ── Режим ширины: Interactive — пользователь может менять вручную ──
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setStretchLastSection(False)
+        # ── Значения скрытых колонок живут здесь, а не только в ячейках ──
+        # Ключ — строка таблицы; значение — словарь полей машины.
+        self._store: Dict[int, Dict[str, Any]] = {}
 
-        # ── Минимальная ширина, чтобы не «схлопывались» ──
-        header.setMinimumSectionSize(60)
-
-        # ── Начальные ширины ──
-        # VIN — по содержимому
-        header.setSectionResizeMode(self.COL_VIN, QHeaderView.ResizeToContents)
-        # Марка — 240 px (хватит для «JETOUR T2 2.0Т 8AT Премиум»)
-        self.table.setColumnWidth(self.COL_BRAND, 240)
-        # Госномер — по содержимому
-        header.setSectionResizeMode(self.COL_PLATE, QHeaderView.ResizeToContents)
-        # Год — фиксированный, компактный
-        self.table.setColumnWidth(self.COL_YEAR, 90)
-        # Цвет — 100 px
-        self.table.setColumnWidth(self.COL_COLOR, 100)
-        # Тип ТС — 160 px (для «Легковой автомобиль»)
-        self.table.setColumnWidth(self.COL_TYPE, 160)
-        # Погрузка / Выгрузка — 280 px (чтобы видеть адрес)
-        self.table.setColumnWidth(self.COL_LOADING, 280)
-        self.table.setColumnWidth(self.COL_UNLOADING, 280)
+        self._setup_columns()
 
         self.table.setEditTriggers(
             QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed
@@ -152,7 +218,135 @@ class VehiclesTab(TabMixin, QWidget):
         self._tab_actions = self._build_tab_actions()
         layout.addWidget(self._tab_actions)
 
-        logger.debug("VehiclesTab инициализирована")
+        logger.debug(
+            "VehiclesTab инициализирована: колонок %s, колонок по умолчанию %s",
+            len(self.COLUMNS), len(self.COLUMN_SPECS),
+        )
+
+    # ─────────────────────────────────────────────────────────
+    # Настройка таблицы: ширины, подсказки, состав колонок
+    # ─────────────────────────────────────────────────────────
+
+    def _setup_columns(self) -> None:
+        """
+        Ширины, подсказки и меню состава колонок (ШАГ FIX-6, часть B).
+
+        Все колонки — Interactive (оператор тянет границы мышью), ширины
+        заданы по умолчанию, лишнее уходит в горизонтальную прокрутку
+        (политику прокрутки Qt включает сам, когда сумма ширин больше
+        ширины таблицы). Раскладка и состав колонок сохраняются в QSettings.
+        """
+        setup_keyed_table(
+            self.table,
+            [(spec.key, MODE_FIXED, COLUMN_WIDTHS.get(spec.key, 120))
+             for spec in self.COLUMN_SPECS],
+            column_index_by_key=self.COLUMN_INDEX,
+            storage_key=WIDTHS_STORAGE_KEY,
+            minimums=COLUMN_MINIMUMS,
+        )
+
+        install_tooltip_on_table(self.table)
+        install_column_settings_menu(
+            self.table,
+            self.COLUMN_SPECS,
+            storage_key=COLUMNS_STORAGE_KEY,
+            on_changed=self._reapply_column_widths,
+        )
+
+    def _reapply_column_widths(self) -> None:
+        """
+        Возвращает ширины после смены состава колонок.
+
+        Показанная обратно колонка могла остаться с нулевой шириной (её
+        ни разу не показывали) — доводим до значения по умолчанию, если
+        сохранённой раскладки для неё нет.
+        """
+        header = self.table.horizontalHeader()
+        for key, index in self.COLUMN_INDEX.items():
+            if self.table.isColumnHidden(index):
+                continue
+            if header.sectionSize(index) < COLUMN_MINIMUMS.get(key, 80):
+                header.resizeSection(index, COLUMN_WIDTHS.get(key, 120))
+
+    # ─────────────────────────────────────────────────────────
+    # Значения строки: ячейка + хранилище скрытых колонок
+    # ─────────────────────────────────────────────────────────
+
+    def _cell_text(self, row: int, field: str) -> str:
+        """
+        Текст ячейки по КЛЮЧУ поля: работает и для скрытой колонки.
+
+        Скрытая колонка остаётся в модели — `item()` её отдаёт как обычно.
+        Если ячейки нет вовсе (строка создана до появления колонки),
+        значение берётся из хранилища строки: данные не теряются.
+        """
+        index = self.COLUMN_INDEX.get(field)
+        if index is None:
+            return ""
+
+        item = self.table.item(row, index)
+        if item is not None:
+            return item.text().strip()
+
+        stored = self._store.get(row, {}).get(field)
+        return "" if stored is None else str(stored).strip()
+
+    def _combo_value(self, row: int, field: str) -> str:
+        """Значение выпадающего списка по ключу поля (или пусто)."""
+        index = self.COLUMN_INDEX.get(field)
+        if index is None:
+            return ""
+
+        widget = self.table.cellWidget(row, index)
+        if isinstance(widget, QComboBox):
+            return widget.currentText()
+        return ""
+
+    def _point_index(self, row: int, field: str) -> int:
+        """Индекс выбранной точки (1..N) или 0, если «— (все)»."""
+        index = self.COLUMN_INDEX.get(field)
+        if index is None:
+            return 0
+
+        combo = self.table.cellWidget(row, index)
+        if not isinstance(combo, QComboBox):
+            return 0
+
+        return combo.currentIndex()
+
+    def _year_value(self, row: int) -> int:
+        """Год выпуска числом; 0 — «не указан» (пустое поле)."""
+        spin = self.table.cellWidget(row, self.COL_YEAR)
+        if isinstance(spin, _NoDefaultSpin):
+            return spin.year()
+        return 0
+
+    def _remember_row(self, row: int) -> None:
+        """
+        Складывает значения строки в хранилище.
+
+        Нужно перед удалением строки и при перерисовке: если колонку
+        прячут, значения её ячеек всё равно должны читаться `get_data()`.
+        """
+        values: Dict[str, Any] = {}
+        for field, index in self.COLUMN_INDEX.items():
+            widget = self.table.cellWidget(row, index)
+            if isinstance(widget, QComboBox):
+                values[field] = widget.currentText()
+            elif isinstance(widget, _NoDefaultSpin):
+                values[field] = widget.year()
+            else:
+                item = self.table.item(row, index)
+                values[field] = item.text().strip() if item is not None else ""
+        self._store[row] = values
+
+    def _drop_row_memory(self, row: int) -> None:
+        """Сдвигает хранилище строк после удаления строки `row`."""
+        self._store = {
+            (key - 1 if key > row else key): value
+            for key, value in self._store.items()
+            if key != row
+        }
 
     # ─────────────────────────────────────────────────────────
     # Синхронизация списков точек с contract_tab
@@ -243,21 +437,76 @@ class VehiclesTab(TabMixin, QWidget):
         combo.addItems(items)
         return combo
 
-    def _make_year_spin(self, year: int = None) -> QSpinBox:
+    @staticmethod
+    def _make_type_combo(vehicle_type: str = "") -> QComboBox:
         """
-        Создаёт QSpinBox для года выпуска.
-        Дефолт — текущий год.
+        Создаёт список типов ТС.
+
+        Первый пункт — пустой: у новой строки тип НЕ выбран. Раньше здесь
+        молча стоял «Легковой автомобиль», то есть тип попадал в данные
+        без участия оператора (ШАГ FIX-6, часть C).
         """
-        spin = QSpinBox()
-        spin.setRange(1950, _current_year() + 1)
-        if year is None or year <= 0:
-            spin.setValue(_current_year())
-        else:
-            try:
-                spin.setValue(int(year))
-            except (ValueError, TypeError):
-                spin.setValue(_current_year())
-        return spin
+        combo = QComboBox()
+        combo.addItem("")
+        combo.addItems(VEHICLE_TYPES)
+        if not vehicle_type:
+            return combo
+
+        index = combo.findText(vehicle_type)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        return combo
+
+    def _init_row(self, row: int, vehicle: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Заполняет строку таблицы значениями машины.
+
+        Год выпуска НЕ подставляется по умолчанию (ШАГ FIX-6, часть C):
+        не пришёл в данных — поле пустое, в нём прочерк.
+        """
+        vehicle = vehicle or {}
+
+        for field in (FIELD_VIN, FIELD_BRAND, FIELD_PLATE, FIELD_COLOR):
+            index = self.COLUMN_INDEX[field]
+            item = QTableWidgetItem(self._as_text(vehicle.get(field)))
+            self.table.setItem(row, index, item)
+
+        self.table.setCellWidget(
+            row, self.COL_TYPE,
+            self._make_type_combo(self._as_text(vehicle.get(FIELD_TYPE))),
+        )
+        self.table.setCellWidget(
+            row, self.COL_YEAR, _NoDefaultSpin(vehicle.get(FIELD_YEAR))
+        )
+
+        # ── Погрузка / Выгрузка ──
+        loading_combo = self._make_combo(self.COL_LOADING)
+        unloading_combo = self._make_combo(self.COL_UNLOADING)
+
+        loading_index = vehicle.get(FIELD_LOADING, 0) or 0
+        unloading_index = vehicle.get(FIELD_UNLOADING, 0) or 0
+
+        if 0 <= loading_index < loading_combo.count():
+            loading_combo.setCurrentIndex(loading_index)
+        if 0 <= unloading_index < unloading_combo.count():
+            unloading_combo.setCurrentIndex(unloading_index)
+
+        self.table.setCellWidget(row, self.COL_LOADING, loading_combo)
+        self.table.setCellWidget(row, self.COL_UNLOADING, unloading_combo)
+
+        self._remember_row(row)
+
+    @staticmethod
+    def _as_text(value: Any) -> str:
+        """
+        Значение ячейки строкой.
+
+        Пустое значение (None, 0, отсутствующий ключ) — пустая строка:
+        `0.0 == falsy`, поэтому проверка идёт через `is None` (AGENTS.md § 5.2).
+        """
+        if value is None:
+            return ""
+        return str(value).strip()
 
     # ─────────────────────────────────────────────────────────
     # Добавление / удаление
@@ -267,26 +516,9 @@ class VehiclesTab(TabMixin, QWidget):
         """Добавляет новую пустую строку в таблицу."""
         row = self.table.rowCount()
         self.table.insertRow(row)
+        self._init_row(row)
 
-        self.table.setItem(row, self.COL_VIN, QTableWidgetItem(""))
-        self.table.setItem(row, self.COL_BRAND, QTableWidgetItem(""))
-        self.table.setItem(row, self.COL_PLATE, QTableWidgetItem(""))
-
-        # Год — текущий
-        year_spin = self._make_year_spin()
-        self.table.setCellWidget(row, self.COL_YEAR, year_spin)
-
-        self.table.setItem(row, self.COL_COLOR, QTableWidgetItem(""))
-
-        type_combo = QComboBox()
-        type_combo.addItems(["Легковой автомобиль", "Тягач", "Прицеп", "Фургон", "Автобус"])
-        self.table.setCellWidget(row, self.COL_TYPE, type_combo)
-
-        # ── Погрузка / Выгрузка ──
-        self.table.setCellWidget(row, self.COL_LOADING, self._make_combo(self.COL_LOADING))
-        self.table.setCellWidget(row, self.COL_UNLOADING, self._make_combo(self.COL_UNLOADING))
-
-        logger.debug(f"Добавлено ТС: строка {row}, год={_current_year()}")
+        logger.debug(f"Добавлено ТС: строка {row}")
 
     def _on_remove_vehicle(self) -> None:
         """Удаляет выбранную строку."""
@@ -306,6 +538,15 @@ class VehiclesTab(TabMixin, QWidget):
 
         if reply == QMessageBox.Yes:
             self.table.removeRow(current_row)
+            self._drop_row_memory(current_row)
+            self._refresh_all_combos(
+                self.COL_LOADING,
+                self._build_point_items(self._loadings_points, "Погрузка"),
+            )
+            self._refresh_all_combos(
+                self.COL_UNLOADING,
+                self._build_point_items(self._unloadings_points, "Выгрузка"),
+            )
             logger.info(f"ТС удалено: строка {current_row}")
 
     # ─────────────────────────────────────────────────────────
@@ -313,87 +554,68 @@ class VehiclesTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
 
     def get_data(self) -> List[Dict[str, Any]]:
-        """Собирает данные ТС из таблицы."""
+        """
+        Собирает данные ТС из таблицы.
+
+        Читаются ВСЕ поля строки, включая скрытые колонки: состав колонок —
+        это то, что оператор видит, а не то, что попадает в данные. Год и
+        цвет не подставляются по умолчанию: нет значения — пусто.
+        """
         vehicles = []
         for row in range(self.table.rowCount()):
+            self._remember_row(row)
+
             vehicle = {
-                "vin": self._get_cell_text(row, self.COL_VIN),
-                "brand_model": self._get_cell_text(row, self.COL_BRAND),
-                "plate_number": self._get_cell_text(row, self.COL_PLATE),
-                "year": self._get_spin_value(row, self.COL_YEAR),
-                "color": self._get_cell_text(row, self.COL_COLOR),
-                "vehicle_type": self._get_combo_value(row, self.COL_TYPE),
-                "loading_index": self._get_point_index(row, self.COL_LOADING),
-                "unloading_index": self._get_point_index(row, self.COL_UNLOADING),
+                FIELD_VIN: self._cell_text(row, FIELD_VIN),
+                FIELD_BRAND: self._cell_text(row, FIELD_BRAND),
+                FIELD_PLATE: self._cell_text(row, FIELD_PLATE),
+                FIELD_YEAR: self._year_value(row),
+                FIELD_COLOR: self._cell_text(row, FIELD_COLOR),
+                FIELD_TYPE: self._combo_value(row, FIELD_TYPE),
+                FIELD_LOADING: self._point_index(row, FIELD_LOADING),
+                FIELD_UNLOADING: self._point_index(row, FIELD_UNLOADING),
             }
 
-            if any([vehicle["vin"], vehicle["brand_model"], vehicle["plate_number"]]):
+            if self._is_filled(vehicle):
                 vehicles.append(vehicle)
 
         return vehicles
 
-    def _get_point_index(self, row: int, column: int) -> int:
-        """Возвращает индекс выбранной точки (1..N) или 0, если «— (все)»."""
-        combo = self.table.cellWidget(row, column)
-        if not isinstance(combo, QComboBox):
-            return 0
+    @staticmethod
+    def _is_filled(vehicle: Dict[str, Any]) -> bool:
+        """
+        Строка таблицы считается заполненной, если в ней есть хоть что-то.
 
-        return combo.currentIndex()
+        Раньше проверялись только VIN, марка и госномер: строка с одним
+        годом или типом ТС молча не попадала в данные.
+        """
+        for field in (FIELD_VIN, FIELD_BRAND, FIELD_PLATE, FIELD_COLOR, FIELD_TYPE):
+            if str(vehicle.get(field) or "").strip():
+                return True
+        return bool(vehicle.get(FIELD_YEAR))
 
     # ─────────────────────────────────────────────────────────
     # Заполнение таблицы
     # ─────────────────────────────────────────────────────────
 
-    def fill_data(self, vehicles: List[Dict[str, Any]], *, append=False, imported=False) -> None:
-        """Заполняет таблицу данными."""
+    def fill_data(self, vehicles: List[Dict[str, Any]], *, append=False,
+                  imported=False) -> None:
+        """
+        Заполняет таблицу данными.
+
+        Незаданные поля остаются пустыми: подстановки «текущий год» и
+        «Легковой автомобиль» убраны (ШАГ FIX-6, часть C) — они выглядели
+        как данные, введённые оператором. Параметр `imported` оставлен для
+        совместимости: импорт документов и так приходит со своими значениями.
+        """
         if not append:
             self.table.setRowCount(0)
+            self._store.clear()
 
         for vehicle in vehicles:
             row = self.table.rowCount()
             self.table.insertRow(row)
-
-            self.table.setItem(row, self.COL_VIN, QTableWidgetItem(str(vehicle.get("vin", ""))))
-            self.table.setItem(row, self.COL_BRAND, QTableWidgetItem(str(vehicle.get("brand_model", ""))))
-            self.table.setItem(row, self.COL_PLATE, QTableWidgetItem(str(vehicle.get("plate_number", ""))))
-
-            # ── Год: из данных или текущий ──
-            year_value = vehicle.get("year", 0)
-            if imported:
-                year_value = int(year_value or 0)
-            year_spin = self._make_year_spin(year_value)
-            if imported:
-                year_spin.setRange(0, 2100)
-                year_spin.setSpecialValueText("—")
-                year_spin.setValue(int(year_value or 0))
-            self.table.setCellWidget(row, self.COL_YEAR, year_spin)
-
-            self.table.setItem(row, self.COL_COLOR, QTableWidgetItem(str(vehicle.get("color", ""))))
-
-            type_combo = QComboBox()
-            type_combo.addItems(["Легковой автомобиль", "Тягач", "Прицеп", "Фургон", "Автобус"])
-            if imported:
-                type_combo.insertItem(0, "")
-            vehicle_type = vehicle.get("vehicle_type", "" if imported else "Легковой автомобиль")
-            idx = type_combo.findText(vehicle_type)
-            if idx >= 0:
-                type_combo.setCurrentIndex(idx)
-            self.table.setCellWidget(row, self.COL_TYPE, type_combo)
-
-            # ── Погрузка / Выгрузка ──
-            loading_combo = self._make_combo(self.COL_LOADING)
-            unloading_combo = self._make_combo(self.COL_UNLOADING)
-
-            loading_index = vehicle.get("loading_index", 0) or 0
-            unloading_index = vehicle.get("unloading_index", 0) or 0
-
-            if 0 <= loading_index < loading_combo.count():
-                loading_combo.setCurrentIndex(loading_index)
-            if 0 <= unloading_index < unloading_combo.count():
-                unloading_combo.setCurrentIndex(unloading_index)
-
-            self.table.setCellWidget(row, self.COL_LOADING, loading_combo)
-            self.table.setCellWidget(row, self.COL_UNLOADING, unloading_combo)
+            self._init_row(row, vehicle)
 
         logger.info(f"Таблица ТС заполнена: {len(vehicles)} записей")
 
@@ -404,6 +626,7 @@ class VehiclesTab(TabMixin, QWidget):
     def clear(self) -> None:
         """Очищает таблицу."""
         self.table.setRowCount(0)
+        self._store.clear()
         self.recognition_panel.clear()
         logger.debug("Таблица ТС очищена")
 
@@ -412,19 +635,69 @@ class VehiclesTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
 
     def _get_cell_text(self, row: int, col: int) -> str:
+        """Текст ячейки по НОМЕРУ колонки (совместимость с импортом документов)."""
         item = self.table.item(row, col)
         if item:
             return item.text().strip()
         return ""
 
     def _get_spin_value(self, row: int, col: int) -> int:
+        """Значение числового поля по НОМЕРУ колонки (год выпуска)."""
         widget = self.table.cellWidget(row, col)
+        if isinstance(widget, _NoDefaultSpin):
+            return widget.year()
         if isinstance(widget, QSpinBox):
             return widget.value()
         return 0
 
     def _get_combo_value(self, row: int, col: int) -> str:
+        """Значение выпадающего списка по НОМЕРУ колонки."""
         widget = self.table.cellWidget(row, col)
         if isinstance(widget, QComboBox):
             return widget.currentText()
         return ""
+
+    def get_field(self, row: int, field: str) -> Any:
+        """
+        Значение поля строки по КЛЮЧУ — для импорта документов.
+
+        Работает и когда колонка скрыта: значение лежит в модели/хранилище.
+        Год отдаётся числом (0 — не указан), остальные поля — строкой.
+        """
+        if field == FIELD_YEAR:
+            return self._year_value(row)
+        if field in (FIELD_TYPE, FIELD_LOADING, FIELD_UNLOADING):
+            return self._combo_value(row, field)
+        return self._cell_text(row, field)
+
+    def set_field(self, row: int, field: str, value: Any) -> None:
+        """
+        Ставит значение поля строки по КЛЮЧУ — для импорта документов.
+
+        Колонка может быть скрыта: ячейка всё равно обновляется, поэтому
+        подтверждённое в импорте значение не теряется.
+        """
+        index = self.COLUMN_INDEX.get(field)
+        if index is None:
+            return
+
+        if field == FIELD_YEAR:
+            spin = self.table.cellWidget(row, index)
+            if isinstance(spin, _NoDefaultSpin):
+                spin.set_year(value)
+            return
+
+        if field in (FIELD_TYPE, FIELD_LOADING, FIELD_UNLOADING):
+            combo = self.table.cellWidget(row, index)
+            if isinstance(combo, QComboBox):
+                text = self._as_text(value)
+                found = combo.findText(text)
+                if found >= 0:
+                    combo.setCurrentIndex(found)
+            return
+
+        item = self.table.item(row, index)
+        if item is None:
+            item = QTableWidgetItem("")
+            self.table.setItem(row, index, item)
+        item.setText(self._as_text(value))

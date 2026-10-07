@@ -337,7 +337,7 @@ def test_import_cancelled_does_nothing(
 
 
 # ─────────────────────────────────────────────────────────────
-# Ширины колонок, подсказки и раскладка (ШАГ FIX-5, часть D)
+# Ширины колонок, подсказки и раскладка (ШАГ FIX-5, уточнено в FIX-6/D)
 # ─────────────────────────────────────────────────────────────
 
 #: Длинный адрес салона: в колонке не помещается — нужен для подсказки.
@@ -346,92 +346,97 @@ LONG_SALON_ADDRESS = (
     "Курьяновского бульвара, пост охраны № 2"
 )
 
-
-def test_name_column_is_stretch(qt_app, isolated_db):
-    """Наименование салона — главная колонка: тянется по ширине таблицы."""
-    dialog = AddressBookDialog("unloading")
-
-    assert dialog.table.horizontalHeader().sectionResizeMode(
-        COL_SALON_NAME
-    ) == QHeaderView.Stretch
-
-
-def test_address_column_is_stretch(qt_app, isolated_db):
-    """Адрес салона тоже тянется: он длиннее всех остальных значений."""
-    dialog = AddressBookDialog("unloading")
-
-    assert dialog.table.horizontalHeader().sectionResizeMode(
-        COL_ADDRESS
-    ) == QHeaderView.Stretch
+#: Ожидаемые ширины колонок (ШАГ FIX-6, часть D).
+EXPECTED_WIDTHS = {
+    COL_ID: 60,
+    COL_CODE: 100,
+    COL_SALON_NAME: 220,
+    COL_SALON_CITY: 140,
+    COL_ADDRESS: 380,
+    COL_USAGE: 90,
+}
 
 
-def test_code_column_is_contents(qt_app, isolated_db):
-    """Код салона (JMR-Axxx) — короткий и постоянной длины: по содержимому."""
-    dialog = AddressBookDialog("unloading")
-
-    assert dialog.table.horizontalHeader().sectionResizeMode(
-        COL_CODE
-    ) == QHeaderView.ResizeToContents
-
-
-def test_id_city_and_usage_are_contents(qt_app, isolated_db):
-    """Остальные колонки — тоже по содержимому (значения короткие)."""
+def test_all_columns_interactive(qt_app, isolated_db):
+    """Все колонки тянутся мышью: ни одной Stretch / ResizeToContents."""
     dialog = AddressBookDialog("unloading")
     header = dialog.table.horizontalHeader()
 
-    for column in (COL_ID, COL_SALON_CITY, COL_USAGE):
-        assert header.sectionResizeMode(column) == QHeaderView.ResizeToContents
+    modes = {
+        column: header.sectionResizeMode(column)
+        for column in range(dialog.table.columnCount())
+    }
+
+    assert modes == {column: QHeaderView.Interactive for column in modes}, modes
+
+
+def test_column_widths_are_configured(qt_app, isolated_db):
+    """Ширины колонок — как задано: ID 60, Код 100, Адрес 380, …"""
+    dialog = AddressBookDialog("unloading")
+    header = dialog.table.horizontalHeader()
+
+    for column, expected in EXPECTED_WIDTHS.items():
+        assert header.sectionSize(column) == expected, (
+            f"колонка {column}: {header.sectionSize(column)}, ожидалось {expected}"
+        )
+
+
+def test_columns_can_be_resized(qt_app, isolated_db):
+    """Колонку можно растянуть и сжать — ниже общего минимума не пустит."""
+    dialog = AddressBookDialog("unloading")
+    header = dialog.table.horizontalHeader()
+
+    header.resizeSection(COL_ADDRESS, 520)
+    assert header.sectionSize(COL_ADDRESS) == 520
+
+    header.resizeSection(COL_ADDRESS, 10)          # ниже минимума не пустит
+    assert header.sectionSize(COL_ADDRESS) == header.minimumSectionSize()
 
 
 def test_column_minimums_are_applied(qt_app, isolated_db):
     """
     Нижние границы ширин заданы.
 
-    Общий пол (minimumSectionSize) берётся по самой узкой колонке — 150 у
-    наименования салона: ниже него Qt не даёт сжать ни одну колонку.
-    Персональный минимум адреса (250) держится только у перетаскиваемых
-    колонок (режим Interactive); здесь адрес тянется по ширине таблицы,
-    поэтому его ширина — остаток места, но не меньше общего пола.
+    Общий пол (minimumSectionSize) берётся по самой узкой колонке — 50 у
+    «ID»: ниже него Qt не даёт сжать ни одну колонку. При настройке каждая
+    колонка поднята до своего минимума (адрес — до 200), поэтому широкие
+    значения видны с самого открытия диалога.
     """
     dialog = AddressBookDialog("unloading")
     header = dialog.table.horizontalHeader()
 
-    assert header.minimumSectionSize() == COLUMN_MINIMUMS[COL_SALON_NAME] == 150
-    assert header.sectionSize(COL_SALON_NAME) >= COLUMN_MINIMUMS[COL_SALON_NAME]
-    assert header.sectionSize(COL_ADDRESS) >= header.minimumSectionSize()
+    assert header.minimumSectionSize() == min(COLUMN_MINIMUMS.values()) == 50
+
+    for column, minimum in COLUMN_MINIMUMS.items():
+        assert header.sectionSize(column) >= minimum, column
 
 
 def test_minimum_section_size_protects_columns(qt_app, isolated_db):
     """
     Уже общего минимума колонку не сжать (п. D.4 ТЗ).
 
-    Автоподбор ширины по двойному клику по границе заголовка Qt делает для
-    колонок с режимом Interactive; у справочника таких нет — наименование и
-    адрес тянутся по ширине, остальные идут по содержимому. Поэтому руками
-    колонки справочника не растянуть, и защита от «сжатых в нитку» колонок
-    держится на минимальной ширине сечения.
+    Персональные минимумы выше общего держит настройка таблицы
+    (`setup_point_table` + `apply_minimum_widths`); при ручном перетаскивании
+    границы Qt не даёт уйти ниже общего пола — это и проверяется.
     """
     dialog = AddressBookDialog("unloading")
     header = dialog.table.horizontalHeader()
 
     for column in range(dialog.table.columnCount()):
         header.resizeSection(column, 10)
-        assert header.sectionSize(column) >= header.minimumSectionSize()
+        assert header.sectionSize(column) >= header.minimumSectionSize(), column
 
 
 def test_widths_persist_between_sessions(qt_app, isolated_db):
     """
     Раскладка колонок переживает перезапуск (QSettings).
 
-    Обе главные колонки справочника тянутся по ширине, остальные считаются
-    по содержимому (ТЗ D.1), поэтому ручная правка ширины здесь ничего не
-    меняет. Проверяется то, что для этой таблицы значимо: раскладка
-    ЗАПИСЫВАЕТСЯ и следующая сессия (новый диалог) стартует с неё же.
-    Применение сохранённой ширины к перетаскиваемой колонке проверяется
-    в tests/test_ui_table_helpers.py.
+    Колонки Interactive, поэтому сохранённая ширина применяется к новой
+    таблице как есть — проверяется на адресе.
     """
     save_address("unloading", SALON_ROW[4], salon_name=SALON_ROW[2])
     first = AddressBookDialog("unloading")
+    first.table.horizontalHeader().resizeSection(COL_ADDRESS, 460)
     first.table._widths_saver.flush()
 
     saved = stored_widths(first.table, WIDTHS_KEY)
@@ -439,6 +444,8 @@ def test_widths_persist_between_sessions(qt_app, isolated_db):
     assert first.table.property(STORAGE_KEY_PROPERTY) == WIDTHS_KEY
 
     second = AddressBookDialog("unloading")
+
+    assert second.table.horizontalHeader().sectionSize(COL_ADDRESS) == 460
     assert [
         second.table.horizontalHeader().sectionSize(column)
         for column in range(second.table.columnCount())

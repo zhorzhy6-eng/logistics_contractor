@@ -35,10 +35,19 @@ INI-файл в папке настроек пользователя (форма
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
-from PyQt5.QtCore import QObject, QSettings, QTimer
-from PyQt5.QtWidgets import QHeaderView, QTableWidget
+from PyQt5.QtCore import QObject, QPoint, QSettings, QTimer, Qt
+from PyQt5.QtWidgets import QHeaderView, QMenu, QTableWidget
+
+from ui.widgets.column_settings import (
+    ColumnSpec,
+    column_keys,
+    load_hidden,
+    make_specs,
+    resolve_selection,
+    save_hidden,
+)
 
 logger = logging.getLogger("ui.widgets.table_helpers")
 
@@ -67,8 +76,247 @@ AUTOSAVE_DELAY_MS = 500
 #: Свойство таблицы, под которым она помнит свой ключ QSettings.
 STORAGE_KEY_PROPERTY = "columnWidthsStorageKey"
 
+#: Свойство таблицы с описанием её колонок (для меню «Какие колонки показывать»).
+COLUMN_SPECS_PROPERTY = "columnSpecs"
+
+#: Свойство таблицы с ключом QSettings для состава колонок.
+COLUMN_STORAGE_KEY_PROPERTY = "columnSettingsStorageKey"
+
 #: Имя атрибута-признака «подсказки уже подключены».
 _TOOLTIPS_FLAG = "_table_tooltips_installed"
+
+#: Имя атрибута-признака «меню состава колонок подключено».
+_COLUMN_MENU_FLAG = "_table_column_menu_installed"
+
+
+def apply_minimum_widths(
+    table: QTableWidget,
+    minimums: Optional[Dict[Union[int, str], int]] = None,
+) -> None:
+    """
+    Нижние границы ширин колонок — публичная обёртка над _apply_minimums.
+
+    Нужна там, где таблица настраивается не через setup_point_table
+    (например, у «Перевозимых авто» свои режимы и ширины, а минимумы —
+    общие с остальными таблицами).
+    """
+    _apply_minimums(table, minimums)
+
+
+def install_column_settings_menu(
+    table: QTableWidget,
+    specs: Sequence[Union[ColumnSpec, Tuple[str, str], Tuple[str, str, bool]]],
+    *,
+    storage_key: str = "",
+    on_changed: Optional[Callable[[], None]] = None,
+) -> None:
+    """
+    Меню «Какие колонки показывать» по правому клику на шапке таблицы.
+
+    Как это выглядит: оператор щёлкает правой кнопкой по заголовкам —
+    открывается список колонок с галочками. Снятая галочка ПРЯЧЕТ колонку
+    (данные в ней остаются), состав сохраняется в QSettings и
+    восстанавливается при следующем открытии окна.
+
+    Обязательные колонки (`ColumnSpec.required`) в меню видны, но
+    выключены: VIN и марку скрыть нельзя — без них строка теряет смысл.
+
+    :param specs: описание колонок (см. `column_settings.make_specs`).
+    :param storage_key: ключ QSettings для состава; пусто — не сохраняется.
+    :param on_changed: что вызвать после смены состава (например, чтобы
+        пересобрать делегаты и комбобоксы скрытых колонок).
+    """
+    resolved = make_specs(specs)
+    table.setProperty(COLUMN_SPECS_PROPERTY, resolved)
+    table.setProperty(COLUMN_STORAGE_KEY_PROPERTY, storage_key)
+
+    apply_column_selection(table, load_hidden(table, storage_key, resolved))
+
+    header = table.horizontalHeader()
+    if getattr(table, _COLUMN_MENU_FLAG, False):
+        return
+
+    # Меню вешается на ШАПКУ: у таблицы политику контекстного меню занимает
+    # своё (правка ячейки, вставка), и перебивать её нельзя.
+    header.setContextMenuPolicy(Qt.CustomContextMenu)
+    header.customContextMenuRequested.connect(
+        _ColumnMenuHandler(table, on_changed).show
+    )
+    setattr(table, _COLUMN_MENU_FLAG, True)
+
+
+def apply_column_selection(table: QTableWidget, hidden: Sequence[str]) -> None:
+    """
+    Прячет и показывает колонки по списку ключей.
+
+    Колонки не удаляются: `setColumnHidden` оставляет их в модели, поэтому
+    номера колонок, делегаты и сохранённая раскладка не съезжают, а
+    `get_data()` продолжает читать значения скрытых колонок.
+    """
+    specs = table_specs(table)
+    if not specs:
+        return
+
+    positions = {spec.key: index for index, spec in enumerate(specs)}
+    hidden_set = set(hidden)
+
+    for spec in specs:
+        index = positions[spec.key]
+        # Обязательную колонку показываем всегда: снять её галочку нельзя.
+        is_hidden = spec.key in hidden_set and spec.optional
+        table.setColumnHidden(index, is_hidden)
+
+
+def apply_column_checks(table: QTableWidget, checked: Dict[str, bool]) -> None:
+    """
+    Применяет галочки меню: считает скрытые колонки и прячет их.
+
+    Галочки, которых в словаре нет, берутся по ТЕКУЩЕМУ состоянию таблицы:
+    вызов `apply_column_checks(table, {"vin": False})` меняет только VIN,
+    а не прячет заодно всё остальное. Скрыть обязательную колонку нельзя —
+    она остаётся видимой, даже если галочку сняли.
+    """
+    specs = table_specs(table)
+
+    current = {
+        spec.key: not table.isColumnHidden(index)
+        for index, spec in enumerate(specs)
+    }
+    current.update(checked)
+
+    applied = resolve_selection(
+        specs, current, [spec.key for spec in specs if spec.required]
+    )
+    apply_column_selection(table, applied)
+
+
+def visible_column_keys(table: QTableWidget) -> List[str]:
+    """Ключи видимых колонок (скрытые не входят)."""
+    return column_keys(
+        table_specs(table), visible_only=True, hidden=hidden_column_keys(table)
+    )
+
+
+def hidden_column_keys(table: QTableWidget) -> List[str]:
+    """Ключи скрытых колонок — то, что лежит в настройках."""
+    return [
+        spec.key
+        for index, spec in enumerate(table_specs(table))
+        if table.isColumnHidden(index)
+    ]
+
+
+def table_specs(table: QTableWidget) -> Tuple[ColumnSpec, ...]:
+    """Описание колонок таблицы (пусто — таблица его не описывала)."""
+    specs = table.property(COLUMN_SPECS_PROPERTY)
+    return tuple(specs) if specs else ()
+
+
+class _ColumnMenuHandler(QObject):
+    """
+    Показывает меню состава колонок и сохраняет выбор.
+
+    Отдельный объект, а не лямбда: `lambda` в `connect` запрещены
+    (цикл ссылок Python ↔ Qt, см. AGENTS.md § 5.1). Родитель — шапка
+    таблицы, поэтому объект живёт ровно столько же, сколько таблица.
+    """
+
+    def __init__(self, table: QTableWidget, on_changed: Optional[Callable[[], None]]):
+        super().__init__(table.horizontalHeader())
+        self._table = table
+        self._on_changed = on_changed
+
+    def show(self, position: QPoint) -> None:
+        """Открывает меню в точке клика по шапке."""
+        table = self._table
+        specs = table_specs(table)
+        if not specs:
+            return
+
+        menu = QMenu(table)
+        title = menu.addAction("Какие колонки показывать")
+        title.setEnabled(False)
+        menu.addSeparator()
+
+        actions = {}
+        for spec in specs:
+            index = _column_index_by_key(table, spec.key)
+            action = menu.addAction(spec.title)
+            action.setCheckable(True)
+            action.setChecked(index < 0 or not table.isColumnHidden(index))
+            if spec.required:
+                action.setEnabled(False)
+                action.setToolTip("Обязательная колонка — скрыть нельзя")
+            else:
+                actions[spec.key] = action
+
+        header = table.horizontalHeader()
+        menu.exec_(header.mapToGlobal(position))
+
+        checked = {key: action.isChecked() for key, action in actions.items()}
+        self._apply(checked)
+
+    def _apply(self, checked: Dict[str, bool]) -> None:
+        """Прячет колонки по галочкам, пишет настройки и сообщает таблице."""
+        table = self._table
+        specs = table_specs(table)
+
+        apply_column_checks(table, checked)
+        save_hidden(table, table.property(COLUMN_STORAGE_KEY_PROPERTY) or "",
+                    hidden_column_keys(table))
+
+        if self._on_changed is not None:
+            self._on_changed()
+
+        logger.info(
+            "Состав колонок изменён: видимых %s из %s",
+            len(visible_column_keys(table)), len(specs),
+        )
+
+
+def _column_index_by_key(table: QTableWidget, key: str) -> int:
+    """Номер колонки по её ключу; -1, если такой колонки в таблице нет."""
+    for index, spec in enumerate(table_specs(table)):
+        if spec.key == key:
+            return index
+    return -1
+
+
+def setup_keyed_table(
+    table: QTableWidget,
+    columns_config: Sequence[Tuple[str, str, int]],
+    *,
+    column_index_by_key: Dict[str, int],
+    storage_key: str = "",
+    minimums: Optional[Dict[str, int]] = None,
+) -> None:
+    """
+    Настраивает таблицу, у которой колонки описаны КЛЮЧАМИ, а не номерами.
+
+    «Перевозимые авто» описывают колонки ключами полей («vin», «year»):
+    те же ключи читает `get_data()`, и таблица не зависит от порядка
+    колонок. Номера при этом стабильны — колонки прячутся, а не удаляются.
+
+    :param columns_config: ``[(ключ, режим, ширина_по_умолчанию), ...]``
+        (см. `setup_point_table`).
+    :param column_index_by_key: ``{ключ: номер_колонки}`` — переводит ключ
+        описания в номер колонки таблицы.
+    :param minimums: ``{ключ: минимальная_ширина}``.
+    """
+    setup_point_table(
+        table,
+        [(column_index_by_key[column], mode, width)
+         for column, mode, width in columns_config
+         if column in column_index_by_key],
+        storage_key=storage_key,
+    )
+
+    apply_minimum_widths(
+        table,
+        {column_index_by_key[key]: width
+         for key, width in (minimums or {}).items()
+         if key in column_index_by_key},
+    )
 
 
 def setup_point_table(
@@ -202,7 +450,6 @@ def restore_column_widths(table: QTableWidget, storage_key: str) -> None:
     stored = _settings().value(storage_key)
     if not stored:
         return
-
     if not isinstance(stored, (list, tuple)):
         stored = [stored]
 
@@ -344,6 +591,7 @@ def _install_widths_autosave(table: QTableWidget, storage_key: str) -> None:
     """
     if getattr(table, "_widths_saver", None) is not None:
         return
+
     table._widths_saver = WidthsSaver(table, storage_key)
 
 
@@ -385,14 +633,25 @@ __all__ = [
     "RESIZE_MODES",
     "AUTOSAVE_DELAY_MS",
     "STORAGE_KEY_PROPERTY",
+    "COLUMN_SPECS_PROPERTY",
+    "COLUMN_STORAGE_KEY_PROPERTY",
     "SETTINGS_ORGANIZATION",
     "SETTINGS_APPLICATION",
     "WidthsSaver",
     "setup_point_table",
+    "setup_keyed_table",
     "install_tooltip_on_table",
     "apply_cell_tooltip",
     "save_column_widths",
     "restore_column_widths",
     "column_index",
     "stored_widths",
+    # Состав колонок (ШАГ FIX-6, часть B3)
+    "apply_minimum_widths",
+    "install_column_settings_menu",
+    "apply_column_selection",
+    "apply_column_checks",
+    "visible_column_keys",
+    "hidden_column_keys",
+    "table_specs",
 ]

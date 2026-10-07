@@ -6,11 +6,14 @@ from threading import Event
 from PyQt5.QtCore import Qt, QObject, QRunnable, pyqtSignal, QUrl
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QListWidget, QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QPlainTextEdit,
-    QHeaderView)
+    QFileDialog, QListWidget, QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QPlainTextEdit)
 
 from core.document_import_service import (DocumentImportService, compare_fields, SCHEMA,
     TITLES, LABELS, FieldResult, same_entity, normalized, valid_value, canonical_value)
+
+from ui.widgets.table_helpers import (
+    MODE_FIXED, install_tooltip_on_table, setup_point_table,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +58,17 @@ def form_snapshot(window):
     tab = window.vehicles_tab
     data["vehicles"] = []
     # Include partially entered and empty table rows; get_data() intentionally filters them.
+    # Поля читаются по КЛЮЧАМ (get_field), а не по номерам колонок: состав
+    # колонок настраивается, и «Госномер» с «Годом» могут быть скрыты —
+    # значения в них при этом сохраняются (ШАГ FIX-6, часть B3).
     for row in range(tab.table.rowCount()):
         data["vehicles"].append({
-            "vin": tab._get_cell_text(row, tab.COL_VIN),
-            "brand_model": tab._get_cell_text(row, tab.COL_BRAND),
-            "plate_number": tab._get_cell_text(row, tab.COL_PLATE),
-            "year": tab._get_spin_value(row, tab.COL_YEAR),
-            "color": tab._get_cell_text(row, tab.COL_COLOR),
-            "vehicle_type": tab._get_combo_value(row, tab.COL_TYPE),
+            "vin": tab.get_field(row, "vin"),
+            "brand_model": tab.get_field(row, "brand_model"),
+            "plate_number": tab.get_field(row, "plate_number"),
+            "year": tab.get_field(row, "year"),
+            "color": tab.get_field(row, "color"),
+            "vehicle_type": tab.get_field(row, "vehicle_type"),
         })
     return data
 
@@ -90,22 +96,14 @@ def apply_approved(window, changes):
                 getattr(window.trailer_tab, section + "_year").setRange(1886, 2100)
         window.trailer_tab.fill_data(sections.get("tractor", {}), sections.get("trailer", {}))
     tab = window.vehicles_tab
-    columns = {"vin": tab.COL_VIN, "brand_model": tab.COL_BRAND,
-               "plate_number": tab.COL_PLATE, "color": tab.COL_COLOR}
     for target, fields in vehicles.items():
         if isinstance(target, str):  # new group, separate from every existing vehicle
             tab.fill_data([fields], append=True, imported=True)
             continue
         for key, value in fields.items():
-            if key in columns:
-                tab.table.setItem(target, columns[key], QTableWidgetItem(value))
-            elif key == "year":
-                spin = tab.table.cellWidget(target, tab.COL_YEAR)
-                spin.setRange(0, 2100)
-                spin.setSpecialValueText("—")
-                spin.setValue(int(value))
-            elif key == "vehicle_type":
-                tab.table.cellWidget(target, tab.COL_TYPE).setCurrentText(value)
+            # Значение ставится по КЛЮЧУ поля: скрытая колонка тоже
+            # обновляется, поэтому подтверждённое в импорте не теряется.
+            tab.set_field(target, key, value)
 
 
 class DocumentImportDialog(QDialog):
@@ -163,10 +161,20 @@ class DocumentImportDialog(QDialog):
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(["Подтвердить", "Группа", "Цель", "Поле", "Найденное / правка",
                                               "Источник и варианты", "Сейчас в форме", "Состояние"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        for column, width in enumerate((105, 55, 135, 160, 180, 220, 130, 185)):
-            self.table.setColumnWidth(column, width)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        # ── ШИРИНЫ И ПОДСКАЗКИ (ШАГ FIX-6, часть E) ──
+        # Колонки Interactive, у каждой свой минимум; последняя колонка НЕ
+        # растягивается — иначе она забирала бы место у остальных, а строка
+        # шире окна просто уходила бы в горизонтальную прокрутку. Текст ячейки
+        # переносится (setWordWrap) и целиком виден в подсказке.
+        setup_point_table(
+            self.table,
+            [(column, MODE_FIXED, width) for column, width in enumerate(
+                (105, 55, 135, 160, 180, 220, 130, 185)
+            )],
+            minimums={5: 160, 4: 140},
+        )
+        install_tooltip_on_table(self.table)
+        self.table.horizontalHeader().setStretchLastSection(False)
         self.table.setWordWrap(True)
         self.table.itemChanged.connect(self.value_changed)
         layout.addWidget(self.table)

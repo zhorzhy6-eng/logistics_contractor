@@ -760,6 +760,8 @@ def test_loading_tables_by_points(marker_generator, route_payload, work_file):
     assert second is not None, "нет таблицы после «Погрузка 2»"
     assert third is not None, "нет таблицы после «Погрузка 3»"
 
+    # Нумерация машин сквозная по всему разделу 3.2: 1, 2 | 3, 4 | 5 —
+    # а не 1, 2 | 1, 2 | 1 (см. test_machine_numbering_is_continuous).
     assert vehicle_table_rows(first) == [
         ("1", "JETOUR T1 2.0T 8AT Премиум", "LVTDD24B1TDC49340"),
         ("2", "JETOUR T1 2.0T 8AT Премиум", "LVTDD24B0TDC38491"),
@@ -768,6 +770,80 @@ def test_loading_tables_by_points(marker_generator, route_payload, work_file):
         "EC3DCUFD9TC018068", "EC37CUSM7TC008397",
     ]
     assert [row[2] for row in vehicle_table_rows(third)] == ["EC3DCUGA6TC001331"]
+
+
+def _vehicle_numbers(doc, prefix: str) -> list:
+    """Номера строк всех таблиц раздела в порядке вывода (по заголовкам)."""
+    numbers = []
+    for title in headings(doc, prefix):
+        table = table_after(doc, title)
+        assert table is not None, f"нет таблицы после {title!r}"
+        numbers.extend(row[0] for row in vehicle_table_rows(table))
+    return numbers
+
+
+def test_machine_numbering_is_continuous(marker_generator, work_file):
+    """
+    Нумерация машин в выгрузках сквозная: 3 точки (2 + 2 + 1) → 1, 2, 3, 4, 5.
+
+    Раньше счёт начинался заново в каждой таблице, и в договоре пять машин
+    выглядели как три независимые группы: 1, 2 / 1, 2 / 1.
+    """
+    payload = {
+        "contract": {"number": "TEST-NUM", "date": "2026-09-23",
+                     "carrier_type": "ООО (с НДС)", "vat_rate_num": 22,
+                     "price_without_vat": 1000.0},
+        "carrier": {"full_name": "ООО «Тест»", "short_name": "ООО «Тест»"},
+        "customer": {"full_name": "ООО «Заказчик»", "short_name": "ООО «Заказчик»"},
+        "vehicles": [
+            {"brand_model": "МОДЕЛЬ 1", "vin": "EC3TEUMB0T0000001",
+             "vehicle_type": "Легковой автомобиль",
+             "loading_index": 1, "unloading_index": 1},
+            {"brand_model": "МОДЕЛЬ 2", "vin": "EC3TEUMB0T0000002",
+             "vehicle_type": "Легковой автомобиль",
+             "loading_index": 1, "unloading_index": 1},
+            {"brand_model": "МОДЕЛЬ 3", "vin": "EC3TEUMB0T0000003",
+             "vehicle_type": "Легковой автомобиль",
+             "loading_index": 2, "unloading_index": 2},
+            {"brand_model": "МОДЕЛЬ 4", "vin": "EC3TEUMB0T0000004",
+             "vehicle_type": "Легковой автомобиль",
+             "loading_index": 2, "unloading_index": 2},
+            {"brand_model": "МОДЕЛЬ 5", "vin": "EC3TEUMB0T0000005",
+             "vehicle_type": "Легковой автомобиль",
+             "loading_index": 3, "unloading_index": 3},
+        ],
+        "loadings": [{"address": "Погрузка А"}, {"address": "Погрузка Б"},
+                     {"address": "Погрузка В"}],
+        "unloadings": [{"address": "Выгрузка А"}, {"address": "Выгрузка Б"},
+                       {"address": "Выгрузка В"}],
+    }
+
+    output = work_file("continuous.docx")
+    marker_generator.generate_docx(payload, str(output))
+    doc = Document(output)
+
+    assert _vehicle_numbers(doc, "Выгрузка ") == ["1", "2", "3", "4", "5"]
+    # Разделы нумеруются независимо: у погрузок свои 1…5.
+    assert _vehicle_numbers(doc, "Погрузка ") == ["1", "2", "3", "4", "5"]
+
+
+def test_machine_numbering_skips_hidden_points(marker_generator, gap_payload,
+                                               work_file):
+    """
+    Пропущенная из-за пустого адреса точка не рвёт нумерацию машин.
+
+    Машины точки с пустым адресом в документ не выводятся вообще, поэтому
+    следующая выведенная таблица продолжает счёт без «дырки».
+    """
+    output = work_file("numbering_hidden.docx")
+    marker_generator.generate_docx(gap_payload, str(output))
+
+    doc = Document(output)
+    # Погрузки: точка 1 — одна машина, точка 3 — две (точка 2 пустая).
+    assert _vehicle_numbers(doc, "Погрузка ") == ["1", "2", "3"]
+    # Выгрузки: точка 1 — VIN …001, точка 2 — …002, точка 4 (третий блок) —
+    # …003; пропуск пустой точки 3 нумерацию не рвёт.
+    assert _vehicle_numbers(doc, "Выгрузка ") == ["1", "2", "3"]
 
 
 def test_empty_point_skipped(marker_generator, route_payload, work_file):
@@ -931,8 +1007,10 @@ def test_vehicle_without_point_gets_own_block(marker_generator, route_payload, w
     table = table_after(doc, "Машины без привязки к конкретной погрузке")
 
     assert table is not None, "нет блока «Машины без привязки к конкретной погрузке»"
+    # Нумерация машин сквозная: в погрузках уже заняты 1…5 (2 + 2 + 1),
+    # поэтому свободная машина получает номер 6, а не 1.
     assert vehicle_table_rows(table) == [
-        ("1", "SOUEAST S06 1.6T 8AT Престиж", "EC3DCUGA1TC001429"),
+        ("6", "SOUEAST S06 1.6T 8AT Престиж", "EC3DCUGA1TC001429"),
     ]
 
 
@@ -1679,6 +1757,205 @@ def test_payment_days(generator, contract_payload):
     assert replacements["payment_days"] == "10"
     assert replacements["payment_days_words"] == "десяти"
     assert replacements["penalty_rate"] == "5000"
+
+
+# ─────────────────────────────────────────────────────────────
+# Реквизиты и суммы прописью (ШАГ FIX-6, часть A)
+# ─────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("days, expected", [(25, "двадцати пяти"),
+                                            (10, "десяти"),
+                                            (45, "сорока пяти"),
+                                            (1, "одного"),
+                                            (30, "тридцати")])
+def test_payment_days_words_are_words(generator, contract_payload, days, expected):
+    """
+    Срок оплаты прописью — в родительном падеже и для ЛЮБОГО числа.
+
+    Прежний _days_to_words знает только 1…20 и 30: на 25 он печатал «25»,
+    и в договоре выходило «25 (25) банковских дней».
+    """
+    payload = dict(contract_payload)
+    payload["contract"] = dict(contract_payload["contract"], payment_days=days)
+
+    replacements = generator._build_replacements_map(payload)
+
+    assert replacements["payment_days"] == str(days)
+    assert replacements["payment_days_words"] == expected
+    assert not replacements["payment_days_words"].isdigit()
+
+
+def test_all_words_replacements_are_words(generator, contract_payload):
+    """Ни одно поле «..._words» не печатает цифры вместо слов."""
+    replacements = generator._build_replacements_map(contract_payload)
+
+    words_keys = [key for key in replacements if key.endswith("_words")]
+    assert words_keys, "в карте замен нет ни одного поля «..._words»"
+
+    for key in words_keys:
+        value = replacements[key].strip()
+        if not value:
+            continue  # незаданное значение — пустая строка, это норма
+        assert not value.isdigit(), f"{key}: цифры вместо прописью ({value!r})"
+        assert any(ch.isalpha() for ch in value), f"{key}: нет ни одного слова"
+
+
+def test_vat_words_keys_are_filled(generator, contract_payload):
+    """Синонимы ключей сумм (wo_vat / vat / price_*) тоже прописью."""
+    replacements = generator._build_replacements_map(contract_payload)
+
+    assert replacements["sum_wo_vat"] == replacements["sum_wo_nds"]
+    assert replacements["sum_wo_vat_words"] == replacements["sum_wo_nds_words"]
+    assert replacements["sum_vat_words"] == replacements["sum_nds_words"]
+    assert replacements["price_without_vat_words"] == replacements["sum_wo_nds_words"]
+    assert replacements["price_with_vat_words"] == replacements["sum_total_words"]
+    assert replacements["price_with_vat_words"].startswith("Двести девятнадцать тысяч")
+
+
+def test_carrier_requisites_are_digits_only(generator, contract_payload):
+    """
+    «Корреспондентский счет БИК 044030786» в поле БИК → в бланк «044030786».
+
+    Слова в блоке реквизитов — мусор из исходного документа (распознавание
+    или вставка), а не значение: ИНН, КПП, ОГРН, БИК и корр. счёт печатаются
+    только цифрами.
+    """
+    payload = dict(contract_payload)
+    payload["carrier"] = dict(
+        contract_payload["carrier"],
+        bik="Корреспондентский счет БИК 044030786",
+        correspondent_account="Корр. счёт: 30101810600000000786",
+        inn="ИНН 7802102105",
+        kpp="КПП 780201001",
+        ogrn="ОГРН 1027700132195",
+        bank_account="Расчётный счёт № 40702810032000023498",
+    )
+
+    replacements = generator._build_replacements_map(payload)
+
+    assert replacements["carrier_bik"] == "044030786"
+    assert replacements["carrier_corr_account"] == "30101810600000000786"
+    assert replacements["carrier_inn"] == "7802102105"
+    assert replacements["carrier_kpp"] == "780201001"
+    assert replacements["carrier_ogrn"] == "1027700132195"
+    assert replacements["carrier_account"] == "40702810032000023498"
+    assert replacements["carrier_kpp_line"] == "КПП 780201001"
+
+
+def test_carrier_requisites_stay_empty_when_absent(generator, contract_payload):
+    """Пустые и «безцифровые» реквизиты остаются пустыми — не выдумываем."""
+    payload = dict(contract_payload)
+    payload["carrier"] = dict(
+        contract_payload["carrier"], bik="", correspondent_account="не разобралось"
+    )
+
+    replacements = generator._build_replacements_map(payload)
+
+    assert replacements["carrier_bik"] == ""
+    assert replacements["carrier_corr_account"] == ""
+
+
+def test_digits_only_helper(generator):
+    assert generator._digits_only("Корреспондентский счет БИК 044030786") == "044030786"
+    assert generator._digits_only("30101810600000000786") == "30101810600000000786"
+    assert generator._digits_only(None) == ""
+    assert generator._digits_only("нет цифр") == ""
+    assert generator._digits_only(0) == "0"
+
+
+# ─────────────────────────────────────────────────────────────
+# Банковские реквизиты в валидаторе перевозки (ШАГ FIX-6, часть A3)
+# ─────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def perevozka_validator():
+    from core.contracts.perevozka.validator import PerevozkaValidator
+
+    return PerevozkaValidator()
+
+
+def _carrier_requisites_warnings(report) -> list:
+    """Замечания только про банковские реквизиты перевозчика."""
+    return [
+        text for text in report.warnings
+        if text.startswith(("БИК перевозчика", "Корреспондентский счёт перевозчика"))
+    ]
+
+
+def test_corr_account_and_bik_lengths_are_checked(perevozka_validator, contract_payload):
+    """
+    Корр. счёт — ровно 20 цифр, БИК — ровно 9: иначе замечание.
+
+    Это ровно тот случай, ради которого проверка заведена: в рабочей базе
+    у перевозчика лежал корр. счёт из 21 цифры, и никто об этом не сообщал.
+    """
+    payload = dict(contract_payload)
+    payload["carrier"] = dict(
+        contract_payload["carrier"],
+        bik="044030786",
+        correspondent_account="301018106000000007786",  # 21 цифра
+    )
+
+    report = perevozka_validator.check(payload)
+
+    warnings = _carrier_requisites_warnings(report)
+    assert any("Корреспондентский счёт перевозчика" in text and "21" in text
+               for text in warnings), warnings
+    assert not report.errors, "длина реквизита — замечание, а не ошибка"
+
+
+def test_bik_with_wrong_length_is_a_warning(perevozka_validator, contract_payload):
+    payload = dict(contract_payload)
+    payload["carrier"] = dict(contract_payload["carrier"], bik="04403078")
+
+    report = perevozka_validator.check(payload)
+
+    warnings = _carrier_requisites_warnings(report)
+    assert any("БИК перевозчика" in text and "9" in text for text in warnings), warnings
+
+
+def test_requisites_with_service_words_are_reported(perevozka_validator,
+                                                    contract_payload):
+    """Подпись вместе со значением: цифр 9, но в поле есть лишние символы."""
+    payload = dict(contract_payload)
+    payload["carrier"] = dict(
+        contract_payload["carrier"], bik="Корреспондентский счет БИК 044030786"
+    )
+
+    report = perevozka_validator.check(payload)
+
+    warnings = _carrier_requisites_warnings(report)
+    assert any("лишние символы" in text for text in warnings), warnings
+
+
+def test_correct_requisites_are_not_reported(perevozka_validator, contract_payload):
+    report = perevozka_validator.check(contract_payload)
+
+    assert _carrier_requisites_warnings(report) == []
+
+
+def test_empty_requisites_are_not_reported(perevozka_validator, contract_payload):
+    """Пустые БИК и корр. счёт — не повод для замечания (о пустом скажет общий валидатор)."""
+    payload = dict(contract_payload)
+    payload["carrier"] = dict(
+        contract_payload["carrier"], bik="", correspondent_account=""
+    )
+
+    report = perevozka_validator.check(payload)
+
+    assert _carrier_requisites_warnings(report) == []
+
+
+def test_validate_still_returns_only_errors(perevozka_validator, contract_payload):
+    """Совместимость: validate() отдаёт только ошибки, замечания в него не попадают."""
+    payload = dict(contract_payload)
+    payload["carrier"] = dict(
+        contract_payload["carrier"], correspondent_account="301018106000000007786"
+    )
+
+    errors = perevozka_validator.validate(payload)
+
+    assert not any("Корреспондентский счёт" in text for text in errors)
 
 
 # ─────────────────────────────────────────────────────────────

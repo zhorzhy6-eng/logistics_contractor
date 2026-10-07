@@ -66,6 +66,10 @@ from db.database import (
 )
 
 from ui import theme
+from ui.widgets.table_helpers import (
+    MODE_FIXED,
+    install_tooltip_on_table, setup_point_table,
+)
 
 logger = logging.getLogger("ui.db_manager_dialog")
 
@@ -82,6 +86,37 @@ OPEN_TAB_INDEX = {
     OPEN_TAB_DRIVERS: 1,
     OPEN_TAB_CUSTOMERS: 2,
 }
+
+#: Колонки таблиц справочника (ШАГ FIX-6, часть E).
+#: Все колонки Interactive: оператор тянет границы мышью, длинные
+#: наименования и ФИО видно целиком, лишнее уходит в горизонтальную
+#: прокрутку. Раскладка запоминается в QSettings — у каждой таблицы свой
+#: ключ (`ui/db_manager/…`), как у остальных таблиц проекта.
+ORGANIZATIONS_COLUMNS_CONFIG = (
+    (0, MODE_FIXED, 60),    # ID
+    (1, MODE_FIXED, 320),   # Наименование
+    (2, MODE_FIXED, 130),   # ИНН
+    (3, MODE_FIXED, 120),   # КПП
+    (4, MODE_FIXED, 250),   # Директор
+    (5, MODE_FIXED, 90),    # Статус
+)
+
+DRIVERS_COLUMNS_CONFIG = (
+    (0, MODE_FIXED, 60),    # ID
+    (1, MODE_FIXED, 320),   # ФИО
+    (2, MODE_FIXED, 140),   # Дата рождения
+    (3, MODE_FIXED, 180),   # Паспорт
+    (4, MODE_FIXED, 200),   # Телефон
+    (5, MODE_FIXED, 90),    # Статус
+)
+
+#: Нижние границы ширин: ниже них колонка не сжимается.
+ORGANIZATIONS_COLUMN_MINIMUMS = {0: 50, 1: 160, 2: 100, 3: 90, 4: 140, 5: 80}
+DRIVERS_COLUMN_MINIMUMS = {0: 50, 1: 160, 2: 110, 3: 140, 4: 140, 5: 80}
+
+#: Ключи QSettings для раскладки таблиц справочника.
+ORGANIZATIONS_WIDTHS_KEY = "ui/db_manager/organizations"
+DRIVERS_WIDTHS_KEY = "ui/db_manager/drivers"
 
 
 # ═════════════════════════════════════════════════════════════
@@ -554,17 +589,18 @@ class DbManagerDialog(QDialog):
         # ── СОРТИРОВКА ──
         table.setSortingEnabled(True)
 
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setStretchLastSection(False)
-        header.setSectionsMovable(True)
-        header.setMinimumSectionSize(60)
-        table.setColumnWidth(0, 60)
-        table.setColumnWidth(1, 320)
-        table.setColumnWidth(2, 130)
-        table.setColumnWidth(3, 120)
-        table.setColumnWidth(4, 250)
-        table.setColumnWidth(5, 90)
+        # ── ШИРИНЫ, ПОДСКАЗКИ И РАСКЛАДКА (ШАГ FIX-6, часть E) ──
+        # Раньше ширины задавались здесь вручную и нигде не запоминались:
+        # после перезапуска раскладка возвращалась к исходной. Теперь — общий
+        # помощник: все колонки Interactive, у каждой свой минимум, длинное
+        # наименование видно в подсказке, раскладка живёт в QSettings.
+        setup_point_table(
+            table,
+            ORGANIZATIONS_COLUMNS_CONFIG,
+            storage_key=ORGANIZATIONS_WIDTHS_KEY,
+            minimums=ORGANIZATIONS_COLUMN_MINIMUMS,
+        )
+        install_tooltip_on_table(table)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setWordWrap(False)
@@ -653,17 +689,16 @@ class DbManagerDialog(QDialog):
         # ── СОРТИРОВКА ──
         table.setSortingEnabled(True)
 
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setStretchLastSection(False)
-        header.setSectionsMovable(True)
-        header.setMinimumSectionSize(60)
-        table.setColumnWidth(0, 60)
-        table.setColumnWidth(1, 320)
-        table.setColumnWidth(2, 140)
-        table.setColumnWidth(3, 180)
-        table.setColumnWidth(4, 200)
-        table.setColumnWidth(5, 90)
+        # ── ШИРИНЫ, ПОДСКАЗКИ И РАСКЛАДКА (ШАГ FIX-6, часть E) ──
+        # См. таблицу организаций: общий помощник, все колонки Interactive,
+        # минимумы, подсказки и сохранение раскладки в QSettings.
+        setup_point_table(
+            table,
+            DRIVERS_COLUMNS_CONFIG,
+            storage_key=DRIVERS_WIDTHS_KEY,
+            minimums=DRIVERS_COLUMN_MINIMUMS,
+        )
+        install_tooltip_on_table(table)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setWordWrap(False)

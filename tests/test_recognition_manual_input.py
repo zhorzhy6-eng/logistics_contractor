@@ -273,18 +273,20 @@ def test_saving_contract_keeps_route_points(window, isolated_db, monkeypatch):
     """
     Маршрут из формы должен быть доступен по ID сохранённого договора.
 
-    В хранилище лежат три поля точки — address / date / time_window: колонки
-    name у таблицы contract_points нет (ШАГ FIX-2.5 наименование салона в базу
-    не добавлял). Приведённая же точка несёт ещё и name — пустой строкой,
-    поэтому сравниваются только сохраняемые поля.
+    С ШАГА FIX-6 (часть F) точка хранится ЧЕТЫРЬМЯ полями: к address / date /
+    time_window добавилось наименование салона (name) — раньше колонки не
+    было, и имя терялось при перезагрузке договора из базы. Здесь точка
+    проверяется целиком, вместе с именем.
     """
     from core.contract_data import ContractData
 
     data = ContractData(
         contract={"number": "ROUTE-1"},
         vehicles=[{"vin": "XTEST000000000001", "brand_model": "Тестовое ТС"}],
-        loadings=[{"address": "Склад А", "date": "2026-09-27", "time_window": "09:00-12:00"}],
-        unloadings=[{"address": "Склад Б", "date": "2026-09-28", "time_window": "13:00-18:00"}],
+        loadings=[{"name": "Салон А", "address": "Склад А", "date": "2026-09-27",
+                   "time_window": "09:00-12:00"}],
+        unloadings=[{"name": "", "address": "Склад Б", "date": "2026-09-28",
+                     "time_window": "13:00-18:00"}],
     )
     monkeypatch.setattr(window, "_collect_data", lambda: data)
 
@@ -303,9 +305,10 @@ def test_saving_contract_keeps_route_points(window, isolated_db, monkeypatch):
     assert row is not None
 
     def _persisted(points):
-        """Точка в том виде, в каком её хранит contract_points."""
+        """Точка в том виде, в каком её хранит contract_points (ШАГ FIX-6)."""
         return [
-            {key: point[key] for key in ("address", "date", "time_window")}
+            {key: point.get(key, "") or ""
+             for key in ("name", "address", "date", "time_window")}
             for point in points
         ]
 
@@ -313,4 +316,6 @@ def test_saving_contract_keeps_route_points(window, isolated_db, monkeypatch):
     assert points["loadings"] == _persisted(data.loadings)
     assert points["unloadings"] == _persisted(data.unloadings)
     assert points["loadings"][0]["address"] == "Склад А"
+    assert points["loadings"][0]["name"] == "Салон А"
+    assert points["unloadings"][0]["name"] == ""
     assert vehicles == [("XTEST000000000001",)]
