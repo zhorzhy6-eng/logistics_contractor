@@ -79,12 +79,21 @@ def test_coerce_loadings_from_contract_block():
 
 
 def test_coerce_normalizes_point_types():
-    """Точки приводятся к строкам с тремя полями."""
+    """Точки приводятся к строкам с четырьмя полями (name — ШАГ FIX-2.5)."""
     data = ContractData.coerce({
         "loadings": [{"address": 123, "date": None, "time_window": 5}],
     })
     point = data.loadings[0]
-    assert point == {"address": "123", "date": "", "time_window": "5"}
+    assert point == {"name": "", "address": "123", "date": "", "time_window": "5"}
+
+
+def test_coerce_keeps_point_name():
+    """Наименование салона точки не теряется при приведении данных."""
+    data = ContractData.coerce({
+        "loadings": [{"name": "ООО «Салон»", "address": "г. Москва"}],
+    })
+
+    assert data.loadings[0]["name"] == "ООО «Салон»"
 
 
 def test_coerce_drops_invalid_vehicles():

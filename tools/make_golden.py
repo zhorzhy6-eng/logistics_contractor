@@ -121,11 +121,13 @@ def base_payload(carrier_type: str, vat_rate: str, vat_rate_num) -> dict:
             "payment_days": 10,
         },
         "loadings": [
-            {"address": "183052, г.Мурманск, пр.Кольский, д.53",
+            {"name": "ООО «Салон Погрузки»",
+             "address": "183052, г.Мурманск, пр.Кольский, д.53",
              "date": "2026-09-24", "time_window": "09:00-18:00"},
         ],
         "unloadings": [
-            {"address": "г. Пятигорск, Бештаугорское шоссе 17",
+            {"name": "ООО «Салон Выгрузки»",
+             "address": "г. Пятигорск, Бештаугорское шоссе 17",
              "date": "2026-09-27", "time_window": ""},
         ],
     }
@@ -136,13 +138,17 @@ def gap_payload() -> dict:
     payload = base_payload("ООО (с НДС)", "22%", 22)
     payload["contract"] = dict(payload["contract"], number="GAP-2026-1")
 
+    # Точки с наименованиями (ШАГ FIX-2.5) и без: в заголовке блока имя идёт
+    # перед адресом, а у точки без имени печатается только адрес.
     payload["loadings"] = [
-        {"address": "Точка 1", "date": "2026-09-30", "time_window": "08:00"},
+        {"name": "Салон 1", "address": "Точка 1", "date": "2026-09-30",
+         "time_window": "08:00"},
         {"address": "", "date": "2026-09-30", "time_window": ""},
         {"address": "Точка 3", "date": "2026-09-30", "time_window": ""},
     ]
     payload["unloadings"] = [
-        {"address": "Выгрузка 1", "date": "2026-10-02", "time_window": ""},
+        {"name": "Салон 2", "address": "Выгрузка 1", "date": "2026-10-02",
+         "time_window": ""},
         {"address": "Выгрузка 2", "date": "2026-10-03", "time_window": ""},
         {"address": "", "date": "2026-10-04", "time_window": ""},
         {"address": "Выгрузка 4", "date": "2026-10-05", "time_window": ""},
