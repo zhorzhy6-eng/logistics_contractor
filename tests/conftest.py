@@ -205,6 +205,50 @@ def isolated_db(work_file, monkeypatch):
 
 
 # ─────────────────────────────────────────────────────────────
+# Слой Natasha (core/pseudonymizer.py)
+# ─────────────────────────────────────────────────────────────
+
+@pytest.fixture(scope="session")
+def natasha_warmed_up():
+    """
+    Прогревает модели Natasha один раз на прогон.
+
+    Первый вызов ``_natasha_pipeline()`` строит segmenter, NER-теггер и
+    извлекатели; без прогрева это делал бы первый медленный тест и платил
+    за это секундами. Если библиотеки нет — фикстура молчит: маскирование
+    обязано работать на регулярках.
+    """
+    try:
+        from core.pseudonymizer import _natasha_pipeline
+        _natasha_pipeline()
+    except Exception:
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def natasha_layer_off(request, monkeypatch):
+    """
+    По умолчанию слой Natasha выключен.
+
+    Тесты проверяют логику маскирования, а не качество чужой NER-модели:
+    с включённым слоем результат зависел бы от того, установлена ли
+    библиотека, скачаны ли модели и что именно нашла сеть. Поэтому
+    Natasha выключена для всего прогона, а тесты самого слоя просят
+    фикстуру ``natasha_layer`` — она включает его обратно.
+    """
+    if "natasha_layer" in request.fixturenames:
+        yield
+        return
+
+    import core.pseudonymizer as module
+
+    monkeypatch.setattr(module, "_NATASHA_AVAILABLE", False)
+    monkeypatch.setattr(module, "_NATASHA", {})
+    yield
+
+
+# ─────────────────────────────────────────────────────────────
 # Настройки интерфейса (QSettings)
 # ─────────────────────────────────────────────────────────────
 
