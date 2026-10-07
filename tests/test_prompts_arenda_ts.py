@@ -180,9 +180,114 @@ def test_prompt_says_kpp_is_ooo_only(prompt):
 
 
 def test_prompt_takes_director_name_in_full(prompt):
-    """ФИО директора — полное и в падеже документа, а не «И.И. Иванов»."""
+    """ФИО директора — полное и в именительном падеже, а не «И.И. Иванов»."""
     assert "director_name" in prompt
-    assert "в родительном падеже" in prompt
+    assert "ИМЕНИТЕЛЬНОМ падеже" in prompt
+
+
+# ─────────────────────────────────────────────────────────────
+# Директор стороны: должность, ФИО и основание — разными полями (FIX-3 A)
+# ─────────────────────────────────────────────────────────────
+
+#: Поля, о которых говорит секция «ДИРЕКТОР СТОРОНЫ»: у каждой стороны
+#: свой блок, и правило одно на оба.
+DIRECTOR_BLOCK_FIELDS = ("lessee", "lessor")
+
+
+def test_prompt_has_director_section(prompt):
+    """Появилась отдельная секция про директора стороны."""
+    assert "ДИРЕКТОР СТОРОНЫ" in prompt
+    assert "lessee_director_position" in prompt
+    assert "lessor_director_position" in prompt
+    assert "ФИО РУКОВОДИТЕЛЯ" in prompt
+    assert "lessee_director_name" in prompt
+    assert "lessor_director_name" in prompt
+
+
+@pytest.mark.parametrize("field", ["director_position", "director_name"])
+@pytest.mark.parametrize("block", DIRECTOR_BLOCK_FIELDS)
+def test_prompt_addresses_both_parties_in_director_section(prompt, block, field):
+    """
+    Секция про директора называет поле у ОБЕИХ сторон.
+
+    Иначе правило читалось бы как «только у Арендатора»: раньше должность
+    директора описывалась лишь в блоке lessee.
+    """
+    assert f"{block}.{field}" in prompt
+    assert f"{block}_{field}" in prompt
+
+
+@pytest.mark.parametrize("fragment", [
+    "Устава", "свидетельства", "Контактный", "Действующий", "Действующего",
+    "Действующей",
+])
+def test_prompt_forbids_service_words_in_director_fields(prompt, fragment):
+    """Служебные слова явно запрещены и в должности, и в ФИО."""
+    assert f"«{fragment}" in prompt or f"«{fragment}»" in prompt, (
+        f"в правилах извлечения директора нет запрета на «{fragment}»"
+    )
+    assert "НЕ включай" in prompt
+
+
+def test_prompt_director_position_is_position_only(prompt):
+    """Должность — только должность: без ФИО, основания и служебных слов."""
+    assert "ТОЛЬКО должность" in prompt
+    assert "«Генеральный\n    директор», «Директор», «ИП»" in prompt
+    assert "без ФИО" in prompt
+
+
+def test_prompt_director_name_is_three_words(prompt):
+    """ФИО — три слова (Фамилия Имя Отчество), а не должность и не основание."""
+    assert "ТОЛЬКО ФИО в три слова" in prompt
+    assert "Фамилия Имя Отчество" in prompt
+    assert "Васильева Елизавета Юрьевна" in prompt
+
+
+def test_prompt_director_name_missing_stays_empty(prompt):
+    """Не извлечённое ФИО остаётся пустой строкой, а не склейкой соседних полей."""
+    assert 'оставь director_name пустой строкой ""' in prompt
+    assert "НЕ\n    склеивай ФИО с соседними полями" in prompt
+
+
+def test_prompt_director_position_goes_to_nominative(prompt):
+    """
+    Должность приводится к именительному падежу.
+
+    В документе п. 1.1 печатает «в лице Генерального директора …» —
+    родительный падеж; генератор сам склоняет должность, поэтому в ответ
+    она уходит именительным: «Генеральный директор».
+    """
+    assert "приводи к ИМЕНИТЕЛЬНОМУ падежу" in prompt
+    assert "в лице Генерального директора" in prompt
+    assert "director_position = «Генеральный" in prompt
+
+
+def test_prompt_director_name_goes_to_nominative(prompt):
+    """ФИО тоже возвращается в именительном падеже (в п. 1.1 оно в родительном)."""
+    assert "Иванова Ивана Ивановича" in prompt
+    assert "Иванов Иван Иванович" in prompt
+
+
+def test_prompt_basis_is_its_own_thing(prompt):
+    """Основание полномочий — отдельная сущность, в должность и ФИО не попадает."""
+    assert "ОСНОВАНИЕ (lessee_basis, lessor_basis)" in prompt
+    assert "свидетельства\nо государственной регистрации" in prompt
+    assert "доверенности" in prompt
+    assert "слова основания попадать не должны" in prompt
+
+
+def test_prompt_director_rules_do_not_add_schema_fields(prompt, schema):
+    """
+    Правила про директора не добавляют новых полей в схему.
+
+    Должность и ФИО уже есть в блоках lessee / lessor; основание в схеме
+    отсутствует — его генератор берёт из вида стороны.
+    """
+    for block in DIRECTOR_BLOCK_FIELDS:
+        assert set(schema[block]) >= {"director_position", "director_name"}
+        assert "basis" not in schema[block], (
+            "поле basis в схеме ответа не предусмотрено"
+        )
 
 
 # ─────────────────────────────────────────────────────────────

@@ -282,25 +282,57 @@ def route_tab() -> dict:
         "consignees": [
             {"name": "ООО «Приёмка»", "address": "г. Казань, ул. Приёмная, д. 3"},
         ],
-        "loading_date": "2026-09-26",
-        "loading_time_from": "08:00",
-        "loading_time_to": "20:00",
+        # План ВЫГРУЗКИ; план погрузки отдаёт вкладка «Заказчик» (FIX-3).
         "unloading_date": "2026-10-01",
         "unloading_time_from": "09:00",
         "unloading_time_to": "18:00",
     }
 
 
-def test_route_fields_are_collected(route_tab):
-    cd = collect_logistiks_rus_data({"route": route_tab})
+@pytest.fixture
+def customer_tab() -> dict:
+    """Вкладка «Заказчик»: шапка заявки, заказчик и план ПОГРУЗКИ (FIX-3)."""
+    return {
+        "number": "ЛР-2026-17",
+        "date": "2026-09-24",
+        "name": CUSTOMER_NAME,
+        "loading_date": "2026-09-26",
+        "loading_time_from": "08:00",
+        "loading_time_to": "20:00",
+    }
+
+
+def test_route_fields_are_collected(route_tab, customer_tab):
+    cd = collect_logistiks_rus_data({
+        "customer": customer_tab, "route": route_tab,
+    })
 
     assert cd.contract["route"] == "Москва - Казань"
-    assert cd.contract["loading_date"] == "2026-09-26"
-    assert cd.contract["loading_time_from"] == "08:00"
-    assert cd.contract["loading_time_to"] == "20:00"
     assert cd.contract["unloading_date"] == "2026-10-01"
     assert cd.contract["unloading_time_from"] == "09:00"
     assert cd.contract["unloading_time_to"] == "18:00"
+
+
+def test_loading_date_comes_from_customer_tab(customer_tab):
+    """
+    План погрузки читается с вкладки «Заказчик», а не с «Маршрута» (FIX-3).
+
+    Ключи contract остались прежними (loading_date, loading_time_from / _to):
+    генератор и валидатор читают их как раньше, поменялся только источник.
+    """
+    cd = collect_logistiks_rus_data({"customer": customer_tab})
+
+    assert cd.contract["loading_date"] == "2026-09-26"
+    assert cd.contract["loading_time_from"] == "08:00"
+    assert cd.contract["loading_time_to"] == "20:00"
+
+
+def test_route_tab_does_not_carry_loading_plan(route_tab):
+    """Со вкладки «Маршрут» план погрузки больше не читается."""
+    cd = collect_logistiks_rus_data({"route": route_tab})
+
+    for key in ("loading_date", "loading_time_from", "loading_time_to"):
+        assert key not in cd.contract, f"«Маршрут» всё ещё отдаёт {key}"
 
 
 def test_shipper_name_and_addresses_go_to_contract_loadings(route_tab):
@@ -336,9 +368,12 @@ def test_old_shippers_array_still_goes_to_loadings():
     ]
 
 
-def test_points_in_contract_keep_name_date_and_time_window(route_tab):
+def test_points_in_contract_keep_name_date_and_time_window(route_tab,
+                                                           customer_tab):
     """Маппинг 1: точки лежат в contract полным набором — с name."""
-    cd = collect_logistiks_rus_data({"route": route_tab})
+    cd = collect_logistiks_rus_data({
+        "customer": customer_tab, "route": route_tab,
+    })
 
     assert cd.contract["loadings"][0] == {
         "name": SHIPPER_NAME,
@@ -354,7 +389,7 @@ def test_points_in_contract_keep_name_date_and_time_window(route_tab):
     }
 
 
-def test_top_level_points_stay_without_name(route_tab):
+def test_top_level_points_stay_without_name(route_tab, customer_tab):
     """
     Верхнеуровневые точки — в приведённом виде, без name.
 
@@ -362,7 +397,9 @@ def test_top_level_points_stay_without_name(route_tab):
     в них теряется (core.contract_data._as_point_list) — поэтому названия
     и кладутся отдельно, в contract["loadings"] / ["unloadings"].
     """
-    cd = collect_logistiks_rus_data({"route": route_tab})
+    cd = collect_logistiks_rus_data({
+        "customer": customer_tab, "route": route_tab,
+    })
 
     assert cd.loadings == [
         {"address": "г. Москва, ул. Складская, д. 1",
@@ -680,6 +717,10 @@ def full_tabs() -> dict:
             "number": "ЛР-2026-17",
             "date": "2026-09-24",
             "name": CUSTOMER_NAME,
+            # План погрузки — на этой вкладке с шага FIX-3.
+            "loading_date": "2026-09-26",
+            "loading_time_from": "08:00",
+            "loading_time_to": "20:00",
         }),
         "cargo": StubTab({"vehicles": [
             {"brand_model": "МОДЕЛЬ 1", "vin": VIN_1},
@@ -696,9 +737,7 @@ def full_tabs() -> dict:
             "consignees": [
                 {"name": "ООО «Приёмка»", "address": "г. Казань, ул. Приёмная, д. 3"},
             ],
-            "loading_date": "2026-09-26",
-            "loading_time_from": "08:00",
-            "loading_time_to": "20:00",
+            # План выгрузки; план погрузки — на вкладке «Заказчик».
             "unloading_date": "2026-10-01",
             "unloading_time_from": "09:00",
             "unloading_time_to": "18:00",
@@ -727,7 +766,9 @@ def test_full_scenario_collects_everything(full_tabs):
     assert cd.contract["number"] == "ЛР-2026-17"
     assert cd.contract["date"] == "2026-09-24"
     assert cd.contract["route"] == "Москва - Казань"
+    # План погрузки — с вкладки «Заказчик», план выгрузки — с «Маршрута».
     assert cd.contract["loading_date"] == "2026-09-26"
+    assert cd.contract["loading_time_from"] == "08:00"
     assert cd.contract["unloading_date"] == "2026-10-01"
     assert cd.contract["price_without_vat"] == PRICE_WITHOUT_VAT
     assert cd.contract["vat_rate_num"] == VAT_RATE_NUM

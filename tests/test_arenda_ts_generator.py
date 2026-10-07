@@ -37,6 +37,7 @@ from docx import Document
 from core.contracts.arenda_ts.generator import (
     MAX_CARS,
     MAX_POINTS,
+    TRANSFER_DOCUMENTS,
     ArendaTsGenerator,
 )
 from core.contracts.arenda_ts.postprocess import (
@@ -108,6 +109,7 @@ def _lessee(variant: str = "ООО") -> dict:
             "kpp": "770101001",
             "ogrn": "1027700132195",
             "legal_address": "г. Москва, ул. Тестовая, д. 1",
+            "actual_address": "г. Москва, ул. Фактическая, д. 11",
             "bank_account": "40702810000000000001",
             "bank_name": "ПАО Сбербанк",
             "bik": "044525225",
@@ -127,6 +129,7 @@ def _lessee(variant: str = "ООО") -> dict:
         "kpp": "",
         "ogrn": "321770000123456",
         "legal_address": "г. Москва, ул. Тестовая, д. 7",
+        "actual_address": "г. Москва, ул. Фактическая, д. 17",
         "bank_account": "40802810000000000011",
         "bank_name": "АО «Банк Тест»",
         "bik": "044525227",
@@ -146,6 +149,7 @@ def _lessor() -> dict:
         "inn": "7709876543",
         "ogrn": "1027700132196",
         "legal_address": "г. Москва, ул. Вторая, д. 2",
+        "actual_address": "г. Москва, ул. Вторая фактическая, д. 22",
         "bank_account": "40702810000000000002",
         "bank_name": "АО «Банк Второй»",
         "bik": "044525226",
@@ -578,22 +582,23 @@ def test_replacements_map_covers_all_template_placeholders(
     )
 
 
-def test_replacements_map_covers_189_placeholders_of_ooo_template(
+def test_replacements_map_covers_205_placeholders_of_ooo_template(
     generator, templates_dir
 ):
     """
-    В ООО-бланке 189 плейсхолдеров — все они (кроме unloading_2_date) есть
+    В ООО-бланке 205 плейсхолдеров — все они (кроме unloading_2_date) есть
     в карте замен.
 
-    Было 187: шаг FIX-1-T заменил в п. 3.3.2 {{unloading_2_date}} на
-    {{planned_completion_date}} (−1) и добавил в п. 4.5 {{payment_days}} и
-    {{payment_days_words}} (+2).
+    История числа: 187 → 189 (шаг FIX-1-T: п. 3.3.2 отдал {{unloading_2_date}}
+    под {{planned_completion_date}} — минус один плейсхолдер и два новых
+    в п. 4.5) → 205 (шаг FIX-3: шесть полей подписанта и фактического адреса
+    в п. 1.1 / 1.2 и разделе 9, десять полей Акта вместо пустых ячеек).
     """
     name = ArendaTsGenerator.TEMPLATE_NAMES["ООО"]
     text = _document_text(Document(str(templates_dir / name)))
     occurrences = [match.strip("{} ") for match in PLACEHOLDER_RE.findall(text)]
-    assert len(occurrences) == 189, (
-        f"в ООО-бланке {len(occurrences)} плейсхолдеров, ожидалось 189"
+    assert len(occurrences) == 205, (
+        f"в ООО-бланке {len(occurrences)} плейсхолдеров, ожидалось 205"
     )
 
     replacements = generator._build_replacements_map(_payload("ООО"))
@@ -1085,9 +1090,11 @@ def test_appendix_is_filled(generator, work_dir, variant):
     assert transfer["Тягач"] == "Тягач-Модель, гос. номер А001АА01"
     assert transfer["Прицеп/полуприцеп"] == "Прицеп-Модель, гос. номер Б002ББ02"
     assert transfer["Экипаж"] == "Иванов Иван Иванович"
-    # Поля для ручного заполнения остаются пустыми.
+    # Поля Акта, которых нет в данных, остаются пустыми; перечень документов
+    # печатает генератор своей константой (шаг FIX-3).
     assert transfer["Место передачи"] == ""
     assert transfer["Фактические дата и время передачи"] == ""
+    assert transfer["Переданные документы"] == TRANSFER_DOCUMENTS
 
     returning = _act_values(doc, "Место возврата")
     assert set(returning.values()) == {""}
@@ -1273,6 +1280,281 @@ def test_multiline_values_are_flattened(generator):
 
     assert replacements["lessee_address"] == "г. Москва, ул. Тестовая, д. 1"
     assert replacements["lessor_director_name"] == "Сидоров Сидор Сидорович"
+
+
+# ─────────────────────────────────────────────────────────────
+# Подписант: род и падеж (шаг FIX-3)
+# ─────────────────────────────────────────────────────────────
+
+#: Директор-женщина: отчество на «-овна» — причастие обязано стать «действующей».
+FEMALE_DIRECTOR = "Васильева Елизавета Юрьевна"
+
+#: Директор-мужчина — контрольная пара к FEMALE_DIRECTOR.
+MALE_DIRECTOR = "Иванов Иван Иванович"
+
+
+def _payload_with_female_director() -> dict:
+    """Данные, где ОБЕ стороны подписывает женщина."""
+    payload = _payload()
+    payload["lessee"] = dict(payload["lessee"], director_name=FEMALE_DIRECTOR)
+    payload["lessor"] = dict(payload["lessor"], director_name=FEMALE_DIRECTOR)
+    return payload
+
+
+@pytest.mark.parametrize("full_name, expected", [
+    (MALE_DIRECTOR, "действующего"),
+    (FEMALE_DIRECTOR, "действующей"),
+    ("Кузнецова Анна Ильинична", "действующей"),
+    ("Петрова Мария Игоревна", "действующей"),
+    ("Иванова Мария Ивановна", "действующей"),
+    # Отчества нет — пол не угадывается, форма по умолчанию (мужская).
+    ("Иванов Иван", "действующего"),
+    ("", "действующего"),
+    (None, "действующего"),
+])
+def test_acting_word_follows_gender(generator, full_name, expected):
+    """«действующего» / «действующей» — по отчеству ФИО."""
+    assert generator._acting_rod(full_name) == expected
+
+
+@pytest.mark.parametrize("full_name, gender", [
+    (MALE_DIRECTOR, "male"),
+    (FEMALE_DIRECTOR, "female"),
+    ("Кузнецова Анна Ильинична", "female"),
+    ("Иванов Иван", "male"),
+    ("", "male"),
+])
+def test_gender_is_read_from_patronymic(generator, full_name, gender):
+    assert generator._gender_from_name(full_name) == gender
+
+
+@pytest.mark.parametrize("position, expected", [
+    ("Генеральный директор", "Генерального директора"),
+    ("Директор", "Директора"),
+    ("ИП", "ИП"),
+    ("Индивидуальный предприниматель", "Индивидуального предпринимателя"),
+    ("Главный бухгалтер", "Главного бухгалтера"),
+    ("Исполнительный директор", "Исполнительного директора"),
+    # Уже в родительном падеже — второй раз не склоняем.
+    ("Генерального директора", "Генерального директора"),
+    # Пустое значение даёт пустую строку: падеж не выдумывается.
+    ("", ""),
+    (None, ""),
+    ("   ", ""),
+])
+def test_genitive_position(generator, position, expected):
+    """Должность в родительном падеже — как её печатает п. 1.1 бланка."""
+    assert generator._genitive_position(position) == expected
+
+
+def test_short_fio_uses_surname_and_initials_female(generator):
+    """Короткое ФИО работает и для директора-женщины."""
+    payload = _payload_with_female_director()
+    replacements = generator._build_replacements_map(payload)
+
+    assert replacements["lessee_director_short"] == "Е.Ю. Васильева"
+    assert replacements["lessor_director_short"] == "Е.Ю. Васильева"
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_full_pipeline_female_director(generator, work_dir, variant):
+    """В готовом договоре с директором-женщиной стоит «действующей»."""
+    output_dir = work_dir / f"arenda_female_{variant.replace(' ', '_')}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    text = _document_text(Document(_generate(
+        generator, _payload_with_female_director(), output_dir
+    )))
+
+    assert f"в лице Генерального директора {FEMALE_DIRECTOR}, " \
+           f"действующей на основании Устава." in text
+    assert f"в лице Директора {FEMALE_DIRECTOR}, " \
+           f"действующей на основании Устава," in text
+    assert "действующего на основании" not in text
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_full_pipeline_male_director(generator, work_dir, variant):
+    """В готовом договоре с директором-мужчиной стоит «действующего»."""
+    output_dir = work_dir / f"arenda_male_{variant.replace(' ', '_')}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    text = _document_text(Document(_generate(generator, _payload(variant), output_dir)))
+
+    is_ip = variant != "ООО"
+    ogrn_label = "ОГРНИП" if is_ip else "ОГРН"
+    # У ИП подписант — сам предприниматель: должность в родительном падеже
+    # «Индивидуального предпринимателя», а не «Генерального директора».
+    lessee_clause = (
+        f"в лице Индивидуального предпринимателя {_lessee(variant)['director_name']}, "
+        f"действующего на основании свидетельства о государственной регистрации."
+        if is_ip else
+        "в лице Генерального директора Петров Пётр Петрович, "
+        "действующего на основании Устава."
+    )
+    assert lessee_clause in text
+    assert "в лице Директора Сидоров Сидор Сидорович, " \
+           "действующего на основании Устава," in text
+    assert "действующей на основании" not in text
+    assert f"{ogrn_label} {_lessee(variant)['ogrn']}" in text
+
+
+def test_generated_document_has_no_hardcoded_acting_word(generator, work_dir):
+    """Причастие в п. 1.1 / 1.2 всегда идёт из карты замен, а не из бланка."""
+    replacements = generator._build_replacements_map(_payload())
+
+    assert replacements["lessee_director_acting_rod"] == "действующего"
+    assert replacements["lessor_director_acting_rod"] == "действующего"
+    assert replacements["lessee_director_position_rod"] == \
+        "Генерального директора"
+    assert replacements["lessor_director_position_rod"] == "Директора"
+
+
+def test_ip_position_stays_unchanged(generator):
+    """ИП — сокращение: падеж его не меняет, причастие — мужское."""
+    replacements = generator._build_replacements_map(_payload("ИП с НДС"))
+
+    assert replacements["lessee_director_position"] == \
+        "Индивидуальный предприниматель"
+    assert replacements["lessee_director_position_rod"] == \
+        "Индивидуального предпринимателя"
+    assert replacements["lessee_director_acting_rod"] == "действующего"
+
+
+def test_missing_director_gives_empty_placeholders(generator):
+    """Нет ФИО — пустые строки, а не выдуманное «действующего» рядом с пустотой."""
+    payload = _payload()
+    payload["lessee"] = dict(payload["lessee"], director_name="",
+                             director_position="")
+
+    replacements = generator._build_replacements_map(payload)
+
+    assert replacements["lessee_director_name"] == ""
+    assert replacements["lessee_director_position_rod"] == ""
+    assert replacements["lessee_director_short"] == ""
+    assert replacements["lessee_director_acting_rod"] == "действующего"
+
+
+# ─────────────────────────────────────────────────────────────
+# Раздел 9 и Акт: поля шага FIX-3
+# ─────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_requisites_block_filled(generator, work_dir, variant):
+    """Блок 9 заполнен: краткое наименование, фактический адрес и реквизиты."""
+    output_dir = work_dir / f"arenda_req_fix3_{variant.replace(' ', '_')}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    doc = Document(_generate(generator, _payload(variant), output_dir))
+
+    table = _requisites_table(doc)
+    assert table is not None, "не найдена таблица реквизитов"
+    lessee = table.rows[0].cells[0].text
+    lessor = table.rows[0].cells[1].text
+
+    lessee_data = _lessee(variant)
+    lessor_data = _lessor()
+
+    for block, data in ((lessee, lessee_data), (lessor, lessor_data)):
+        assert data["short_name"] in block, f"нет краткого наименования: {block}"
+        assert f"Юридический адрес: {data['legal_address']}" in block
+        assert f"Фактический адрес: {data['actual_address']}" in block
+        assert f"ИНН {data['inn']}" in block
+        assert f"БИК {data['bik']}" in block
+        assert f"к/с {data['corr_account']}" in block
+        assert f"E-mail: {data['email']}" in block
+
+    # Метка госрегистрации зависит от вида Арендатора: ОГРН у ООО, ОГРНИП у ИП.
+    if variant == "ООО":
+        assert f"ОГРН {lessee_data['ogrn']}" in lessee
+    else:
+        assert f"ОГРНИП {lessee_data['ogrn']}" in lessee
+    assert "ОГРН 1027700132196" in lessor
+
+
+def test_actual_address_missing_gives_empty_string(generator, work_dir):
+    """Нет фактического адреса — в блоке 9 пустое место, а не чужой адрес."""
+    payload = _payload()
+    payload["lessee"] = dict(payload["lessee"], actual_address="")
+
+    replacements = generator._build_replacements_map(payload)
+
+    assert replacements["lessee_actual_address"] == ""
+    assert replacements["lessor_actual_address"] == _lessor()["actual_address"]
+
+
+def test_act_fields_are_read_from_contract(generator, work_dir):
+    """Десять полей Акта приходят из contract и попадают в свой документ."""
+    payload = _payload(contract_extra={
+        "transfer_place": "г. Москва, ул. Передающая, д. 1",
+        "transfer_datetime": "21.09.2026 08:30",
+        "transfer_mileage": "125 400 км",
+        "transfer_condition": "Без замечаний",
+        "transfer_documents": "СТС; ОСАГО; иные: доверенность № 5",
+        "return_place": "г. Калуга, ул. Возвратная, д. 2",
+        "return_datetime": "27.09.2026 19:00",
+        "return_mileage": "128 130 км",
+        "return_condition": "Царапина на левом борту",
+        "return_notes": "Акт подписан без разногласий",
+    })
+    doc = Document(_generate(generator, payload, work_dir))
+
+    transfer = _act_values(doc, "Место передачи")
+    assert transfer == {
+        "Место передачи": "г. Москва, ул. Передающая, д. 1",
+        "Фактические дата и время передачи": "21.09.2026 08:30",
+        "Тягач": "Тягач-Модель, гос. номер А001АА01",
+        "Прицеп/полуприцеп": "Прицеп-Модель, гос. номер Б002ББ02",
+        "Пробег на момент передачи": "125 400 км",
+        "Внешнее состояние / замечания": "Без замечаний",
+        "Переданные документы": "СТС; ОСАГО; иные: доверенность № 5",
+        "Экипаж": "Иванов Иван Иванович",
+    }
+
+    returning = _act_values(doc, "Место возврата")
+    assert returning == {
+        "Место возврата": "г. Калуга, ул. Возвратная, д. 2",
+        "Фактические дата и время возврата": "27.09.2026 19:00",
+        "Пробег на момент возврата": "128 130 км",
+        "Состояние ТС / замечания": "Царапина на левом борту",
+        "Иные отметки": "Акт подписан без разногласий",
+    }
+
+
+def test_act_transfer_documents_default(generator, work_dir):
+    """Без своего значения перечень документов печатает генератор."""
+    doc = Document(_generate(generator, _payload(), work_dir))
+
+    transfer = _act_values(doc, "Место передачи")
+    assert transfer["Переданные документы"] == TRANSFER_DOCUMENTS
+    assert TRANSFER_DOCUMENTS == "СТС на тягач и прицеп/полуприцеп; ОСАГО; иные:"
+
+
+def test_act_empty_fields_give_empty_placeholders(generator):
+    """Пустой contract — все десять полей Акта пустые, кроме документов."""
+    replacements = generator._build_replacements_map({"contract": {}})
+
+    for key in ("transfer_place", "transfer_datetime", "transfer_mileage",
+                "transfer_condition", "return_place", "return_datetime",
+                "return_mileage", "return_condition", "return_notes"):
+        assert replacements[key] == "", key
+
+    assert replacements["transfer_documents"] == TRANSFER_DOCUMENTS
+
+
+def test_act_log_reports_filled_fields(generator, caplog):
+    """В лог уходит только счётчик заполненных полей Акта — без самих данных."""
+    payload = _payload(contract_extra={
+        "transfer_place": "г. Москва, ул. Передающая, д. 1",
+        "transfer_datetime": "21.09.2026 08:30",
+    })
+
+    with caplog.at_level(logging.INFO, logger="core.contract_generator"):
+        generator._build_replacements_map(payload)
+
+    messages = "\n".join(
+        r.getMessage() for r in caplog.records
+        if r.name == "core.contract_generator"
+    )
+    assert "полей Акта заполнено — 2 из 9" in messages
+    assert "Передающая" not in messages
 
 
 # ─────────────────────────────────────────────────────────────

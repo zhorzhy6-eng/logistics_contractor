@@ -48,8 +48,10 @@ from core.contracts.registry import ContractTypeRegistry  # noqa: E402
 from core.prompts import get_prompt  # noqa: E402
 from ui.windows.arenda_ts import ArendaTsWindow  # noqa: E402
 from ui.windows.arenda_ts.tabs import (  # noqa: E402
-    CargoTab, CrewTab, LesseeTab, LessorTab, PriceTab, RouteTab, VehicleTab,
+    ActTab, CargoTab, CrewTab, LesseeTab, LessorTab, PriceTab, RouteTab,
+    VehicleTab,
 )
+from ui.windows.arenda_ts.tabs.act_tab import ACT_FIELDS  # noqa: E402
 from ui.windows.arenda_ts.window import RecognitionTask  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────
@@ -68,6 +70,8 @@ TAB_SPECS = (
     ("Груз", CargoTab),
     ("Экипаж", CrewTab),
     ("Стоимость", PriceTab),
+    # Приложение № 1 — часть того же файла (шаг FIX-3).
+    ("Акт", ActTab),
 )
 
 #: Шапка договора и срок аренды (п. 2.5).
@@ -154,6 +158,21 @@ SPECIAL_CONDITIONS = "Простой не более 24 часов"
 #: в распознанном документе (значение по умолчанию у вкладки — 30).
 PAYMENT_DAYS = 45
 
+#: Десять полей вкладки «Акт» (Приложение № 1, шаг FIX-3). Значения — те же,
+#: что печатает бланк: места передачи и возврата, даты, пробег и состояние.
+ACT_DATA = {
+    "transfer_place": "г. Москва, ул. Передающая, д. 1",
+    "transfer_datetime": "21.09.2026 08:30",
+    "transfer_mileage": "125 400 км",
+    "transfer_condition": "Без замечаний",
+    "transfer_documents": "СТС; ОСАГО; иные: доверенность № 5",
+    "return_place": "г. Калуга, ул. Возвратная, д. 2",
+    "return_datetime": "27.09.2026 19:00",
+    "return_mileage": "128 130 км",
+    "return_condition": "Царапина на левом борту",
+    "return_notes": "Акт подписан без разногласий",
+}
+
 
 # ─────────────────────────────────────────────────────────────
 # Фикстуры и помощники
@@ -220,7 +239,7 @@ class FakeClient:
 
 
 def _fill_all_tabs(win, cars=1):
-    """Заполняет все семь вкладок данными, которых хватает валидатору."""
+    """Заполняет все восемь вкладок данными, которых хватает валидатору."""
     win.lessee_tab.fill_data({
         "carrier_type": "ООО",
         "full_name": LESSEE_NAME,
@@ -302,6 +321,7 @@ def _fill_all_tabs(win, cars=1):
         "special_conditions": SPECIAL_CONDITIONS,
         "payment_days": PAYMENT_DAYS,
     })
+    win.act_tab.fill_data(dict(ACT_DATA))
 
 
 def _assert_other_tabs_intact(win, cleared_index: int) -> None:
@@ -320,6 +340,9 @@ def _assert_other_tabs_intact(win, cleared_index: int) -> None:
         assert win.crew_tab.get_data()["driver_full_name"] == DRIVER_NAME
     if cleared_index != 6:
         assert win.price_tab.get_data()["sum_wo_vat"] == FORM_AMOUNT
+    if cleared_index != 7:
+        assert win.act_tab.get_data()["transfer_place"] == \
+            ACT_DATA["transfer_place"]
 
 
 def _answer_recognition(window, data):
@@ -442,12 +465,12 @@ def _recognized_answer() -> dict:
 # 1. Окно и его вкладки
 # ─────────────────────────────────────────────────────────────
 
-def test_window_builds_with_seven_tabs(window):
+def test_window_builds_with_eight_tabs(window):
     assert window.CONTRACT_TYPE == "arenda_ts"
     assert window.windowTitle() == "Разовая аренда"
-    assert window.tabs.count() == 7
+    assert window.tabs.count() == 8
     assert window.tab_titles() == [title for title, _ in TAB_SPECS]
-    assert window.side_nav.count() == 7
+    assert window.side_nav.count() == 8
 
 
 def test_window_builds_without_arguments(qt_app, quiet_messages):
@@ -455,7 +478,7 @@ def test_window_builds_without_arguments(qt_app, quiet_messages):
     win = ArendaTsWindow()
     try:
         assert win.parent() is None
-        assert win.tabs.count() == 7
+        assert win.tabs.count() == 8
     finally:
         win.force_close()
 
@@ -480,13 +503,14 @@ def test_tabs_are_named_attributes(window):
     assert isinstance(window.cargo_tab, CargoTab)
     assert isinstance(window.crew_tab, CrewTab)
     assert isinstance(window.price_tab, PriceTab)
+    assert isinstance(window.act_tab, ActTab)
 
 
 def test_tab_attribute_matches_position(window):
     """Имя вкладки соответствует её месту в TAB_CONFIGS."""
     named = {
         "lessee_tab": 0, "lessor_tab": 1, "vehicle_tab": 2, "route_tab": 3,
-        "cargo_tab": 4, "crew_tab": 5, "price_tab": 6,
+        "cargo_tab": 4, "crew_tab": 5, "price_tab": 6, "act_tab": 7,
     }
     for attribute, index in named.items():
         assert getattr(window, attribute) is window.tabs.widget(index), attribute

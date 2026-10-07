@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Семь вкладок окна типа «Разовая аренда» (ЭТАП 3.1.D.B.2).
+"""Восемь вкладок окна типа «Разовая аренда» (ЭТАП 3.1.D.B.2, FIX-3).
 
 Раскладка полей вкладок ровно та, которую читает
 ui/windows/arenda_ts/data.py::collect_arenda_ts_data:
@@ -20,7 +20,10 @@ ui/windows/arenda_ts/data.py::collect_arenda_ts_data:
                  водительское удостоверение — одной строкой: разбирает их
                  сборщик данных, а не вкладка;
     PriceTab   — Стоимость: сумма без НДС, ставка НДС, расчётные НДС и итог,
-                 сумма прописью и особые условия.
+                 сумма прописью и особые условия;
+    ActTab     — Акт (Приложение № 1): десять полей приёма-передачи и
+                 возврата ТС (шаг FIX-3) — до него эти ячейки бланка
+                 заполнялись только вручную в Word.
 
 Вкладки общие по устройству (см. ui/tabs/base_tab.py): QWidget + TabMixin,
 панель распознавания сверху, панель действий внизу. Реквизиты сторон взяты с
@@ -29,6 +32,7 @@ ui/windows/arenda_ts/data.py::collect_arenda_ts_data:
 (ui/tabs/contract_tab.py).
 """
 
+from ui.windows.arenda_ts.tabs.act_tab import ActTab
 from ui.windows.arenda_ts.tabs.cargo_tab import CargoTab
 from ui.windows.arenda_ts.tabs.crew_tab import CrewTab
 from ui.windows.arenda_ts.tabs.lessee_tab import LesseeTab
@@ -45,4 +49,5 @@ __all__ = [
     "CargoTab",
     "CrewTab",
     "PriceTab",
+    "ActTab",
 ]

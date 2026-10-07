@@ -142,6 +142,10 @@ def _fill_all_tabs(win, cars=1):
         "number": CONTRACT_NUMBER,
         "date": "2026-09-24",
         "name": CUSTOMER_NAME,
+        # План погрузки — на вкладке «Заказчик» с шага FIX-3.
+        "loading_date": "2026-09-26",
+        "loading_time_from": "08:00",
+        "loading_time_to": "20:00",
     })
     win.cargo_tab.fill_data({"vehicles": [
         {"brand_model": f"МОДЕЛЬ {number}",
@@ -154,9 +158,6 @@ def _fill_all_tabs(win, cars=1):
                       "address": "г. Москва, ул. Складская, д. 1"}],
         "consignees": [{"name": "ООО «Клиент 1»",
                         "address": "г. Казань, ул. Заводская, д. 2"}],
-        "loading_date": "2026-09-26",
-        "loading_time_from": "08:00",
-        "loading_time_to": "20:00",
         "unloading_date": "2026-10-01",
         "unloading_time_from": "08:00",
         "unloading_time_to": "20:00",
@@ -936,11 +937,15 @@ def test_recognition_fills_tabs(window, quiet_messages):
         },
     })
 
-    # Заказчик: наименование из customer, номер и дата — из contract.
+    # Заказчик: наименование из customer, номер, дата и ПЛАН ПОГРУЗКИ —
+    # из contract (план погрузки переехал сюда шагом FIX-3).
     customer = window.customer_tab.get_data()
     assert customer["name"] == "ООО «Новый заказчик»"
     assert customer["number"] == "ЛР-2026-77"
     assert customer["date"] == "2026-10-01"
+    assert customer["loading_date"] == "2026-10-02"
+    assert customer["loading_time_from"] == "09:00"
+    assert customer["loading_time_to"] == "18:00"
 
     # Груз: таблица перерисована по ответу модели.
     assert window.cargo_tab.get_data()["vehicles"] == [
@@ -948,14 +953,12 @@ def test_recognition_fills_tabs(window, quiet_messages):
     ]
 
     # Маршрут: грузоотправитель и адреса погрузки — своими полями,
-    # план — из блока contract.
+    # план ВЫГРУЗКИ — из блока contract.
     route = window.route_tab.get_data()
     assert route["shipper_name"] == "ООО «Склад 2»"
     assert route["loading_addresses"] == ["г. Тверь, ул. Новая, д. 3"]
     assert route["consignees"] == [{"name": "ООО «Клиент 2»",
                                     "address": "г. Сочи, ул. Морская, д. 4"}]
-    assert route["loading_date"] == "2026-10-02"
-    assert route["loading_time_from"] == "09:00"
     assert route["unloading_date"] == "2026-10-05"
     assert route["unloading_time_to"] == "17:00"
 
@@ -1199,18 +1202,24 @@ def test_cargo_tab_data_drops_empty_rows():
 
 
 def test_route_tab_data_maps_points_and_plan():
-    """Грузоотправитель и адреса погрузки — из своего блока, план — из contract."""
+    """
+    Грузоотправитель и адреса погрузки — из своего блока, план ВЫГРУЗКИ —
+    из contract.
+
+    План ПОГРУЗКИ на «Маршрут» больше не приходит: шагом FIX-3 он ушёл на
+    вкладку «Заказчик» — см. test_customer_tab_data_maps_loading_plan.
+    """
     data = LogistiksRusWindow._route_tab_data({
         "shipper_name": "ООО «Склад»",
         "loading_addresses": ["адрес погрузки", "  ", "адрес погрузки 2"],
         "consignees": [{"name": "ООО «Приёмка»", "address": "адрес выгрузки"}],
-        "contract": {"loading_date": "02.10.2026", "loading_time_from": "09:00",
+        "contract": {"unloading_date": "05.10.2026", "unloading_time_from": "09:00",
                      "sum_wo_vat": 100.0, "number": "ЛР-1"},
     })
 
     assert data == {
-        "loading_date": "02.10.2026",
-        "loading_time_from": "09:00",
+        "unloading_date": "05.10.2026",
+        "unloading_time_from": "09:00",
         "shipper_name": "ООО «Склад»",
         "loading_addresses": ["адрес погрузки", "адрес погрузки 2"],
         "consignees": [{"name": "ООО «Приёмка»", "address": "адрес выгрузки"}],
@@ -1219,8 +1228,52 @@ def test_route_tab_data_maps_points_and_plan():
     # Пустые значения и пустой план — пустой словарь (вкладка не тронута).
     assert LogistiksRusWindow._route_tab_data({}) == {}
     assert LogistiksRusWindow._route_tab_data(
-        {"loading_addresses": ["", "  "], "contract": {"loading_date": ""}}
+        {"loading_addresses": ["", "  "], "contract": {"unloading_date": ""}}
     ) == {}
+
+
+def test_route_tab_data_does_not_touch_loading_plan():
+    """План погрузки «Маршруту» не раскладывается — его читает «Заказчик»."""
+    data = LogistiksRusWindow._route_tab_data({
+        "shipper_name": "ООО «Склад»",
+        "contract": {
+            "loading_date": "02.10.2026",
+            "loading_time_from": "09:00",
+            "loading_time_to": "18:00",
+        },
+    })
+
+    for key in ("loading_date", "loading_time_from", "loading_time_to"):
+        assert key not in data, f"«Маршрут» всё ещё получает {key}"
+
+
+def test_customer_tab_data_maps_loading_plan():
+    """План погрузки раскладывается на вкладку «Заказчик» (шаг FIX-3)."""
+    data = LogistiksRusWindow._customer_tab_data(
+        {"full_name": "ООО «Заказчик»"},
+        {
+            "number": "ЛР-2026-77",
+            "date": "01.10.2026",
+            "loading_date": "02.10.2026",
+            "loading_time_from": "09:00",
+            "loading_time_to": "18:00",
+            "unloading_date": "05.10.2026",
+        },
+    )
+
+    assert data == {
+        "name": "ООО «Заказчик»",
+        "number": "ЛР-2026-77",
+        "date": "01.10.2026",
+        "loading_date": "02.10.2026",
+        "loading_time_from": "09:00",
+        "loading_time_to": "18:00",
+    }
+    # План выгрузки остаётся «Маршруту».
+    assert "unloading_date" not in data
+
+    # Пустой ответ вкладку не трогает.
+    assert LogistiksRusWindow._customer_tab_data({}, {}) == {}
 
 
 def test_route_tab_data_accepts_old_shippers_array():

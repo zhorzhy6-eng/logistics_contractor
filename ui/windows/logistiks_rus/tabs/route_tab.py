@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Вкладка «Маршрут» окна типа «Логистикс Рус» (ЭТАП 3.1.C.B.2, FIX-2.2).
+Вкладка «Маршрут» окна типа «Логистикс Рус» (ЭТАП 3.1.C.B.2, FIX-2.2, FIX-3).
 
 Маршрут этой заявки — направление, точки погрузки и выгрузки и общий план
 по каждой стороне. В разделе 1 заявки грузоотправитель ОДИН (обычно
@@ -20,10 +20,14 @@
 «Адрес погрузки №N: …» и блоки «Грузополучатель №N: …».
 
 Ключи get_data() — route, shipper_name, loading_addresses, consignees,
-loading_date, loading_time_from / _to, unloading_date, unloading_time_from
-/ _to — читает ui/windows/logistiks_rus/data.py::_build_route. Дата и окно
-времени у точек маршрута не вводятся: в бланке они печатаются общей строкой
-плана, поэтому сборка сама подставляет их в каждую точку.
+unloading_date, unloading_time_from / _to — читает
+ui/windows/logistiks_rus/data.py::_build_route. Дата и окно времени у точек
+маршрута не вводятся: в бланке они печатаются общей строкой плана, поэтому
+сборка сама подставляет их в каждую точку.
+
+План ПОГРУЗКИ (loading_date, loading_time_from / _to) на этой вкладке
+отсутствует: шагом FIX-3 он переехал на вкладку «Заказчик» — дата и время
+подачи ТС относятся к заявке в целом. Здесь остался только план выгрузки.
 
 Кнопки «Из справочника» есть у обеих таблиц: у адресов погрузки адрес
 берётся из справочника как есть, у грузополучателей оттуда приходят и
@@ -206,25 +210,10 @@ class RouteTab(TabMixin, QWidget):
 
         layout.addWidget(consignees_group)
 
-        # ── Группа «План погрузки» ──
-        loading_group, loading_layout = theme.section_box("План погрузки")
-
-        self.loading_date = self._make_date_edit(QDate.currentDate())
-        loading_layout.addRow("Дата погрузки", self.loading_date)
-
-        loading_time_layout = QHBoxLayout()
-        self.loading_time_from = self._make_time_edit(DEFAULT_LOADING_TIME_FROM)
-        loading_time_layout.addWidget(QLabel("с"))
-        loading_time_layout.addWidget(self.loading_time_from)
-        self.loading_time_to = self._make_time_edit(DEFAULT_LOADING_TIME_TO)
-        loading_time_layout.addWidget(QLabel("по"))
-        loading_time_layout.addWidget(self.loading_time_to)
-        loading_time_layout.addStretch()
-        loading_layout.addRow("Время погрузки", loading_time_layout)
-
-        layout.addWidget(loading_group)
-
         # ── Группа «План выгрузки» ──
+        # План ПОГРУЗКИ (дата и время подачи ТС) переехал на вкладку
+        # «Заказчик» шагом FIX-3: он относится к заявке в целом, а не к
+        # точкам доставки. Здесь остался только план выгрузки.
         unloading_group, unloading_layout = theme.section_box("План выгрузки")
 
         self.unloading_date = self._make_date_edit(
@@ -492,20 +481,21 @@ class RouteTab(TabMixin, QWidget):
     def get_data(self) -> Dict[str, Any]:
         """
         Маршрут, грузоотправитель, адреса погрузки, грузополучатели и план
-        (даты — ISO, время — «HH:mm»).
+        ВЫГРУЗКИ (даты — ISO, время — «HH:mm»).
 
         Грузоотправитель отдаётся одним полем, адреса погрузки — списком
         строк; грузополучатели — массивом consignees по образцу
         ui/tabs/contract_tab.py. Пустые строки таблиц в данные не попадают.
+
+        Плана погрузки здесь нет: дата и время подачи ТС переехали на вкладку
+        «Заказчик» шагом FIX-3 (см. customer_tab.py) — ключи loading_date /
+        loading_time_from / loading_time_to отдаёт она.
         """
         return {
             "route": self.route.text().strip(),
             "shipper_name": self.shipper_name.text().strip(),
             "loading_addresses": self._read_loading_addresses(),
             "consignees": self._read_points(self.consignees_table),
-            "loading_date": self.loading_date.date().toString("yyyy-MM-dd"),
-            "loading_time_from": self.loading_time_from.time().toString("HH:mm"),
-            "loading_time_to": self.loading_time_to.time().toString("HH:mm"),
             "unloading_date": self.unloading_date.date().toString("yyyy-MM-dd"),
             "unloading_time_from": self.unloading_time_from.time().toString("HH:mm"),
             "unloading_time_to": self.unloading_time_to.time().toString("HH:mm"),
@@ -591,13 +581,11 @@ class RouteTab(TabMixin, QWidget):
         self._fill_loading_addresses(loading_addresses)
         self._fill_points(self.consignees_table, data.get("consignees"))
 
-        if data.get("loading_date"):
-            self._set_date(self.loading_date, data["loading_date"])
+        # План ВЫГРУЗКИ. План погрузки приходит с вкладки «Заказчик» (FIX-3):
+        # здесь этих ключей больше нет, и читать их отсюда нечем.
         if data.get("unloading_date"):
             self._set_date(self.unloading_date, data["unloading_date"])
 
-        self._set_time(self.loading_time_from, data.get("loading_time_from"))
-        self._set_time(self.loading_time_to, data.get("loading_time_to"))
         self._set_time(self.unloading_time_from, data.get("unloading_time_from"))
         self._set_time(self.unloading_time_to, data.get("unloading_time_to"))
 
@@ -689,7 +677,7 @@ class RouteTab(TabMixin, QWidget):
         time_edit.setTime(parsed)
 
     def clear(self) -> None:
-        """Очищает маршрут и возвращает план к значениям по умолчанию."""
+        """Очищает маршрут и возвращает план ВЫГРУЗКИ к значениям по умолчанию."""
         self.route.clear()
         self.shipper_name.setText(DEFAULT_SHIPPER_NAME)
 
@@ -713,12 +701,9 @@ class RouteTab(TabMixin, QWidget):
         finally:
             self.consignees_table.blockSignals(False)
 
-        self.loading_date.setDate(QDate.currentDate())
         self.unloading_date.setDate(
             QDate.currentDate().addDays(DEFAULT_UNLOADING_DAYS)
         )
-        self.loading_time_from.setTime(DEFAULT_LOADING_TIME_FROM)
-        self.loading_time_to.setTime(DEFAULT_LOADING_TIME_TO)
         self.unloading_time_from.setTime(DEFAULT_UNLOADING_TIME_FROM)
         self.unloading_time_to.setTime(DEFAULT_UNLOADING_TIME_TO)
         self.recognition_panel.clear()
@@ -728,14 +713,14 @@ class RouteTab(TabMixin, QWidget):
 
 __all__ = [
     "RouteTab",
+    "NoWheelDateEdit",
+    "NoWheelTimeEdit",
     "MAX_POINTS",
     "MIN_ROWS",
     "COL_NAME",
     "COL_ADDRESS",
     "COL_LOADING_ADDRESS",
     "DEFAULT_SHIPPER_NAME",
-    "DEFAULT_LOADING_TIME_FROM",
-    "DEFAULT_LOADING_TIME_TO",
     "DEFAULT_UNLOADING_TIME_FROM",
     "DEFAULT_UNLOADING_TIME_TO",
     "DEFAULT_UNLOADING_DAYS",

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Тесты семи вкладок «Разовой аренды» (ЭТАП 3.1.D.B.2).
+Тесты восьми вкладок «Разовой аренды» (ЭТАП 3.1.D.B.2, дополнены на FIX-3).
 
 Проверяется то, на что опирается сборка данных
 (ui/windows/arenda_ts/data.py::collect_arenda_ts_data): набор ключей
@@ -16,7 +16,9 @@ get_data(), заполнение fill_data(), очистка clear(), сигна
   * Маршрут: две таблицы по 10 точек, у погрузки — дата и время подачи ТС;
   * Груз: до 12 машин с VIN и точками в строке, счётчик cargo_count;
   * Экипаж: ровно девять полей, паспорт и ВУ — одной строкой;
-  * Стоимость: пересчёт НДС по ставке и сумма прописью.
+  * Стоимость: пересчёт НДС по ставке и сумма прописью;
+  * Акт (Приложение № 1, шаг FIX-3): десять полей приёма-передачи и
+    возврата ТС — до этого шага бланк печатал там пустые ячейки.
 
 Последний раздел собирает ContractData из настоящих вкладок и проверяет, что
 валидатор типа не находит в них ни ошибок, ни замечаний, а генератор получает
@@ -41,12 +43,16 @@ from PyQt5.QtWidgets import (  # noqa: E402
 
 from core.contract_data import ContractData  # noqa: E402
 from ui.tabs.base_tab import TabMixin  # noqa: E402
-from ui.widgets import RecognitionPanel  # noqa: E402
+from ui.widgets import (  # noqa: E402
+    PasteableLineEdit, PasteableTextEdit, RecognitionPanel,
+)
 from ui.windows.arenda_ts import data as data_module  # noqa: E402
 from ui.windows.arenda_ts.data import build  # noqa: E402
 from ui.windows.arenda_ts.tabs import (  # noqa: E402
-    CargoTab, CrewTab, LesseeTab, LessorTab, PriceTab, RouteTab, VehicleTab,
+    ActTab, CargoTab, CrewTab, LesseeTab, LessorTab, PriceTab, RouteTab,
+    VehicleTab,
 )
+from ui.windows.arenda_ts.tabs import act_tab as act_tab_module  # noqa: E402
 from ui.windows.arenda_ts.tabs import cargo_tab as cargo_tab_module  # noqa: E402
 from ui.windows.arenda_ts.tabs import crew_tab as crew_tab_module  # noqa: E402
 from ui.windows.arenda_ts.tabs import lessee_tab as lessee_tab_module  # noqa: E402
@@ -79,6 +85,7 @@ TAB_FACTORIES = [
     ("cargo", CargoTab),
     ("crew", CrewTab),
     ("price", PriceTab),
+    ("act", ActTab),
 ]
 
 #: Ключи get_data() каждой вкладки — ровно те, что читает сборка данных.
@@ -113,6 +120,8 @@ EXPECTED_KEYS = {
         "sum_wo_vat", "sum_vat", "sum_total", "vat_rate", "vat_rate_num",
         "payment_days", "special_conditions",
     },
+    # Акт (Приложение № 1, шаг FIX-3): десять полей передачи и возврата.
+    ActTab: set(act_tab_module.ACT_FIELDS),
 }
 
 #: Образец заполнения для каждой вкладки: то, что мог бы дать распознаватель.
@@ -201,6 +210,20 @@ SAMPLE_DATA = {
         "payment_days": 45,
         "special_conditions": "Простой не более 24 часов",
     },
+    # Акт: значения приходят только из формы — распознавание их не извлекает
+    # (core/prompts/arenda_ts.py), поэтому образец задаёт их вручную.
+    ActTab: {
+        "transfer_place": "г. Москва, ул. Передающая, д. 1",
+        "transfer_datetime": "21.09.2026 08:30",
+        "transfer_mileage": "125 400 км",
+        "transfer_condition": "Без замечаний",
+        "transfer_documents": "СТС; ОСАГО; иные: доверенность № 5",
+        "return_place": "г. Калуга, ул. Возвратная, д. 2",
+        "return_datetime": "27.09.2026 19:00",
+        "return_mileage": "128 130 км",
+        "return_condition": "Царапина на левом борту",
+        "return_notes": "Акт подписан без разногласий",
+    },
 }
 
 #: Поля-значения по умолчанию: их clear() не обнуляет, а возвращает к норме.
@@ -247,7 +270,7 @@ def quiet_dialogs(monkeypatch):
 
 @pytest.fixture
 def filled_tabs(qt_app):
-    """Все семь вкладок окна, заполненные как в жизни."""
+    """Все восемь вкладок окна, заполненные как в жизни."""
     widgets = {
         key: factory() for key, factory in TAB_FACTORIES
     }
@@ -265,10 +288,11 @@ def filled_tabs(qt_app):
 # ─────────────────────────────────────────────────────────────
 
 def _build_from(widgets: dict) -> ContractData:
-    """Собирает ContractData из семи вкладок в порядке разделов."""
+    """Собирает ContractData из восьми вкладок в порядке разделов."""
     return build(
         widgets["lessee"], widgets["lessor"], widgets["vehicle"],
         widgets["route"], widgets["cargo"], widgets["crew"], widgets["price"],
+        widgets.get("act"),
     )
 
 
@@ -1852,10 +1876,131 @@ def test_price_payment_days_is_integer(qt_app):
 
 
 # ─────────────────────────────────────────────────────────────
-# Окно: семь разделов
+# «Акт» (Приложение № 1, шаг FIX-3)
 # ─────────────────────────────────────────────────────────────
 
-def test_window_tab_configs_have_seven_tabs():
+def test_act_has_ten_fields(qt_app):
+    """Ровно десять полей Акта — по одному на строку таблиц бланка."""
+    tab = ActTab()
+
+    assert len(act_tab_module.ACT_FIELDS) == 10
+    assert set(tab.get_data()) == set(act_tab_module.ACT_FIELDS)
+
+
+def test_act_field_widgets(qt_app):
+    """Место, дата, пробег и документы — строки; состояние — абзацы."""
+    tab = ActTab()
+
+    for name in ("transfer_place", "transfer_datetime", "transfer_mileage",
+                 "transfer_documents", "return_place", "return_datetime",
+                 "return_mileage"):
+        assert isinstance(getattr(tab, name), PasteableLineEdit), name
+
+    for name in ("transfer_condition", "return_condition", "return_notes"):
+        assert isinstance(getattr(tab, name), PasteableTextEdit), name
+
+
+def test_act_groups_are_named_like_the_blank(qt_app):
+    """Группы вкладки названы как разделы Акта в бланке."""
+    tab = ActTab()
+    titles = [box.title() for box in tab.findChildren(QGroupBox)]
+
+    assert "Передача ТС в аренду" in titles
+    assert "Возврат ТС" in titles
+
+
+def test_act_fill_and_read_back(qt_app):
+    tab = ActTab()
+
+    tab.fill_data(SAMPLE_DATA[ActTab])
+
+    assert tab.get_data() == SAMPLE_DATA[ActTab]
+
+
+def test_act_empty_values_keep_manual_input(qt_app):
+    """Пустые значения ответа ручной ввод не стирают."""
+    tab = ActTab()
+    tab.fill_data(SAMPLE_DATA[ActTab])
+
+    tab.fill_data({field: "" for field in act_tab_module.ACT_FIELDS})
+
+    assert tab.get_data() == SAMPLE_DATA[ActTab]
+
+
+def test_act_clear_empties_all_fields(qt_app):
+    tab = ActTab()
+    tab.fill_data(SAMPLE_DATA[ActTab])
+
+    tab.clear()
+
+    assert set(tab.get_data().values()) == {""}
+
+
+def test_act_documents_field_is_empty_by_default(qt_app):
+    """
+    Перечень документов вкладка не подставляет.
+
+    Значение по умолчанию печатает генератор
+    (core/contracts/arenda_ts/generator.py::TRANSFER_DOCUMENTS), иначе поле
+    выглядело бы заполненным без участия пользователя.
+    """
+    tab = ActTab()
+
+    assert tab.get_data()["transfer_documents"] == ""
+    assert "СТС" in act_tab_module.DOCUMENTS_TOOLTIP
+    assert tab.transfer_documents.toolTip() == act_tab_module.DOCUMENTS_TOOLTIP
+
+
+def test_act_data_goes_to_contract(filled_tabs):
+    """Поля вкладки собираются в contract теми же ключами — их читает генератор."""
+    contract = _build_from(filled_tabs).contract
+
+    for field, value in SAMPLE_DATA[ActTab].items():
+        assert contract[field] == value, field
+
+
+def test_act_tab_is_optional_in_build(filled_tabs):
+    """Сборка без вкладки «Акт» даёт те же данные, только без полей акта."""
+    without_act = build(
+        filled_tabs["lessee"], filled_tabs["lessor"], filled_tabs["vehicle"],
+        filled_tabs["route"], filled_tabs["cargo"], filled_tabs["crew"],
+        filled_tabs["price"],
+    )
+
+    assert not [key for key in act_tab_module.ACT_FIELDS
+                if key in without_act.contract]
+    assert without_act.contract["number"] == \
+        _build_from(filled_tabs).contract["number"]
+
+
+def test_empty_act_tab_leaves_contract_without_act_fields(qt_app):
+    """Пустая вкладка «Акт» не оставляет в contract пустых ключей."""
+    widgets = {key: factory() for key, factory in TAB_FACTORIES}
+    try:
+        contract = _build_from(widgets).contract
+    finally:
+        for widget in widgets.values():
+            widget.deleteLater()
+
+    assert not [key for key in act_tab_module.ACT_FIELDS if key in contract]
+
+
+def test_act_fields_reach_the_generated_document(filled_tabs, templates_dir):
+    """Значения вкладки «Акт» доходят до таблиц Приложения № 1."""
+    from core.contracts.arenda_ts.generator import ArendaTsGenerator
+
+    generator = ArendaTsGenerator(templates_dir=str(templates_dir))
+    replacements = generator.build_replacements(_build_from(filled_tabs))
+
+    for field, value in SAMPLE_DATA[ActTab].items():
+        assert replacements[field] == value, field
+
+
+# ─────────────────────────────────────────────────────────────
+# Окно: восемь разделов
+# ─────────────────────────────────────────────────────────────
+
+def test_window_tab_configs_have_eight_tabs():
     assert ArendaTsWindow.TAB_CONFIGS == [
         ("Арендатор", "customer.svg"),
         ("Арендодатель", "carrier.svg"),
@@ -1864,12 +2009,13 @@ def test_window_tab_configs_have_seven_tabs():
         ("Груз", "contract.svg"),
         ("Экипаж", "driver.svg"),
         ("Стоимость", "contract.svg"),
+        ("Акт", "contract.svg"),
     ]
 
 
 def test_tab_classes_count_matches_window_configs():
-    """Семь вкладок написаны и семь разделов объявлено в окне."""
-    assert len(TAB_FACTORIES) == len(ArendaTsWindow.TAB_CONFIGS) == 7
+    """Восемь вкладок написаны и восемь разделов объявлено в окне."""
+    assert len(TAB_FACTORIES) == len(ArendaTsWindow.TAB_CONFIGS) == 8
 
 
 def test_every_window_icon_exists():

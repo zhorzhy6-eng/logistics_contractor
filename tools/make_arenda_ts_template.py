@@ -61,13 +61,22 @@
     «{{payment_days}} ({{payment_days_words}}) банковских дней» — как
     в шаблоне перевозки (п. 4.4), а не константой «30 (тридцати)»: число
     банковских дней задаётся на вкладке «Стоимость»;
+  * п. 1.1 и 1.2 называют подписанта ТРЕМЯ полями: должность в родительном
+    падеже ({{*_director_position_rod}}), ФИО ({{*_director_name}}) и
+    причастие по роду ({{*_director_acting_rod}} — «действующего» /
+    «действующей»). Раньше в бланке стояло жёсткое «действующего»: для
+    директора-женщины документ печатался с ошибкой (шаг FIX-3);
+  * раздел 9 печатает краткое наименование стороны ({{*_short_name}})
+    и фактический адрес ({{*_actual_address}}) — раньше этих полей
+    в бланке не было, и введённые в форме значения в договор не попадали;
   * п. 4.3 в «ИП без НДС» сформулирован про УСН: оставлять в этом варианте
     утверждение «является плательщиком НДС» рядом с «НДС не облагается»
     нельзя — документ противоречил бы сам себе;
   * п. 2.3 не повторяет маршрут значением (маршрут раскрыт в п. 3.4),
     поэтому плейсхолдер {{route}} встречается в договоре один раз;
-  * в Акте поля для ручного заполнения оставлены пустыми ячейками
-    (в образце там подчёркивания);
+  * в Акте поля для ручного заполнения печатаются плейсхолдерами
+    ({{transfer_place}}, {{return_notes}} и остальные восемь): значения
+    приходят из формы, пустое значение даёт пустое место в документе;
   * строки «Водительское удостоверение» и «Дата выдачи» в п. 3.5 разведены
     на два плейсхолдера (driver_license / driver_license_issue_date);
   * убраны опечатки образца (пропущенная запятая после ФИО в п. 1.2,
@@ -467,16 +476,16 @@ def build_parties_section(doc, variant: Dict[str, Any]) -> None:
     add_paragraph(doc, [
         "1.1. Арендатор: {{lessee_full_name}} ({{lessee_short_name}}), ",
         f"{variant['lessee_verbal']} в дальнейшем «Арендатор», в лице ",
-        "{{lessee_director_position}} {{lessee_director_name}}, действующего "
-        "на основании {{lessee_basis}}.",
+        "{{lessee_director_position_rod}} {{lessee_director_name}}, "
+        "{{lessee_director_acting_rod}} на основании {{lessee_basis}}.",
     ], align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
     add_paragraph(doc, [
         "1.2. Арендодатель: {{lessor_full_name}} ({{lessor_short_name}}), "
         "ИНН {{lessor_inn}}, ОГРН {{lessor_ogrn}}, в лице "
-        "{{lessor_director_position}} {{lessor_director_name}}, действующего "
-        "на основании {{lessor_basis}}, именуемое в дальнейшем "
-        "«Арендодатель».",
+        "{{lessor_director_position_rod}} {{lessor_director_name}}, "
+        "{{lessor_director_acting_rod}} на основании {{lessor_basis}}, "
+        "именуемое в дальнейшем «Арендодатель».",
     ], align=WD_ALIGN_PARAGRAPH.JUSTIFY)
 
     add_paragraph(doc, [
@@ -1117,6 +1126,7 @@ def _requisites_lines(prefix: str, variant: Dict[str, Any],
     """
     lines: List[List[Any]] = [
         [(f"{{{{{prefix}_full_name}}}}", {"bold": True, "size": SMALL_SIZE})],
+        [(f"{{{{{prefix}_short_name}}}}", {"bold": True, "size": SMALL_SIZE})],
         [(f"ИНН {{{{{prefix}_inn}}}}", {"bold": True, "size": SMALL_SIZE})],
     ]
     if is_lessee and variant["with_kpp"]:
@@ -1126,6 +1136,7 @@ def _requisites_lines(prefix: str, variant: Dict[str, Any],
                    {"bold": True, "size": SMALL_SIZE})])
     for line in (
         f"Юридический адрес: {{{{{prefix}_address}}}}",
+        f"Фактический адрес: {{{{{prefix}_actual_address}}}}",
         f"р/с {{{{{prefix}_account}}}} в {{{{{prefix}_bank}}}}",
         f"БИК {{{{{prefix}_bik}}}}",
         f"к/с {{{{{prefix}_corr_account}}}}",
@@ -1218,15 +1229,14 @@ def build_appendix(doc) -> None:
     add_paragraph(doc, [("1. ПЕРЕДАЧА ТС В АРЕНДУ", {"bold": True})],
                   space_after=3)
     _build_act_table(doc, (
-        ("Место передачи", None),
-        ("Фактические дата и время передачи", None),
+        ("Место передачи", "{{transfer_place}}"),
+        ("Фактические дата и время передачи", "{{transfer_datetime}}"),
         ("Тягач", "{{tractor_brand}}, гос. номер {{tractor_plate}}"),
         ("Прицеп/полуприцеп",
          "{{trailer_brand}}, гос. номер {{trailer_plate}}"),
-        ("Пробег на момент передачи", None),
-        ("Внешнее состояние / замечания", None),
-        ("Переданные документы",
-         "СТС на тягач и прицеп/полуприцеп; ОСАГО; иные:"),
+        ("Пробег на момент передачи", "{{transfer_mileage}}"),
+        ("Внешнее состояние / замечания", "{{transfer_condition}}"),
+        ("Переданные документы", "{{transfer_documents}}"),
         ("Экипаж", "{{driver_full_name}}"),
     ))
 
@@ -1241,11 +1251,11 @@ def build_appendix(doc) -> None:
     # 2. Возврат ТС.
     add_paragraph(doc, [("2. ВОЗВРАТ ТС", {"bold": True})], space_after=3)
     _build_act_table(doc, (
-        ("Место возврата", None),
-        ("Фактические дата и время возврата", None),
-        ("Пробег на момент возврата", None),
-        ("Состояние ТС / замечания", None),
-        ("Иные отметки", None),
+        ("Место возврата", "{{return_place}}"),
+        ("Фактические дата и время возврата", "{{return_datetime}}"),
+        ("Пробег на момент возврата", "{{return_mileage}}"),
+        ("Состояние ТС / замечания", "{{return_condition}}"),
+        ("Иные отметки", "{{return_notes}}"),
     ))
 
     add_paragraph(doc, [

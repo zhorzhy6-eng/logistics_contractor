@@ -190,15 +190,21 @@ class LogistiksRusWindow(BaseContractWindow):
         ("contract", "условия заявки"),
     )
 
-    #: Поля плана погрузки и выгрузки: вкладка «Маршрут» ждёт их теми же
-    #: именами, что и сборщик данных (logistiks_rus/data.py::_build_route).
+    #: Поля плана ВЫГРУЗКИ: вкладка «Маршрут» ждёт их теми же именами, что
+    #: и сборщик данных (logistiks_rus/data.py::_build_route). План ПОГРУЗКИ
+    #: переехал на вкладку «Заказчик» шагом FIX-3 — см. _LOADING_PLAN_KEYS.
     _ROUTE_PLAN_KEYS = (
-        "loading_date",
-        "loading_time_from",
-        "loading_time_to",
         "unloading_date",
         "unloading_time_from",
         "unloading_time_to",
+    )
+
+    #: Поля плана ПОГРУЗКИ (шаг FIX-3): их читает вкладка «Заказчик» —
+    #: дата погрузки и окно времени подачи ТС относятся к заявке в целом.
+    _LOADING_PLAN_KEYS = (
+        "loading_date",
+        "loading_time_from",
+        "loading_time_to",
     )
 
     #: Суммы раздела 5 в порядке приоритета: у ООО сумма без НДС — это
@@ -723,10 +729,13 @@ class LogistiksRusWindow(BaseContractWindow):
     @classmethod
     def _customer_tab_data(cls, section: Any, contract: Any) -> Dict[str, Any]:
         """
-        Блок «customer» + шапка из «contract» → поля вкладки «Заказчик».
+        Блок «customer» + шапка и план погрузки из «contract» → вкладка
+        «Заказчик».
 
         Вкладка ждёт name (наименование заказчика), а номер и дату заявки —
         из блока contract: в промпте они лежат там, а не в customer.
+        С шага FIX-3 сюда же уходит план ПОГРУЗКИ (loading_date,
+        loading_time_from / _to): он переехал с вкладки «Маршрут».
         """
         customer = filled_only(section)
         header = filled_only(contract)
@@ -741,6 +750,11 @@ class LogistiksRusWindow(BaseContractWindow):
             data["name"] = name
 
         for key in ("number", "date"):
+            value = header.get(key)
+            if value not in (None, ""):
+                data[key] = value
+
+        for key in cls._LOADING_PLAN_KEYS:
             value = header.get(key)
             if value not in (None, ""):
                 data[key] = value
@@ -779,8 +793,12 @@ class LogistiksRusWindow(BaseContractWindow):
     @classmethod
     def _route_tab_data(cls, answer: Any) -> Dict[str, Any]:
         """Блоки «shipper_name» / «loading_addresses» / «consignees» + план
-        из «contract» → вкладка «Маршрут». Принимает и старый формат
-        (массив shippers), и новый."""
+        ВЫГРУЗКИ из «contract» → вкладка «Маршрут». Принимает и старый
+        формат (массив shippers), и новый.
+
+        Плана погрузки здесь нет: шагом FIX-3 он ушёл на вкладку «Заказчик»
+        (_customer_tab_data) — вкладка «Маршрут» этих полей не знает.
+        """
         answer = answer if isinstance(answer, Mapping) else {}
         plan = filled_only(answer.get("contract")) or {}
 

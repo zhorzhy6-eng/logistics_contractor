@@ -68,8 +68,10 @@ from ui import theme
 from ui.icons import action_icon
 from ui.windows.arenda_ts import data as arenda_ts_data
 from ui.windows.arenda_ts.tabs import (
-    CargoTab, CrewTab, LesseeTab, LessorTab, PriceTab, RouteTab, VehicleTab,
+    ActTab, CargoTab, CrewTab, LesseeTab, LessorTab, PriceTab, RouteTab,
+    VehicleTab,
 )
+from ui.windows.arenda_ts.tabs.act_tab import ACT_FIELDS
 from ui.windows.base_window import BaseContractWindow
 
 logger = logging.getLogger("ui.windows.arenda_ts.window")
@@ -154,7 +156,7 @@ class RecognitionTask(QRunnable):
 
 
 class ArendaTsWindow(BaseContractWindow):
-    """Окно типа «Разовая аренда»: семь рабочих вкладок, генерация и распознавание."""
+    """Окно типа «Разовая аренда»: восемь рабочих вкладок, генерация и распознавание."""
 
     CONTRACT_TYPE = "arenda_ts"
     WINDOW_TITLE = "Разовая аренда"
@@ -166,6 +168,7 @@ class ArendaTsWindow(BaseContractWindow):
         ("Груз", "contract.svg"),
         ("Экипаж", "driver.svg"),
         ("Стоимость", "contract.svg"),
+        ("Акт", "contract.svg"),
     ]
 
     #: Заголовок вкладки из TAB_CONFIGS → класс настоящей вкладки.
@@ -178,6 +181,8 @@ class ArendaTsWindow(BaseContractWindow):
         "Груз": CargoTab,
         "Экипаж": CrewTab,
         "Стоимость": PriceTab,
+        # Приложение № 1 — часть того же файла (шаг FIX-3).
+        "Акт": ActTab,
     }
 
     #: Разделы ответа модели и подписи для debug-лога.
@@ -379,6 +384,7 @@ class ArendaTsWindow(BaseContractWindow):
         self.cargo_tab = self.tabs.widget(4)
         self.crew_tab = self.tabs.widget(5)
         self.price_tab = self.tabs.widget(6)
+        self.act_tab = self.tabs.widget(7)
 
         for tab in self._tabs():
             tab.create_contract_requested.connect(self._on_create_contract)
@@ -390,7 +396,7 @@ class ArendaTsWindow(BaseContractWindow):
     # ---------------------------------------------------------
     def _collect_data(self):
         """
-        Собирает ContractData со всех семи вкладок.
+        Собирает ContractData со всех восьми вкладок.
 
         Раскладка полей живёт в ui/windows/arenda_ts/data.py и проверяется
         отдельно; окно только передаёт вкладки. Метод ничего не меняет в
@@ -404,6 +410,7 @@ class ArendaTsWindow(BaseContractWindow):
             self.cargo_tab,
             self.crew_tab,
             self.price_tab,
+            self.act_tab,
         )
         logger.info("Разовая аренда: данные собраны — %s", contract_data.summary())
         return contract_data
@@ -1198,6 +1205,41 @@ class ArendaTsWindow(BaseContractWindow):
             return
         self.price_tab.fill_data(payload)
 
+    @staticmethod
+    def _act_tab_data(contract: Any, answer: Any) -> Dict[str, Any]:
+        """
+        Поля Акта (Приложение № 1) → вкладка «Акт» (шаг FIX-3).
+
+        Промпт аренды этих полей не извлекает: акт — форма для заполнения при
+        передаче ТС, и в ответе модели их нет (core/prompts/arenda_ts.py,
+        «ЧЕГО В ОТВЕТЕ БЫТЬ НЕ ДОЛЖНО»). Но если данные пришли (например, из
+        сохранённого ответа или чужой раскладки), терять их не нужно —
+        поэтому ключи ищутся и в блоке contract, и в корне ответа.
+
+        Пустые значения не возвращаются: они не должны стирать ручной ввод.
+        """
+        data: Dict[str, Any] = {}
+        for source in (contract, answer):
+            if not isinstance(source, Mapping):
+                continue
+            for field in ACT_FIELDS:
+                if field in data:
+                    continue
+                value = str(source.get(field) or "").strip()
+                if value:
+                    data[field] = value
+        return data
+
+    def _fill_act(self, contract: Any, answer: Any) -> None:
+        """Акт приёма-передачи: десять полей Приложения № 1."""
+        payload = self._act_tab_data(contract, answer)
+        if not payload:
+            logger.info(
+                "Разовая аренда: полей акта в ответе нет — вкладка как есть"
+            )
+            return
+        self.act_tab.fill_data(payload)
+
     def _on_recognition_finished(
         self, data: Dict[str, Any], task: Optional[RecognitionTask] = None
     ) -> None:
@@ -1231,6 +1273,7 @@ class ArendaTsWindow(BaseContractWindow):
             self._fill_cargo(answer.get("vehicles"))
             self._fill_crew(answer.get("driver"))
             self._fill_price(contract)
+            self._fill_act(contract, answer)
 
             self._log_ui_action(
                 "распознавание: ответ разложен по вкладкам",

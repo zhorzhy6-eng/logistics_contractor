@@ -129,7 +129,9 @@ contract.payment_days — срок оплаты из п. 4.5 бланка цел
     collect_arenda_ts_data({"lessee": tab, ...}) — по словарю.
 
 Первая — тонкая обёртка над второй: раскладка полей живёт в одном месте,
-и оба вызова дают одинаковый ContractData.
+и оба вызова дают одинаковый ContractData. Ключ «act» (вкладка «Акт»,
+шаг FIX-3) необязателен: без него сборка даёт те же данные, только без
+десяти полей Приложения № 1.
 
 Устойчивость
 ------------
@@ -158,6 +160,7 @@ SECTION_TITLES: Dict[str, str] = {
     "cargo": "Груз",
     "crew": "Экипаж",
     "price": "Стоимость",
+    "act": "Акт",
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -224,6 +227,26 @@ _LESSEE_FIELDS: Tuple[Tuple[str, str], ...] = (
 #: бланке (генератор его не заполняет).
 _LESSOR_FIELDS: Tuple[Tuple[str, str], ...] = tuple(
     (source, target) for source, target in _LESSEE_FIELDS if target != "kpp"
+)
+
+#: Поля Акта приёма-передачи (Приложение № 1, шаг FIX-3) — ровно те
+#: плейсхолдеры, которые печатает бланк и заполняет генератор
+#: (ArendaTsGenerator._fill_act). Имена совпадают с ключами вкладки «Акт»
+#: (ui/windows/arenda_ts/tabs/act_tab.py::ACT_FIELDS) и с ключами contract:
+#: вкладка, сборщик и генератор говорят об этих полях одними словами.
+#: Импортировать кортеж из act_tab нельзя — этот модуль не должен тянуть
+#: PyQt5 (проверяется тестом test_data_module_does_not_import_qt).
+ACT_FIELDS: Tuple[str, ...] = (
+    "transfer_place",
+    "transfer_datetime",
+    "transfer_mileage",
+    "transfer_condition",
+    "transfer_documents",
+    "return_place",
+    "return_datetime",
+    "return_mileage",
+    "return_condition",
+    "return_notes",
 )
 
 #: Ключи распознавания, которые вкладка может отдать блоком как есть
@@ -1088,6 +1111,33 @@ def _build_price(
 # Точка входа
 # ─────────────────────────────────────────────────────────────
 
+def _build_act(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """
+    Акт приёма-передачи и возврата ТС (Приложение № 1) — шаг FIX-3.
+
+    Десять полей Акта лежат в contract простыми строками: их читает карта
+    замен генератора (ArendaTsGenerator._fill_act) и печатает в таблицы
+    «Передача ТС» и «Возврат ТС». До этого шага бланк печатал там пустые
+    ячейки — значения можно было вписать только в Word.
+
+    Ключи вкладки и ключи contract совпадают (соглашение вкладок аренды:
+    вкладка отдаёт то, что читает генератор), поэтому перевод не нужен.
+    Пустые значения не записываются: незаполненное поле Акта даёт пустое
+    место в документе, а перечень документов генератор подставит сам.
+
+    Поля ищутся и на верхнем уровне вкладки, и в блоке contract — как
+    остальные разделы этого сборщика (_find_field).
+    """
+    act: Dict[str, Any] = {}
+
+    for field in ACT_FIELDS:
+        value = _find_field(data, _CONTRACT_BLOCK, field)
+        if value:
+            act[field] = value
+
+    return act
+
+
 def collect_arenda_ts_data(tabs: Mapping[str, Any]) -> ContractData:
     """
     Собирает ContractData договора аренды ТС с экипажем из вкладок окна.
@@ -1128,6 +1178,8 @@ def collect_arenda_ts_data(tabs: Mapping[str, Any]) -> ContractData:
     contract.update(vehicle["contract"])
     contract.update(route["contract"])
     contract.update(_build_price(price_data, carrier_type))
+    # Поля Акта (Приложение № 1, шаг FIX-3) — простые строки contract.
+    contract.update(_build_act(sections["act"]))
     # Вид Арендатора пишется только тогда, когда о нём есть данные: у пустого
     # входа поле остаётся незаполненным, и генератор берёт вариант по умолчанию.
     if _has_any_value(lessee_data) or _has_any_value(price_data):
@@ -1184,9 +1236,10 @@ def build(
     cargo_tab: Any,
     crew_tab: Any,
     price_tab: Any,
+    act_tab: Any = None,
 ) -> ContractData:
     """
-    Собирает ContractData из семи вкладок окна «Разовая аренда».
+    Собирает ContractData из восьми вкладок окна «Разовая аренда».
 
     Точка входа для окна: вкладки передаются по именам и в порядке разделов,
     а не словарём — так вызов читается и его нельзя перепутать местами
@@ -1205,6 +1258,9 @@ def build(
     :param cargo_tab: вкладка «Груз» (перевозимые автомобили).
     :param crew_tab: вкладка «Экипаж» (водитель).
     :param price_tab: вкладка «Стоимость» (суммы, НДС, особые условия).
+    :param act_tab: вкладка «Акт» (Приложение № 1, шаг FIX-3). Необязательна:
+        вызовы прежних шагов без неё дают те же данные, только без полей
+        акта — раздел остаётся пустым.
     :return: ContractData.
     """
     return collect_arenda_ts_data({
@@ -1215,6 +1271,7 @@ def build(
         "cargo": cargo_tab,
         "crew": crew_tab,
         "price": price_tab,
+        "act": act_tab,
     })
 
 
@@ -1222,6 +1279,7 @@ __all__ = [
     "build",
     "collect_arenda_ts_data",
     "SECTION_TITLES",
+    "ACT_FIELDS",
     "CARRIER_TYPE_OOO",
     "CARRIER_TYPE_IP_WITH_VAT",
     "CARRIER_TYPE_IP_WITHOUT_VAT",

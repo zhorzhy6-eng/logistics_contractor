@@ -147,6 +147,12 @@ LESSOR_BASIS = "Устава"
 OGRN_LABEL = "ОГРН"
 OGRNIP_LABEL = "ОГРНИП"
 
+#: Перечень документов, передаваемых вместе с ТС. В бланке эта строка стоит
+#: плейсхолдером {{transfer_documents}} (шаг FIX-3): у неё одно место правки
+#: вместо трёх бланков, а у формы — своё поле, если пользователь допишет
+#: «иные:». Значение по умолчанию повторяет формулировку образца.
+TRANSFER_DOCUMENTS = "СТС на тягач и прицеп/полуприцеп; ОСАГО; иные:"
+
 
 class ArendaTsGenerator(BaseContractGenerator):
     """
@@ -464,12 +470,15 @@ class ArendaTsGenerator(BaseContractGenerator):
 
     def _build_replacements_map(self, data: Any) -> Dict[str, str]:
         """
-        Значения всех 187 плейсхолдеров бланка.
+        Значения всех плейсхолдеров бланка.
 
-        Порядок ключей соответствует бланку: шапка и срок аренды → Арендатор →
-        Арендодатель → тягач, прицеп и машины → маршрут → экипаж → арендная
-        плата. Набор ключей — ровно плейсхолдеры своего варианта: у ИП нет
-        lessee_kpp, у ИП без НДС нет сумм НДС.
+        Порядок ключей соответствует бланку: шапка и срок аренды → Арендатор
+        (в том числе подписант: должность в родительном падеже и причастие по
+        роду, шаг FIX-3) → Арендодатель → тягач, прицеп и машины → маршрут →
+        экипаж → арендная плата → Акт приёма-передачи. Набор ключей — ровно
+        плейсхолдеры своего варианта: у ИП нет lessee_kpp, у ИП без НДС нет
+        сумм НДС. Совпадение набора с бланком проверяет тест
+        test_replacements_map_covers_all_template_placeholders.
         """
         contract_data = ContractData.coerce(data)
         contract = contract_data.contract
@@ -501,6 +510,7 @@ class ArendaTsGenerator(BaseContractGenerator):
         )
         self._fill_driver(replacements, contract_data)
         self._fill_cost(replacements, contract, is_ip_without_vat)
+        self._fill_act(replacements, contract)
 
         # Переносы строк и задвоенные пробелы из справочников в бланке не
         # нужны (по ширине строки дают «рваное» выравнивание).
@@ -594,6 +604,18 @@ class ArendaTsGenerator(BaseContractGenerator):
         replacements["lessee_director_name"] = director_name
         replacements["lessee_basis"] = LESSEE_OOO_BASIS if is_ooo else LESSEE_IP_BASIS
         replacements["lessee_director_short"] = self._short_fio(director_name)
+        # Подписант в п. 1.1: должность в родительном падеже и причастие по
+        # роду (шаг FIX-3) — в бланке стоит «в лице <должность> <ФИО>,
+        # <причастие> на основании <основание>».
+        replacements["lessee_director_position_rod"] = self._genitive_position(
+            lessee.get("director_position") or ""
+        )
+        replacements["lessee_director_acting_rod"] = self._acting_rod(director_name)
+        # Раздел 9 печатает фактический адрес стороны (плейсхолдер появился
+        # на шаге FIX-3): пустое значение даёт пустое место в документе.
+        replacements["lessee_actual_address"] = self._single_line(
+            lessee.get("actual_address") or ""
+        )
 
         # В лог — только «есть/нет»: наименование, ИНН и адрес стороны в логах
         # не нужны (в ИП наименование содержит ФИО).
@@ -651,6 +673,14 @@ class ArendaTsGenerator(BaseContractGenerator):
         replacements["lessor_director_name"] = director_name
         replacements["lessor_basis"] = LESSOR_BASIS
         replacements["lessor_director_short"] = self._short_fio(director_name)
+        # П. 1.2 и раздел 9 — те же поля FIX-3, что и у Арендатора.
+        replacements["lessor_director_position_rod"] = self._genitive_position(
+            lessor.get("director_position") or ""
+        )
+        replacements["lessor_director_acting_rod"] = self._acting_rod(director_name)
+        replacements["lessor_actual_address"] = self._single_line(
+            lessor.get("actual_address") or ""
+        )
 
     def _fill_vehicles(
         self, replacements: Dict[str, str], contract_data: ContractData
@@ -884,6 +914,65 @@ class ArendaTsGenerator(BaseContractGenerator):
                 "Маппинг суммы — TODO 3.1.D.B.1",
                 "ИП без НДС" if is_ip_without_vat else "с НДС",
             )
+
+    def _fill_act(
+        self, replacements: Dict[str, str], contract: Dict[str, Any]
+    ) -> None:
+        """
+        Приложение № 1 (Акт приёма-передачи и возврата ТС): поля FIX-3.
+
+        До этого шага значения Акта заполнялись только вручную в Word —
+        бланк печатал пустые ячейки. Теперь каждое поле идёт плейсхолдером
+        из contract, а перечень переданных документов — константой
+        TRANSFER_DOCUMENTS, если своего значения в данных нет.
+
+        Поля Акта в схеме распознавания отсутствуют (промпт их не извлекает:
+        Акт — форма для заполнения при передаче ТС), поэтому источник —
+        интерфейс. Пустое значение печатается пустым местом, ничего не
+        выдумываем.
+        """
+        replacements["transfer_place"] = self._single_line(
+            contract.get("transfer_place") or ""
+        )
+        replacements["transfer_datetime"] = self._single_line(
+            contract.get("transfer_datetime") or ""
+        )
+        replacements["transfer_mileage"] = self._single_line(
+            contract.get("transfer_mileage") or ""
+        )
+        replacements["transfer_condition"] = self._single_line(
+            contract.get("transfer_condition") or ""
+        )
+        replacements["transfer_documents"] = self._single_line(
+            contract.get("transfer_documents") or TRANSFER_DOCUMENTS
+        )
+        replacements["return_place"] = self._single_line(
+            contract.get("return_place") or ""
+        )
+        replacements["return_datetime"] = self._single_line(
+            contract.get("return_datetime") or ""
+        )
+        replacements["return_mileage"] = self._single_line(
+            contract.get("return_mileage") or ""
+        )
+        replacements["return_condition"] = self._single_line(
+            contract.get("return_condition") or ""
+        )
+        replacements["return_notes"] = self._single_line(
+            contract.get("return_notes") or ""
+        )
+
+        # В лог — только «есть/нет» по группам: сами места, пробег и
+        # замечания это данные документа.
+        filled = sum(
+            1 for key in (
+                "transfer_place", "transfer_datetime", "transfer_mileage",
+                "transfer_condition", "return_place", "return_datetime",
+                "return_mileage", "return_condition", "return_notes",
+            )
+            if replacements[key]
+        )
+        logger.info(f"{TITLE}: полей Акта заполнено — {filled} из 9")
 
     def _fill_payment_days(
         self, replacements: Dict[str, str], contract: Dict[str, Any]
@@ -1207,9 +1296,112 @@ class ArendaTsGenerator(BaseContractGenerator):
             return default
 
     @staticmethod
+    def _gender_from_name(full_name: str) -> str:
+        """
+        Пол по отчеству: «-овна / -евна / -ична / -инична» → female,
+        иначе male. Если отчества нет — возвращает male (по умолчанию).
+
+        Нужен для согласования причастия в п. 1.1 / 1.2 бланка: там стоит
+        «{{*_director_acting_rod}} на основании …», и для директора-женщины
+        это «действующей», а не «действующего» (шаг FIX-3). Отчество —
+        третий элемент ФИО; если его в данных нет, пол не угадывается,
+        берётся форма по умолчанию (мужская).
+        """
+        parts = str(full_name or "").split()
+        if len(parts) >= 3:
+            patronymic = parts[2].lower()
+            if patronymic.endswith(("овна", "евна", "ична", "инична")):
+                return "female"
+        return "male"
+
+    @classmethod
+    def _acting_rod(cls, full_name: str) -> str:
+        """«действующего» (муж.) / «действующей» (жен.)."""
+        return (
+            "действующей"
+            if cls._gender_from_name(full_name) == "female"
+            else "действующего"
+        )
+
+    @classmethod
+    def _genitive_position(cls, position: str) -> str:
+        """
+        Родительный падеж должности: «Генеральный директор» →
+        «Генерального директора».
+
+        В бланке подписант назван в родительном падеже («в лице Генерального
+        директора Иванова Ивана Ивановича»), а распознавание и вкладка
+        отдают должность в именительном («Генеральный директор»). Падеж
+        подставляет генератор — в одном месте, а не в трёх бланках.
+
+        Правила:
+          - «-ый/-ий» и «-ой» → «-ого»: «Генеральный» → «Генерального»,
+            «Главный» → «Главного»;
+          - «-ая/-яя» → «-ой/-ей»: «Финансовая» → «Финансовой»;
+          - последнее слово-существительное на согласную получает «-а»:
+            «директор» → «директора», «предприниматель» → «предпринимателя»;
+          - «ИП» и другие сокращения (только заглавные) не меняются;
+          - слово, уже стоящее в родительном падеже («директора»), не
+            трогается: иначе получилось бы «директораа».
+
+        Пустое значение → пустая строка.
+        """
+        text = str(position or "").strip()
+        if not text:
+            return ""
+
+        words = text.split()
+        converted = [
+            cls._genitive_word(word, is_last=(index == len(words) - 1))
+            for index, word in enumerate(words)
+        ]
+        return " ".join(converted)
+
+    @staticmethod
+    def _genitive_word(word: str, is_last: bool = False) -> str:
+        """
+        Одно слово должности в родительном падеже.
+
+        Прилагательное и существительное склоняются по разным правилам,
+        поэтому решение принимается по окончанию, а не по части речи:
+        разбирать должность морфологически здесь нечем (pymorphy в проекте
+        нет), и словарь должностей — такая же догадка, только длиннее.
+        """
+        lower = word.lower()
+
+        # Прилагательное: «-ый / -ий / -ой» → «-ого».
+        for ending in ("ый", "ий", "ой"):
+            if lower.endswith(ending) and len(word) > len(ending):
+                return word[: -len(ending)] + "ого"
+
+        # Прилагательное женского рода: «-ая» → «-ой», «-яя» → «-ей».
+        if lower.endswith("ая") and len(word) > 2:
+            return word[:-2] + "ой"
+        if lower.endswith("яя") and len(word) > 2:
+            return word[:-2] + "ей"
+
+        if not is_last:
+            # Не последнее слово — существительное здесь не склоняем:
+            # падеж несёт последнее слово должности.
+            return word
+
+        # Сокращения («ИП», «ООО») не склоняются.
+        if word.isupper():
+            return word
+
+        # Мужской род на согласную: «директор» → «директора».
+        if lower.endswith("ь"):
+            return word[:-1] + "я"
+        if lower[-1].isalpha() and lower[-1] not in "аеёиоуыэюяй":
+            return word + "а"
+
+        return word
+
+    @staticmethod
     def _format_money(amount: float) -> str:
         """
         Сумма в формате образца: «221 099,18» (неразрывный пробел между
         разрядами, запятая перед копейками).
         """
         return f"{amount:,.2f}".replace(",", "\u00a0").replace(".", ",")
+

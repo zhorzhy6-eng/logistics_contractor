@@ -67,13 +67,15 @@ VAT_VARIANTS = ("ООО", "ИП с НДС")
 #: SHA256 собранных шаблонов (ЭТАП 3.1.D.A.1-A.3-fix: поля российского
 #: стандарта 2,0 / 1,5 / 2,0 / 2,0 см на A4; шаг FIX-1-T: п. 3.3.2 —
 #: {{planned_completion_date}}, п. 4.5 — {{payment_days}} и
-#: {{payment_days_words}}).
+#: {{payment_days_words}}; шаг FIX-3: п. 1.1 / 1.2 — должность в родительном
+#: падеже, причастие по роду и краткое ФИО, раздел 9 — краткое наименование
+#: и фактический адрес, Акт — десять плейсхолдеров вместо пустых ячеек).
 #: Если шаблон пересобрали осознанно (например, поменяли формулировку),
 #: значения нужно обновить — тест ловит ручную правку .docx мимо сборщика.
 TEMPLATE_SHA256 = {
-    "ООО": "949cc7d08858fe9f1d4827a1422cc76ef5dbae2ade470c51b781a93d3d5da408",
-    "ИП с НДС": "bbe2ca0ffe981995c674e35d618f5dca5bf21eea46b9d2f4cc58162c5cbb6f45",
-    "ИП без НДС": "3647b86fee302db007a3d02df36865333a3cb2863ca86b288502deab18f72688",
+    "ООО": "2fd2a3e8ea0ac880c0df52068d8f6123a6587233c59c2a81cb36072988c20db7",
+    "ИП с НДС": "9c9b39baa17b81c8ae6f99b1c1812a57ba2e8da49dac5d343313529e1640872a",
+    "ИП без НДС": "b8c57b4edf288b48391ac3a74c0f8e350a4986973e405772d18ef1dd608d0299",
 }
 
 #: Образец-источник и его SHA256 на момент сборки шаблонов.
@@ -109,6 +111,10 @@ COMMON_PLACEHOLDERS = (
     "lessee_director_position",
     "lessee_director_name",
     "lessee_basis",
+    # Поля подписанта шага FIX-3: должность в родительном падеже и причастие
+    # по роду («действующего» / «действующей») — вместо жёсткого текста.
+    "lessee_director_position_rod",
+    "lessee_director_acting_rod",
     "lessor_full_name",
     "lessor_short_name",
     "lessor_inn",
@@ -116,6 +122,8 @@ COMMON_PLACEHOLDERS = (
     "lessor_director_position",
     "lessor_director_name",
     "lessor_basis",
+    "lessor_director_position_rod",
+    "lessor_director_acting_rod",
     "tractor_brand",
     "tractor_plate",
     "tractor_type",
@@ -145,6 +153,7 @@ COMMON_PLACEHOLDERS = (
     "lessee_ogrn_label",
     "lessee_ogrn",
     "lessee_address",
+    "lessee_actual_address",
     "lessee_account",
     "lessee_bank",
     "lessee_bik",
@@ -154,6 +163,7 @@ COMMON_PLACEHOLDERS = (
     "lessee_director_short",
     "lessor_ogrn_label",
     "lessor_address",
+    "lessor_actual_address",
     "lessor_account",
     "lessor_bank",
     "lessor_bik",
@@ -214,6 +224,28 @@ APPENDIX_PLACEHOLDERS = (
     "lessor_director_short",
 )
 
+#: Поля Акта приёма-передачи (шаг FIX-3): были пустыми ячейками «под ручку»,
+#: стали плейсхолдерами — значения приходят из вкладки «Акт».
+TRANSFER_PLACEHOLDERS = (
+    "transfer_place",
+    "transfer_datetime",
+    "transfer_mileage",
+    "transfer_condition",
+    "transfer_documents",
+)
+
+#: Поля возврата ТС в Акте (шаг FIX-3).
+RETURN_PLACEHOLDERS = (
+    "return_place",
+    "return_datetime",
+    "return_mileage",
+    "return_condition",
+    "return_notes",
+)
+
+#: Все десять полей Акта одной строкой — по ним же сверяется словарь замен.
+ACT_FIELD_PLACEHOLDERS = TRANSFER_PLACEHOLDERS + RETURN_PLACEHOLDERS
+
 PLACEHOLDER_RE = re.compile(r"\{\{[^{}]*\}\}")
 
 #: Пространство имён WordprocessingML (для чтения w:tblGrid и w:shd).
@@ -261,6 +293,8 @@ def template_doc(templates, variant):
 def _expected_placeholders(variant: str) -> set:
     """Полный набор имён плейсхолдеров шаблона этого варианта."""
     names = set(COMMON_PLACEHOLDERS)
+    # Десять полей Акта (шаг FIX-3) — общие для всех трёх вариантов.
+    names |= set(ACT_FIELD_PLACEHOLDERS)
     names |= {
         f"car_{number}_{field}"
         for number in range(1, CAR_ROWS + 1)
@@ -798,9 +832,9 @@ def test_appendix_is_present_in_every_template(template_doc, variant):
 
 
 def test_appendix_keeps_contract_and_vehicle_placeholders(template_doc, variant):
-    """В Акте — номер и дата договора, тягач, прицеп и экипаж."""
+    """В Акте — номер и дата договора, тягач, прицеп, экипаж и поля FIX-3."""
     text = _document_text(template_doc)
-    for name in APPENDIX_PLACEHOLDERS:
+    for name in APPENDIX_PLACEHOLDERS + ACT_FIELD_PLACEHOLDERS:
         assert "{{" + name + "}}" in text, f"в Акте нет {name!r}"
 
     assert "с экипажем № {{contract_number}} от {{contract_date}} г." in text
@@ -817,7 +851,7 @@ def test_appendix_starts_on_new_page(template_doc, variant):
 
 
 def test_appendix_transfer_table(template_doc, variant):
-    """Таблица «Передача ТС в аренду»: 8 строк, данные — из договора."""
+    """Таблица «Передача ТС в аренду»: 8 строк, данные — из договора и формы."""
     table = _act_table(template_doc, "Место передачи")
     assert table is not None, "нет таблицы «Передача ТС в аренду»"
     assert len(table.columns) == 2
@@ -836,19 +870,19 @@ def test_appendix_transfer_table(template_doc, variant):
 
     values = [row.cells[1].text.strip() for row in table.rows]
     assert values == [
-        "",
-        "",
+        "{{transfer_place}}",
+        "{{transfer_datetime}}",
         "{{tractor_brand}}, гос. номер {{tractor_plate}}",
         "{{trailer_brand}}, гос. номер {{trailer_plate}}",
-        "",
-        "",
-        "СТС на тягач и прицеп/полуприцеп; ОСАГО; иные:",
+        "{{transfer_mileage}}",
+        "{{transfer_condition}}",
+        "{{transfer_documents}}",
         "{{driver_full_name}}",
     ]
 
 
 def test_appendix_return_table(template_doc, variant):
-    """Таблица «Возврат ТС»: 5 строк для ручного заполнения."""
+    """Таблица «Возврат ТС»: 5 строк, все значения — плейсхолдеры формы."""
     table = _act_table(template_doc, "Место возврата")
     assert table is not None, "нет таблицы «Возврат ТС»"
     assert len(table.columns) == 2
@@ -862,7 +896,171 @@ def test_appendix_return_table(template_doc, variant):
         "Иные отметки",
     ]
     values = [row.cells[1].text.strip() for row in table.rows]
-    assert values == [""] * 5
+    assert values == [
+        "{{return_place}}",
+        "{{return_datetime}}",
+        "{{return_mileage}}",
+        "{{return_condition}}",
+        "{{return_notes}}",
+    ]
+
+
+def test_act_has_no_empty_cells(template_doc, variant):
+    """
+    В Акте не осталось пустых ячеек: каждое поле — плейсхолдер.
+
+    До шага FIX-3 значения Акта заполнялись только вручную в Word, и форма
+    их никуда не печатала. Пустая ячейка теперь означала бы потерянное поле.
+    """
+    for label in ("Место передачи", "Место возврата"):
+        table = _act_table(template_doc, label)
+        assert table is not None, f"нет таблицы «{label}»"
+        for row in table.rows:
+            assert row.cells[1].text.strip(), (
+                f"в Акте пустая ячейка значения у поля "
+                f"«{row.cells[0].text.strip()}»"
+            )
+
+
+@pytest.mark.parametrize("name", ACT_FIELD_PLACEHOLDERS)
+def test_act_field_placeholders_are_present(template_doc, variant, name):
+    """Все десять полей Акта — плейсхолдеры, по одному на поле."""
+    text = _document_text(template_doc)
+    assert "{{" + name + "}}" in text, f"в Акте нет плейсхолдера {name!r}"
+
+
+def test_act_documents_text_is_placeholder_driven(template_doc, variant):
+    """
+    Перечень документов печатает генератор, а не бланк.
+
+    В бланке стояла готовая строка «СТС на тягач и прицеп/полуприцеп;
+    ОСАГО; иные:» — теперь её подставляет карта замен (FIX-3), и у неё
+    одно место правки вместо трёх бланков.
+    """
+    text = _document_text(template_doc)
+    assert "{{transfer_documents}}" in text
+    assert "СТС на тягач" not in text
+
+
+# ─────────────────────────────────────────────────────────────
+# Подписант: род и падеж (шаг FIX-3)
+# ─────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("prefix", ["lessee", "lessor"])
+def test_director_clause_uses_gender_and_case_placeholders(template_doc, variant,
+                                                           prefix):
+    """
+    П. 1.1 / 1.2: должность — в родительном падеже, причастие — по роду.
+
+    Раньше бланк печатал жёсткое «действующего»: для директора-женщины
+    («Васильева Елизавета Юрьевна») документ выходил с ошибкой.
+    """
+    texts = _body_texts(template_doc)
+    prefix_text = "1.1. Арендатор:" if prefix == "lessee" else "1.2. Арендодатель:"
+    line = next(t for t in texts if t.startswith(prefix_text))
+
+    assert f"{{{{{prefix}_director_position_rod}}}}" in line
+    assert f"{{{{{prefix}_director_acting_rod}}}}" in line
+    assert f"{{{{{prefix}_director_position}}}}" not in line
+    assert f"{{{{{prefix}_director_name}}}}" in line
+
+
+@pytest.mark.parametrize("prefix", ["lessee", "lessor"])
+def test_director_clause_has_no_hardcoded_acting_word(template_doc, variant,
+                                                      prefix):
+    """Жёсткого «действующего» (без плейсхолдера) в п. 1.1 / 1.2 не осталось."""
+    texts = _body_texts(template_doc)
+    prefix_text = "1.1. Арендатор:" if prefix == "lessee" else "1.2. Арендодатель:"
+    line = next(t for t in texts if t.startswith(prefix_text))
+
+    for word in ("действующего", "действующей", "действующий"):
+        assert f", {word} на основании" not in line, (
+            f"в {prefix_text} осталось жёсткое «{word}» вместо плейсхолдера"
+        )
+
+
+def test_director_name_stands_without_position(template_doc, variant):
+    """ФИО идёт отдельно от должности: их печатают разные плейсхолдеры."""
+    texts = _body_texts(template_doc)
+    line = next(t for t in texts if t.startswith("1.1. Арендатор:"))
+    assert ("{{lessee_director_position_rod}} {{lessee_director_name}}, "
+            "{{lessee_director_acting_rod}} на основании {{lessee_basis}}."
+            in line)
+
+    line = next(t for t in texts if t.startswith("1.2. Арендодатель:"))
+    assert ("{{lessor_director_position_rod}} {{lessor_director_name}}, "
+            "{{lessor_director_acting_rod}} на основании {{lessor_basis}}"
+            in line)
+
+
+# ─────────────────────────────────────────────────────────────
+# Раздел 9: полный набор реквизитов (шаг FIX-3)
+# ─────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("prefix", ["lessee", "lessor"])
+def test_requisites_block_has_short_name_and_actual_address(template_doc,
+                                                            variant, prefix):
+    """
+    Раздел 9 печатает краткое наименование и фактический адрес.
+
+    До FIX-3 этих плейсхолдеров в бланке не было: значения, введённые
+    в форме, в договор не попадали.
+    """
+    table = _requisites_table(template_doc)
+    assert table is not None, "нет таблицы реквизитов"
+    left, right = table.rows[0].cells
+    block = left.text if prefix == "lessee" else right.text
+
+    assert f"{{{{{prefix}_short_name}}}}" in block, (
+        f"в блоке {prefix} нет краткого наименования"
+    )
+    assert f"Фактический адрес: {{{{{prefix}_actual_address}}}}" in block, (
+        f"в блоке {prefix} нет фактического адреса"
+    )
+    assert f"Юридический адрес: {{{{{prefix}_address}}}}" in block
+
+
+# ─────────────────────────────────────────────────────────────
+# Словарь замен генератора покрывает все плейсхолдеры бланка (шаг FIX-3)
+# ─────────────────────────────────────────────────────────────
+
+#: Ключи карты замен, у которых плейсхолдера в бланке нет осознанно.
+#: unloading_2_date — дату п. 3.3.2 печатает {{planned_completion_date}}
+#: (шаг FIX-1-T), но ключ остаётся парным к unloading_2_address: его читают
+#: тесты вкладки «Маршрут», а не бланк (см. docs/STATE.md).
+REPLACEMENT_KEYS_WITHOUT_PLACEHOLDER = ("unloading_2_date",)
+
+
+def test_replacements_map_covers_all_template_placeholders(templates_dir,
+                                                           variant):
+    """
+    Карта замен генератора знает КАЖДЫЙ плейсхолдер своего варианта бланка.
+
+    Новый плейсхолдер в шаблоне без строки в карте замен docxtpl оставил бы
+    в договоре сырым текстом «{{...}}» — тест ловит это до генерации.
+    Обратная проверка (лишние ключи карты) тоже нужна: ключ без плейсхолдера
+    означает, что значение никуда не печатается.
+    """
+    from core.contracts.arenda_ts.generator import ArendaTsGenerator
+
+    template = templates_dir / TEMPLATE_NAMES[variant]
+    doc = Document(str(template))
+    names = {
+        match.strip("{} ") for match in _document_placeholders(doc)
+    }
+
+    generator = ArendaTsGenerator(templates_dir=str(templates_dir))
+    replacements = generator.build_replacements({
+        "contract": {"carrier_type": variant},
+    })
+
+    missing = sorted(names - set(replacements))
+    assert not missing, f"карта замен не заполняет плейсхолдеры: {missing}"
+
+    extra = sorted(
+        set(replacements) - names - set(REPLACEMENT_KEYS_WITHOUT_PLACEHOLDER)
+    )
+    assert not extra, f"карта замен содержит лишние ключи: {extra}"
 
 
 def test_appendix_has_explanatory_paragraphs(template_doc, variant):
@@ -1067,17 +1265,21 @@ def test_requisites_table_has_both_parties(template_doc, variant):
 
     lessee = table.rows[0].cells[0].text
     lessor = table.rows[0].cells[1].text
-    for name in ("{{lessee_full_name}}", "{{lessee_inn}}",
+    for name in ("{{lessee_full_name}}", "{{lessee_short_name}}",
+                 "{{lessee_inn}}",
                  "{{lessee_ogrn_label}} {{lessee_ogrn}}",
-                 "{{lessee_address}}", "{{lessee_account}}",
+                 "{{lessee_address}}", "{{lessee_actual_address}}",
+                 "{{lessee_account}}",
                  "{{lessee_bank}}", "{{lessee_bik}}",
                  "{{lessee_corr_account}}", "{{lessee_email}}",
                  "{{lessee_edo}}", "{{lessee_director_position}}",
                  "{{lessee_director_short}}"):
         assert name in lessee, f"в блоке Арендатора нет {name!r}"
-    for name in ("{{lessor_full_name}}", "{{lessor_inn}}",
+    for name in ("{{lessor_full_name}}", "{{lessor_short_name}}",
+                 "{{lessor_inn}}",
                  "{{lessor_ogrn_label}} {{lessor_ogrn}}",
-                 "{{lessor_address}}", "{{lessor_account}}",
+                 "{{lessor_address}}", "{{lessor_actual_address}}",
+                 "{{lessor_account}}",
                  "{{lessor_bank}}", "{{lessor_bik}}",
                  "{{lessor_corr_account}}", "{{lessor_email}}",
                  "{{lessor_edo}}", "{{lessor_director_position}}",

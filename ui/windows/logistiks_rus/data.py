@@ -15,10 +15,11 @@ ui/windows/formika/data.py.
 Раскладка полей (согласована на ЭТАПЕ 3.1.C.B):
 
     customer_tab  → contract.number, contract.date,
+                    contract.loading_date,
+                    contract.loading_time_from / _to,
                     customer.full_name, customer.short_name (= full_name)
     cargo_tab     → vehicles[*].brand_model / vin
-    route_tab     → contract.route, contract.loading_date,
-                    contract.loading_time_from / _to,
+    route_tab     → contract.route,
                     contract.unloading_date,
                     contract.unloading_time_from / _to,
                     loadings[*] (из shipper_name + loading_addresses),
@@ -335,11 +336,17 @@ def _time_window(time_from: Any, time_to: Any) -> str:
 
 def _build_customer(tabs: Mapping[str, Any]) -> Dict[str, Any]:
     """
-    Заказчик: номер и дата заявки, наименование и краткое наименование.
+    Заказчик: номер и дата заявки, наименование и план ПОГРУЗКИ.
 
     Заказчик этой заявки фиксирован, поэтому вкладка отдаёт одно поле name;
     в ContractData оно кладётся и в full_name, и в short_name (валидатор
     проверяет оба, а бланк печатает полное наименование).
+
+    С шага FIX-3 вкладка «Заказчик» отдаёт ещё и план погрузки —
+    loading_date, loading_time_from / _to: дата и время подачи ТС относятся
+    к заявке в целом, поэтому переехали с вкладки «Маршрут». Ключи contract
+    остались теми же, и генератор с валидатором читают их как раньше —
+    поменялся только источник.
 
     Возвращает две части: поля шапки (contract) и сам заказчик (customer).
     """
@@ -349,6 +356,10 @@ def _build_customer(tabs: Mapping[str, Any]) -> Dict[str, Any]:
 
     _set_if_filled(contract, "number", _field(data, "number"))
     _set_if_filled(contract, "date", _field(data, "date"))
+
+    # План погрузки (шаг FIX-3) — с этой же вкладки.
+    for field in ("loading_date", "loading_time_from", "loading_time_to"):
+        _set_if_filled(contract, field, _field(data, field))
 
     name = _field(data, "name")
     _set_if_filled(customer, "full_name", name)
@@ -450,9 +461,12 @@ def _route_points(data: Mapping[str, Any], source: str) -> List[Dict[str, Any]]:
     ]
 
 
-def _build_route(tabs: Mapping[str, Any]) -> Dict[str, Any]:
+def _build_route(
+    tabs: Mapping[str, Any],
+    loadings_plan: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     """
-    Маршрут: направление, план погрузки/выгрузки и точки с названиями.
+    Маршрут: направление, план ВЫГРУЗКИ и точки с названиями.
 
     Раздел 1 вкладки «Маршрут» — ОДНО поле «Грузоотправитель» (shipper_name)
     и таблица адресов погрузки (loading_addresses, до 10 строк). В бланке
@@ -460,6 +474,12 @@ def _build_route(tabs: Mapping[str, Any]) -> Dict[str, Any]:
     погрузки, а адреса — по порядку строк таблицы: так точки получают
     привычный генератору и валидатору вид [{name, address, date,
     time_window}, …].
+
+    План ПОГРУЗКИ (loading_date, loading_time_from / _to) читается с вкладки
+    «Заказчик» (шаг FIX-3) и приходит в contract отдельной частью
+    (_build_customer). Здесь остаётся только план выгрузки — unloading_date,
+    unloading_time_from / _to, а точкам погрузки дата и окно времени
+    приходят из той же части (loadings_plan).
 
     Старый массив shippers (формат прежних распознаваний и сохранённых
     ответов) принимается как fallback: если нового формата нет, а массив
@@ -475,9 +495,6 @@ def _build_route(tabs: Mapping[str, Any]) -> Dict[str, Any]:
     _set_if_filled(contract, "route", _field(data, "route"))
 
     for field in (
-        "loading_date",
-        "loading_time_from",
-        "loading_time_to",
         "unloading_date",
         "unloading_time_from",
         "unloading_time_to",
@@ -489,6 +506,14 @@ def _build_route(tabs: Mapping[str, Any]) -> Dict[str, Any]:
     if not isinstance(loading_addresses, (list, tuple)):
         loading_addresses = []
 
+    # Дата и окно времени погрузки — с вкладки «Заказчик» (FIX-3); если
+    # сборку вызвали без неё, ключи ищутся и на самой вкладке «Маршрут»:
+    # так работали до переноса, и старые вызовы не ломаются.
+    plan = dict(loadings_plan or {})
+    for field in ("loading_date", "loading_time_from", "loading_time_to"):
+        if plan.get(field) in (None, ""):
+            plan[field] = data.get(field)
+
     loadings: List[Dict[str, Any]] = []
     for index, addr in enumerate(loading_addresses):
         address = _field({"value": addr}, "value")
@@ -497,10 +522,10 @@ def _build_route(tabs: Mapping[str, Any]) -> Dict[str, Any]:
         loadings.append({
             "name": shipper_name,
             "address": address,
-            "date": _field(data, "loading_date"),
+            "date": _field(plan, "loading_date"),
             "time_window": _time_window(
-                data.get("loading_time_from"),
-                data.get("loading_time_to"),
+                plan.get("loading_time_from"),
+                plan.get("loading_time_to"),
             ),
         })
 
@@ -700,7 +725,9 @@ def collect_logistiks_rus_data(tabs: Mapping[str, Any]) -> ContractData:
     остаётся пустым и попадает в лог.
     """
     customer = _build_customer(tabs)
-    route = _build_route(tabs)
+    # План погрузки приходит с вкладки «Заказчик» (FIX-3): из него берутся
+    # и поля contract.loading_*, и дата с окном времени у точек погрузки.
+    route = _build_route(tabs, customer["contract"])
     vehicle = _build_vehicle(tabs)
 
     # Точки с названиями генератор и валидатор читают из contract: при
