@@ -45,6 +45,7 @@ from core.contracts.logistiks_rus.postprocess import (
     RemoveEmptyShipperConsigneeBlocksStep,
     RemoveEmptyVehicleRowsStep,
 )
+from core.contracts.paths import contract_folder_name
 from core.contracts.registry import ContractTypeRegistry
 
 CARGO_HEADERS = ("№", "Марка, модель", "VIN-номер")
@@ -305,12 +306,19 @@ def test_insert_route_tables_is_noop(generator):
 
 @pytest.mark.parametrize("variant", list(CARRIER_TYPES))
 def test_both_templates_render_to_isolated_dir(generator, work_dir, variant):
-    """ООО- и ИП-бланк рендерятся в изолированную папку без исключений."""
+    """
+    ООО- и ИП-бланк рендерятся в изолированную папку без исключений.
+
+    Документ лежит на уровень глубже: внутри изолированной папки — папка
+    рейса (ШАГ «Папка на рейс»), её имя считается из данных заявки.
+    """
     output_dir = work_dir / f"lr_{variant}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    path = Path(_generate(generator, _payload(CARRIER_TYPES[variant], cars=2), output_dir))
-    assert path.parent == output_dir, "файл ушёл мимо изолированной папки"
+    payload = _payload(CARRIER_TYPES[variant], cars=2)
+    path = Path(_generate(generator, payload, output_dir))
+    assert path.parent.parent == output_dir, "файл ушёл мимо изолированной папки"
+    assert path.parent.name == contract_folder_name(payload)
 
     text = _document_text(Document(path))
     assert "{{" not in text and "}}" not in text

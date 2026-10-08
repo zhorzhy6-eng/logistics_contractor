@@ -49,6 +49,10 @@ from openpyxl import Workbook, load_workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from core.contracts.paths import (  # noqa: E402
+    contract_folder_name,
+    folder_key_from_form,
+)
 from core.contracts.zayavka.generator import (  # noqa: E402
     ABSENT_VEHICLE_KEYS,
     ABSENT_ZAYAVKA_KEYS,
@@ -1130,14 +1134,103 @@ def test_output_dir_is_created(generator, out_dir, tmp_name="nested"):
     path = Path(generator.generate(make_data(vehicles=[]), str(target)))
     try:
         assert path.exists()
-        assert path.parent == target
+        # Внутри корня вывода — папка рейса, а файл уже в ней.
+        assert path.parent.parent == target
+        assert path.parent.is_dir()
     finally:
         path.unlink(missing_ok=True)
-        for folder in (target, target.parent):
+        for folder in (path.parent, target, target.parent):
             try:
                 folder.rmdir()
             except OSError:
                 pass
+
+
+def test_havaly_generate_puts_file_in_named_folder(generator, out_dir):
+    """
+    Заявка ложится в папку рейса: <Фамилия_И.О.>_<маршрут>_<ДД.ММ.ГГГГ>.
+
+    Данные у Хавалов плоские (схема промпта), поэтому имя папки собирает
+    адаптер folder_key_from_form: водитель — из driver_*, маршрут — из
+    городов погрузки и доставки. Имя ФАЙЛА при этом не меняется: оно и
+    раньше зависело только от даты заявки.
+    """
+    data = make_data(vehicles=make_vehicles(1))
+    folder_name = contract_folder_name(folder_key_from_form(data))
+
+    path = Path(generator.generate(data, str(out_dir)))
+    try:
+        assert folder_name == "Тестов_Т.Т._Калуга-Москва_05.10.2026"
+        assert path.parent == out_dir / folder_name
+        assert path.parent.is_dir()
+        assert path.parent.parent == out_dir
+        # Имя файла прежнее: папка рейса его не трогает.
+        assert path.name == "Заявка_Хавалы_2026-10-05.xlsx"
+    finally:
+        path.unlink(missing_ok=True)
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def test_havaly_same_trip_uses_same_folder(generator, out_dir):
+    """
+    Две заявки одного рейса (разные машины) ложатся в ОДНУ папку.
+
+    Папка вторая не создаётся: имя рейса то же, значит и папка та же. Имя
+    файла зависит только от даты заявки, поэтому файл один — заявка
+    перезаписывается; проверяется именно ПАПКА.
+    """
+    first = Path(generator.generate(make_data(vehicles=make_vehicles(1)), str(out_dir)))
+    second = Path(generator.generate(make_data(vehicles=make_vehicles(2)), str(out_dir)))
+    try:
+        assert first.parent == second.parent
+        assert first.name == second.name
+        assert first.exists()
+    finally:
+        shutil.rmtree(first.parent, ignore_errors=True)
+
+
+def test_havaly_different_drivers_use_different_folders(generator, out_dir):
+    """
+    Разные водители — разные папки, даже при общем маршруте и дате.
+
+    Водитель различается ФАМИЛИЕЙ, а не инициалами: у двух Ивановых папки
+    совпали бы, и это осознанное правило имени (см. tests/test_paths.py).
+    """
+    other = make_data(vehicles=make_vehicles(1))
+    other["zayavka"]["driver_last_name"] = "Петров"
+    other["zayavka"]["driver_first_name"] = "Пётр"
+    other["zayavka"]["driver_middle_name"] = "Петрович"
+
+    first = Path(generator.generate(make_data(vehicles=make_vehicles(1)), str(out_dir)))
+    second = Path(generator.generate(other, str(out_dir)))
+    try:
+        assert first.parent != second.parent
+        assert first.parent.name.startswith("Тестов_Т.Т._")
+        assert second.parent.name.startswith("Петров_П.П._")
+    finally:
+        shutil.rmtree(first.parent, ignore_errors=True)
+        shutil.rmtree(second.parent, ignore_errors=True)
+
+
+def test_havaly_log_has_no_folder_or_driver_name(generator, out_dir, caplog):
+    """
+    В логе заявки — только имя файла, без папки и без фамилии водителя.
+
+    Имя папки рейса содержит фамилию водителя, поэтому в лог оно не идёт:
+    логи проекта — без ПДн (AGENTS.md § 3).
+    """
+    with caplog.at_level(logging.INFO):
+        path = Path(generator.generate(make_data(vehicles=[]), str(out_dir)))
+    try:
+        messages = [record.getMessage() for record in caplog.records
+                    if record.getMessage().startswith("Заявка Хавалов:")]
+        assert messages, "нет записи о создании заявки"
+        assert f"файл={path.name}" in messages[-1]
+        assert "папка=" not in messages[-1]
+        assert "Тестов" not in messages[-1]
+        assert str(out_dir) not in messages[-1]
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
 
 
 def test_default_output_dir_is_project_output(generator):

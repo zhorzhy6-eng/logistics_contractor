@@ -19,6 +19,7 @@ Qt — в offscreen-режиме. Сеть и системное хранили�
 
 import inspect
 import os
+import shutil
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -500,10 +501,11 @@ def test_create_contract_generates_docx_end_to_end(
     path = Path(created[0])
     assert path.exists() and path.suffix == ".docx"
     assert "ФМ-2026-1" in path.name
-    assert path.parent == output_dir
+    # Внутри папки вывода — папка рейса (ШАГ «Папка на рейс»).
+    assert path.parent.parent == output_dir
 
     # За собой убираем: папка вывода теста не должна пухнуть от прогонов.
-    path.unlink()
+    shutil.rmtree(path.parent, ignore_errors=True)
     output_dir.rmdir()
 
 

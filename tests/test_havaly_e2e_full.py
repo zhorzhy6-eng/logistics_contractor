@@ -58,6 +58,10 @@ from core.contracts.logistiks_rus.generator import (  # noqa: E402
 from core.contracts.logistiks_rus.validator import (  # noqa: E402
     LogistiksRusValidator,
 )
+from core.contracts.paths import (  # noqa: E402
+    contract_folder_name,
+    folder_key_from_form,
+)
 from core.contracts.perevozka.generator import PerevozkaGenerator  # noqa: E402
 from core.contracts.perevozka.validator import PerevozkaValidator  # noqa: E402
 from core.contracts.registry import ContractTypeRegistry  # noqa: E402
@@ -252,7 +256,7 @@ def validator() -> ZayavkaExcelValidator:
 
 @pytest.fixture
 def saved(generator, tmp_output):
-    """Готовые файлы теста: удаляются после проверки."""
+    """Готовые файлы теста: удаляются после проверки (вместе с папкой рейса)."""
     created: list = []
 
     def _save(data, method="generate", source=None, out_dir=None):
@@ -269,10 +273,9 @@ def saved(generator, tmp_output):
     yield _save
 
     for path in created:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        # Папка рейса — тоже за тестом: имя папки содержит фамилию водителя,
+        # а работать тесты должны в чистой папке вывода.
+        shutil.rmtree(path.parent, ignore_errors=True)
 
 
 @pytest.fixture
@@ -291,6 +294,21 @@ def tmp_output() -> Path:
 def read_back(generator, path) -> dict:
     """Данные из готового файла — тем же генератором, что его записал."""
     return generator.read_template(str(path))
+
+
+def folder_of(data) -> str:
+    """
+    Имя папки рейса для данных заявки — из тех же полей, что у генератора.
+
+    Считается адаптером folder_key_from_form: у Хавалов данные плоские, и
+    имя папки собирается из driver_* и городов погрузки/доставки.
+    """
+    return contract_folder_name(folder_key_from_form(data))
+
+
+def file_in_output(data, output_dir) -> Path:
+    """Ожидаемый путь готового файла: <папка вывода>/<папка рейса>/<имя>."""
+    return Path(output_dir) / folder_of(data) / f"{FILE_PREFIX}_{DATE_ISO}.xlsx"
 
 
 def sha256(path) -> str:
@@ -383,7 +401,9 @@ def test_full_cycle_generate_read_edit_save_read(generator, saved, tmp_output,
 
     first = saved(data)
     assert first.name == f"{FILE_PREFIX}_{DATE_ISO}.xlsx"
-    assert first.parent == tmp_output
+    # Файл лежит в папке рейса внутри папки вывода (ШАГ «Папка на рейс»).
+    assert first.parent == tmp_output / folder_of(data)
+    assert first.parent.parent == tmp_output
 
     back = read_back(generator, first)
     assert back["vehicles"] == data["vehicles"]
@@ -412,18 +432,21 @@ def test_full_cycle_generate_read_edit_save_read(generator, saved, tmp_output,
         data["zayavka"]["driver_phone"]
 
 
-def test_same_date_edit_is_refused(generator, saved):
+def test_same_date_refill_of_same_folder_is_refused(generator, tmp_output):
     """
-    Правка «в тот же день и в ту же папку» отклоняется — файл цел.
+    Повторная запись в тот же день и в ту же папку рейса отклоняется.
 
-    Ловушка имени: оно зависит только от даты заявки, поэтому повторная
-    запись в ту же папку затёрла бы исходный файл. Генератор говорит об
-    этом прямо, а не портит документ.
+    Ловушка имени: имя файла зависит только от даты заявки, поэтому правка
+    «из папки рейса — в папку рейса» целилась бы в исходный файл. Генератор
+    говорит об этом прямо, а не портит документ (``_guard_same_file``).
+
+    Папка рейса берётся у самого генератора: имя считается из водителя,
+    маршрута и даты, и повторять эту формулу в тесте незачем.
     """
     from core.contracts.zayavka.generator import ZayavkaTemplateError
 
     data = make_data(vehicles=make_vehicles(1))
-    first = saved(data)
+    first = Path(generator.generate(data, str(tmp_output)))
     before = sha256(first)
 
     edited = {"zayavka": {**data["zayavka"], "lot_number": "LOT-99"},
@@ -637,7 +660,7 @@ def test_zero_vehicles_file_is_created_and_readable(generator, saved,
 
     assert path.exists()
     assert path.name == f"{FILE_PREFIX}_{DATE_ISO}.xlsx"
-    assert path.parent == tmp_output
+    assert path.parent == tmp_output / folder_of(data)
 
     back = read_back(generator, path)
     assert back["vehicles"] == []

@@ -13,7 +13,9 @@
 Все данные синтетические, реальные ПДн не используются.
 """
 
+import copy
 import gc
+import logging
 import re
 import shutil
 import tempfile
@@ -26,6 +28,7 @@ from docx import Document
 
 from core.contract_data import ContractData
 from core.contract_generator import ContractGenerator
+from core.contracts.paths import contract_folder_name
 
 TEMPLATES = (
     "shablon_ooo.docx",
@@ -2318,6 +2321,117 @@ def test_generate_sanitizes_contract_number(light_generator, contract_payload, w
         assert "/" not in filename and '"' not in filename
     finally:
         Path(path).unlink(missing_ok=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# Папка рейса (ШАГ «Папка на рейс»)
+# ─────────────────────────────────────────────────────────────
+
+def test_generate_puts_file_in_named_folder(light_generator, contract_payload,
+                                            work_dir):
+    """
+    Договор ложится в свою папку: <Фамилия_И.О.>_<маршрут>_<ДД.ММ.ГГГГ>.
+
+    Имя считается из данных договора (водитель, маршрут, дата), а не из
+    имени файла: у зеркалённой заявки другого типа имя файла своё, а папка
+    должна быть та же.
+    """
+    folder_name = contract_folder_name(contract_payload)
+    path = Path(light_generator.generate(contract_payload, output_dir=str(work_dir)))
+    try:
+        assert folder_name == "Иванов_И.И._Мурманск-Пятигорск_23.09.2026"
+        assert path.parent == work_dir / folder_name
+        assert path.parent.is_dir()
+        # Файл именно В папке рейса, а не рядом с ней.
+        assert path.parent.parent == work_dir
+        assert path.name.startswith("Договор-заявка_23092026-74_")
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def test_two_documents_same_key_go_to_same_folder(light_generator,
+                                                  contract_payload, work_dir):
+    """
+    Два документа одного рейса лежат РЯДОМ, а не в папке с суффиксом «_2».
+
+    Так выглядит связка «Экспедиторство + зеркало»: договор создали первым,
+    папка рейса уже есть, и зеркалённая заявка обязана лечь в неё же —
+    иначе искать рейс пришлось бы по двум папкам.
+    """
+    other = copy.deepcopy(contract_payload)
+    other["contract"]["number"] = "23092026-75"  # номер другой, рейс тот же
+
+    first = Path(light_generator.generate(contract_payload,
+                                          output_dir=str(work_dir)))
+    second = Path(light_generator.generate(other, output_dir=str(work_dir)))
+    try:
+        assert first.parent == second.parent
+        assert first.parent.name == contract_folder_name(contract_payload)
+        assert sorted(item.name for item in first.parent.iterdir()) == \
+            sorted([first.name, second.name])
+        # Папка рейса ровно одна: ни «_2», ни второй папки в стороне.
+        assert [item.name for item in first.parent.parent.iterdir()
+                if item.is_dir()
+                and item.name.startswith("Иванов_И.И._Мурманск-Пятигорск")] == \
+            [first.parent.name]
+    finally:
+        shutil.rmtree(first.parent, ignore_errors=True)
+
+
+def test_two_documents_different_drivers_go_to_different_folders(
+    light_generator, contract_payload, work_dir
+):
+    """Разные водители — разные папки, даже при общем маршруте и дате."""
+    other = copy.deepcopy(contract_payload)
+    other["driver"]["full_name"] = "Петров Пётр Петрович"
+
+    first = Path(light_generator.generate(contract_payload,
+                                          output_dir=str(work_dir)))
+    second = Path(light_generator.generate(other, output_dir=str(work_dir)))
+    try:
+        assert first.parent != second.parent
+        assert first.parent.name == "Иванов_И.И._Мурманск-Пятигорск_23.09.2026"
+        assert second.parent.name == "Петров_П.П._Мурманск-Пятигорск_23.09.2026"
+    finally:
+        shutil.rmtree(first.parent, ignore_errors=True)
+        shutil.rmtree(second.parent, ignore_errors=True)
+
+
+def test_generate_without_driver_uses_fallback_folder(light_generator,
+                                                      contract_payload, work_dir):
+    """Пустой водитель — папка «Без_водителя_...», генерация не падает."""
+    payload = copy.deepcopy(contract_payload)
+    payload["driver"]["full_name"] = ""
+
+    path = Path(light_generator.generate(payload, output_dir=str(work_dir)))
+    try:
+        assert path.parent.name == "Без_водителя_Мурманск-Пятигорск_23.09.2026"
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def test_generate_logs_do_not_contain_driver_name(light_generator,
+                                                  contract_payload, work_dir,
+                                                  caplog):
+    """
+    В логе генерации нет ни ФИО водителя, ни пути машины оператора.
+
+    Имя папки рейса содержит фамилию водителя, поэтому в лог оно не идёт:
+    логи проекта — без ПДн (AGENTS.md § 3). В записи остаётся имя файла.
+    """
+    with caplog.at_level(logging.INFO, logger="core.contract_generator"):
+        path = Path(light_generator.generate(contract_payload,
+                                             output_dir=str(work_dir)))
+    try:
+        messages = [record.getMessage() for record in caplog.records
+                    if record.getMessage().startswith("generate():")]
+        assert messages, "нет записи о создании документа"
+        assert f"файл={path.name}" in messages[-1]
+        assert "папка=" not in messages[-1]
+        assert "Иванов" not in messages[-1]
+        assert str(work_dir) not in messages[-1]
+    finally:
+        shutil.rmtree(path.parent, ignore_errors=True)
 
 
 @pytest.mark.parametrize("template_name, carrier_type", [

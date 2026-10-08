@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence
 
 from core.contract_data import ContractData
+from core.contracts.paths import contract_output_path
 from core.num_to_words import amount_to_words
 from core.trace import trace
 from core.validator import ValidationReport
@@ -246,9 +247,16 @@ class BaseContractGenerator(ABC):
             output_dir = self.default_output_dir()
 
         os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, filename)
 
-        logger.info(f"generate(): output_path={output_path}")
+        # Документы одного рейса лежат в своей папке: имя считается из
+        # водителя, маршрута и даты договора (core/contracts/paths.py).
+        # Зеркалённая заявка другого типа получит то же имя папки — данные-то
+        # те же, — и ляжет рядом с договором, а не в общий output/.
+        output_path = contract_output_path(output_dir, filename, contract_data)
+
+        # В лог идёт только имя файла: в имени папки — фамилия водителя, а
+        # логи проекта идут без ПДн (AGENTS.md § 3).
+        logger.info(f"generate(): файл={filename}")
 
         return self.generate_docx(contract_data, output_path)
 
@@ -274,7 +282,9 @@ class BaseContractGenerator(ABC):
             # погрузок/выгрузок из точек маршрута и списка машин.
             self._postprocess_document(output_path, contract_data)
 
-            logger.info(f"DOCX сохранён ({engine}): {output_path}")
+            # В лог — имя файла, а не полный путь: в пути лежит имя папки
+            # рейса с фамилией водителя, а логи идут без ПДн (AGENTS.md § 3).
+            logger.info(f"DOCX сохранён ({engine}): {os.path.basename(output_path)}")
             return output_path
 
         except ImportError as e:

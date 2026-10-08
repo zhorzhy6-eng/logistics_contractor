@@ -30,6 +30,7 @@ import gc
 import inspect
 import os
 import re
+import shutil
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -968,7 +969,8 @@ def test_create_contract_generates_xlsx_end_to_end(
     try:
         assert path.exists() and path.suffix == ".xlsx"
         assert path.name == "Заявка_Хавалы_2001-01-01.xlsx"
-        assert path.parent == output_dir
+        # Внутри папки вывода — папка рейса (ШАГ «Папка на рейс»).
+        assert path.parent.parent == output_dir
         # Исходный бланк не перезаписан: генератор пишет только в output.
         assert hav_template.read_bytes() == before
 
@@ -995,7 +997,7 @@ def test_create_contract_generates_xlsx_end_to_end(
         assert zayavka["customer_name"] == GENERATOR_CUSTOMER_NAME
         assert zayavka["carrier_name"] == GENERATOR_CARRIER_NAME
     finally:
-        path.unlink(missing_ok=True)
+        shutil.rmtree(path.parent, ignore_errors=True)
 
 
 def test_create_contract_from_header_button_generates_file(
@@ -1018,7 +1020,7 @@ def test_create_contract_from_header_button_generates_file(
         assert Path(created[0]).exists()
     finally:
         for path in created:
-            Path(path).unlink(missing_ok=True)
+            shutil.rmtree(Path(path).parent, ignore_errors=True)
 
 
 def test_generator_failure_is_reported(window, monkeypatch, quiet_messages):

@@ -182,7 +182,7 @@ def out_dir(work_dir) -> Path:
 
 @pytest.fixture
 def saved(generator, out_dir):
-    """Готовые файлы теста: удаляются после проверки."""
+    """Готовые файлы теста: удаляются после проверки (вместе с папкой рейса)."""
     created: list = []
 
     def _generate(data, method="generate", source=None):
@@ -198,14 +198,18 @@ def saved(generator, out_dir):
     yield _generate
 
     for path in created:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        # Папка рейса — тоже за тестом: имя папки содержит фамилию водителя,
+        # и оставлять её в tests/_tmp от прогона к прогону незачем.
+        shutil.rmtree(path.parent, ignore_errors=True)
 
 
 def read_back(generator, path) -> dict:
     return generator.read_template(str(path))
+
+
+def drop(path) -> None:
+    """Убирает готовый файл вместе с папкой рейса."""
+    shutil.rmtree(Path(path).parent, ignore_errors=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -371,12 +375,18 @@ def test_full_cycle_for_vehicle_counts(generator, saved, count):
 
 
 def test_file_name_and_folder(generator, saved):
-    """Имя и место файла: output/Заявка_Хавалы_<дата ISO>.xlsx."""
+    """
+    Имя и место файла: <папка рейса>/Заявка_Хавалы_<дата ISO>.xlsx.
+
+    Имя файла не изменилось (зависит только от даты заявки), а лежит он
+    теперь в папке рейса внутри папки вывода (ШАГ «Папка на рейс»).
+    """
     path = saved(make_data())
 
     assert path.name == f"{FILE_PREFIX}_2026-10-05.xlsx"
     assert path.suffix == ".xlsx"
-    assert path.parent.name == "havaly_e2e"     # папка вывода теста
+    assert path.parent.name == "Тестов_Т.Т._Калуга-Москва_05.10.2026"
+    assert path.parent.parent.name == "havaly_e2e"     # папка вывода теста
 
 
 def test_default_output_dir_is_project_output(generator):
@@ -458,7 +468,7 @@ def test_factory_builds_working_generator(generator, out_dir):
         back = built.read_template(str(path))
         assert back["vehicles"] == make_vehicles(2)
     finally:
-        path.unlink(missing_ok=True)
+        drop(path)
 
 
 def test_factory_builds_validator():
@@ -609,8 +619,8 @@ def test_generated_file_can_be_filled_again(generator, out_dir):
         assert back["zayavka"]["loading_city"] == "Тула"
         assert second.name == f"{FILE_PREFIX}_2026-10-06.xlsx"
     finally:
-        first.unlink(missing_ok=True)
-        second.unlink(missing_ok=True)
+        drop(first)
+        drop(second)
 
 
 def test_same_file_is_refused(generator, out_dir):
@@ -631,7 +641,7 @@ def test_same_file_is_refused(generator, out_dir):
         # Файл цел: его не затёрли.
         assert generator.read_template(str(first))["vehicles"] == make_vehicles(1)
     finally:
-        first.unlink(missing_ok=True)
+        drop(first)
 
 
 def test_round_trip_of_foreign_column_order(generator, out_dir):
@@ -663,7 +673,7 @@ def test_round_trip_of_foreign_column_order(generator, out_dir):
         assert back["zayavka"]["loading_city"] == data["zayavka"]["loading_city"]
         assert back["zayavka"]["driver_phone"] == data["zayavka"]["driver_phone"]
     finally:
-        path.unlink(missing_ok=True)
+        drop(path)
         source.unlink(missing_ok=True)
 
 
@@ -682,7 +692,7 @@ def test_full_cycle_logs_have_no_personal_data(validator, generator, out_dir,
         try:
             generator.read_template(str(path))
         finally:
-            path.unlink(missing_ok=True)
+            drop(path)
 
     assert report.errors == []
     messages = "\n".join(
@@ -712,7 +722,7 @@ def test_fill_logs_have_no_personal_data(generator, templates_dir, out_dir,
         for fragment in PII_FRAGMENTS:
             assert fragment not in messages, f"в логе есть «{fragment}»"
     finally:
-        path.unlink(missing_ok=True)
+        drop(path)
 
 
 def test_logs_report_the_work_done(generator, saved, caplog):

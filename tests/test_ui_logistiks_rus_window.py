@@ -28,6 +28,7 @@ import gc
 import inspect
 import os
 import re
+import shutil
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -704,7 +705,8 @@ def test_create_contract_generates_docx_end_to_end(
     try:
         assert path.exists() and path.suffix == ".docx"
         assert CONTRACT_NUMBER in path.name
-        assert path.parent == output_dir
+        # Внутри папки вывода — папка рейса (ШАГ «Папка на рейс»).
+        assert path.parent.parent == output_dir
 
         text = _document_text(Document(str(path)))
 
@@ -720,7 +722,7 @@ def test_create_contract_generates_docx_end_to_end(
     finally:
         # За собой убираем: папка вывода теста не должна пухнуть от прогонов.
         try:
-            path.unlink(missing_ok=True)
+            shutil.rmtree(path.parent, ignore_errors=True)
             output_dir.rmdir()
         except OSError:
             pass

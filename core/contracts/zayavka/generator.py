@@ -96,7 +96,12 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from core.contracts.contract_types import ContractType
-from core.contracts.paths import OUTPUT_DIR, TEMPLATES_DIR
+from core.contracts.paths import (
+    OUTPUT_DIR,
+    TEMPLATES_DIR,
+    contract_output_path,
+    folder_key_from_form,
+)
 from core.contracts.zayavka.postprocess import TrimVehicleRowsStep
 from core.dates import parse_date
 from core.prompts.havaly import PROMPT
@@ -981,7 +986,8 @@ class ZayavkaExcelGenerator:
 
         :param path: присланный или эталонный .xlsx.
         :param data: ``{"zayavka": {...}, "vehicles": [...]}``.
-        :param output_dir: куда положить готовый файл (по умолчанию output/).
+        :param output_dir: корень вывода (по умолчанию output/); готовый файл
+            ложится в папку рейса внутри него.
         :returns: путь готового файла.
         :raises ZayavkaTemplateError: бланк структурно непригоден.
         """
@@ -994,13 +1000,24 @@ class ZayavkaExcelGenerator:
         )
 
         target_dir = Path(output_dir) if output_dir else Path(self.default_output_dir())
-        target = target_dir / self.get_filename(payload)
+        filename = self.get_filename(payload)
+
+        # Заявка ложится в папку своего рейса — ту же, куда лёг договор
+        # Экспедиторства по этому рейсу (core/contracts/paths.py). Данные
+        # Хавалов плоские (схема промпта), поэтому ключ папки собирается
+        # адаптером folder_key_from_form: водитель — из driver_*, маршрут —
+        # из городов погрузки и доставки.
+        target = Path(contract_output_path(
+            target_dir, filename, folder_key_from_form(data)
+        ))
         self._guard_same_file(source, target)
 
         written = self._write_payload(sheet, columns, payload)
         self._trim_rows(sheet, payload)
         self._save(sheet, target)
 
+        # В лог идёт только имя файла: в имени папки — фамилия водителя, а
+        # логи проекта идут без ПДн (AGENTS.md § 3).
         logger.info(
             "Заявка Хавалов: файл=%s, заполнено ячеек=%d, машин=%d",
             target.name, written, len(payload["vehicles"]),
@@ -1429,7 +1446,7 @@ class ZayavkaExcelGenerator:
             )
 
     def _save(self, sheet: Worksheet, target: Path) -> None:
-        """Сохраняет книгу в output_dir, создавая папку при необходимости."""
+        """Сохраняет книгу в папку рейса, создавая её при необходимости."""
         target.parent.mkdir(parents=True, exist_ok=True)
         sheet.parent.save(str(target))
 

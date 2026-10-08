@@ -40,6 +40,7 @@ import copy
 import gc
 import logging
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -277,15 +278,21 @@ def _generate(generator, data, work_dir, name: str) -> Path:
     Генерирует заявку в отдельную папку work_dir и возвращает путь к DOCX.
 
     Папка у каждого теста своя: файлы одного теста не мешают другому, а
-    готовый документ не уходит в общий output/ проекта.
+    готовый документ не уходит в общий output/ проекта. Внутри неё документ
+    лежит в папке рейса (ШАГ «Папка на рейс»).
     """
     output_dir = work_dir / name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     path = Path(generator.generate(data, output_dir=str(output_dir)))
     assert path.exists(), f"файл не создан: {path}"
-    assert path.parent == output_dir, "файл ушёл мимо изолированной папки"
+    assert path.parent.parent == output_dir, "файл ушёл мимо изолированной папки"
     return path
+
+
+def _cleanup(path: Path) -> None:
+    """Убирает за тестом документ вместе с папкой рейса."""
+    shutil.rmtree(path.parent, ignore_errors=True)
 
 
 @pytest.fixture
@@ -295,7 +302,7 @@ def generated_ooo(generator, valid_ooo_data, work_dir):
     try:
         yield path
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)
 
 
 @pytest.fixture
@@ -305,7 +312,7 @@ def generated_ip(generator, valid_ip_data, work_dir):
     try:
         yield path
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -514,7 +521,7 @@ def test_logs_warn_when_recognized_sums_are_not_mapped(caplog, generator,
         # Предупреждение не врёт: в бланке действительно 0,00.
         assert "Стоимость услуг: 0,00 руб." in _document_text(Document(str(path)))
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -600,7 +607,7 @@ def test_empty_vehicle_rows_removed(generator, work_dir, valid_ooo_data):
         assert sum(1 for row in table.rows
                    if row.cells[2].text.strip() == "XTC651150N0001012") == 0
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)
 
 
 def test_empty_shipper_addresses_removed(generator, work_dir, valid_ooo_data):
@@ -633,7 +640,7 @@ def test_empty_shipper_addresses_removed(generator, work_dir, valid_ooo_data):
         assert sum(1 for t in texts if t.startswith("Грузополучатель №")) == FILLED_CONSIGNEES
         assert sum(1 for t in texts if t.startswith("Адрес выгрузки:")) == FILLED_CONSIGNEES
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)
 
 
 def test_fields_from_data_survive_full_pipeline(generated_ooo):
@@ -685,7 +692,7 @@ def test_generator_survives_data_after_validator(generator, validator, work_dir,
         assert f"Итого: {OOO_SUM_TOTAL_TEXT} руб." in text
         assert CUSTOMER_NAME in text
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)
 
 
 def test_validator_accepts_empty_cargo_count(generator, validator, work_dir):
@@ -706,7 +713,7 @@ def test_validator_accepts_empty_cargo_count(generator, validator, work_dir):
     try:
         assert "Общее количество: 3 шт." in _body_texts(Document(str(path)))
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)
 
 
 def test_data_without_route_names_does_not_break_chain(generator, validator,
@@ -746,7 +753,7 @@ def test_data_without_route_names_does_not_break_chain(generator, validator,
         assert "Грузополучатель №1: ООО «Грузополучатель 1»" in texts
         assert "Адрес выгрузки: г. Тестоград, ул. Складская, д. 1" in texts
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -885,7 +892,7 @@ def test_recognition_names_are_not_read_by_generator(generator, work_dir):
         assert "Итого: 0,00 руб." in text
         assert OOO_SUM_TOTAL_TEXT not in text
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)
 
 
 def test_recognition_point_names_shippers_are_not_read_by_generator(
@@ -923,4 +930,4 @@ def test_recognition_point_names_shippers_are_not_read_by_generator(
         assert "Грузоотправитель 1" not in text
         assert "Складская" not in text
     finally:
-        path.unlink(missing_ok=True)
+        _cleanup(path)

@@ -35,6 +35,7 @@ Qt — в offscreen-режиме, сеть не трогается: клиент
 
 import gc
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -409,12 +410,21 @@ def test_generation_in_offscreen_run_goes_to_test_dir(
     settle(qt_app)
 
     try:
-        produced = sorted(p.name for p in output_dir.iterdir())
-        assert len(produced) == 1, f"ожидался один договор, получено: {produced}"
-        assert produced[0].startswith("Договор-заявка_Формика_")
+        # Внутри папки вывода — одна папка рейса, а в ней один договор
+        # (ШАГ «Папка на рейс»).
+        produced = sorted(item.name for item in output_dir.iterdir())
+        assert len(produced) == 1, f"ожидалась одна папка рейса, получено: {produced}"
+        trip_folder = output_dir / produced[0]
+        assert trip_folder.is_dir(), f"документ лёг мимо папки рейса: {produced}"
+        files = [item.name for item in trip_folder.iterdir()]
+        assert len(files) == 1, f"ожидался один договор, получено: {files}"
+        assert files[0].startswith("Договор-заявка_Формика_")
     finally:
-        for path in output_dir.iterdir():
-            path.unlink(missing_ok=True)
+        for item in output_dir.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                item.unlink(missing_ok=True)
         output_dir.rmdir()
 
 
@@ -509,8 +519,10 @@ def test_repeated_open_and_close_does_not_accumulate_widgets(
 
         counts.append(len(qt_app.allWidgets()))
 
-        for leftover in work_dir.glob("Договор-заявка_Формика_*.docx"):
-            leftover.unlink(missing_ok=True)
+        # Договор лежит в папке рейса внутри work_dir: убираем папку целиком.
+        for trip_folder in work_dir.glob("Иванов_И.И._*"):
+            if trip_folder.is_dir():
+                shutil.rmtree(trip_folder, ignore_errors=True)
 
     assert counts == [baseline] * 5, f"виджеты накапливаются: {counts}"
 

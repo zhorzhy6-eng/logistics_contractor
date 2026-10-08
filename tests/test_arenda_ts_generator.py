@@ -46,6 +46,7 @@ from core.contracts.arenda_ts.postprocess import (
 )
 from core.contracts.base_generator import ConvertNewlinesStep
 from core.contracts.factory import GeneratorFactory
+from core.contracts.paths import contract_folder_name
 from core.contracts.registry import ContractTypeRegistry
 
 #: Варианты бланка: ключ — contract["carrier_type"], значение — файл шаблона.
@@ -447,12 +448,32 @@ def test_insert_route_tables_is_noop(generator):
 
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_all_templates_render_to_isolated_dir(generator, work_dir, variant):
-    """Три бланка рендерятся в изолированную папку без исключений."""
+    """
+    Три бланка рендерятся в изолированную папку без исключений.
+
+    Документ лежит на уровень глубже: внутри изолированной папки — папка
+    рейса (ШАГ «Папка на рейс»), её имя считается из данных договора.
+    """
     output_dir = work_dir / f"arenda_render_{variant.replace(' ', '_')}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    path = Path(_generate(generator, _payload(variant), output_dir))
-    assert path.parent == output_dir, "файл ушёл мимо изолированной папки"
+    payload = _payload(variant)
+    path = Path(_generate(generator, payload, output_dir))
+    assert path.parent.parent == output_dir, "файл ушёл мимо изолированной папки"
+    # Имя папки рейса считается из данных договора: водитель, маршрут, дата.
+    # Маршрут у аренды лежит в КОРНЕ ответа распознавания, а генератор
+    # переносит его в contract (ROOT_FIELDS_IN_CONTRACT) — повторяем это,
+    # иначе папка в тесте считалась бы без маршрута.
+    contract = dict(payload.get("contract") or {})
+    contract.update({
+        field: payload[field] for field in ArendaTsGenerator.ROOT_FIELDS_IN_CONTRACT
+        if field in payload
+    })
+    assert path.parent.name == contract_folder_name({
+        "driver": payload.get("driver") or {},
+        "contract": contract,
+    })
+    assert path.parent.name.endswith("_19.09.2026")
 
     text = _document_text(Document(path))
     assert "{{" not in text and "}}" not in text

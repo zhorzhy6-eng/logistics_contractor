@@ -20,8 +20,15 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import shutil  # noqa: E402
+from pathlib import Path  # noqa: E402
+
 import pytest  # noqa: E402
 
+from core.contract_data import ContractData  # noqa: E402
+from core.contracts.formika.generator import FormikaGenerator  # noqa: E402
+from core.contracts.paths import TEMPLATES_DIR, contract_folder_name  # noqa: E402
+from core.contracts.perevozka.generator import PerevozkaGenerator  # noqa: E402
 from core.mirror import (  # noqa: E402
     DRIVER_FIELDS,
     SOURCE_TYPE,
@@ -36,6 +43,7 @@ from core.mirror import (  # noqa: E402
     plan_for_logistiks,
     source_has_data,
 )
+from ui.windows.formika.data import collect_formika_data  # noqa: E402
 
 #: Ключи вкладок окна цели — те же, что у _tab_by_key в окне типа.
 TAB_KEYS = (
@@ -900,3 +908,91 @@ def test_plan_field_count(source):
         + len(plan.tabs["driver_tab"])
         + len(plan.tabs["vehicle_tab"])
     )
+
+
+# ─────────────────────────────────────────────────────────────
+# Папка рейса: зеркало и договор ложатся вместе (ШАГ «Папка на рейс»)
+# ─────────────────────────────────────────────────────────────
+
+#: Имя папки рейса источника: водитель + маршрут + дата договора.
+SOURCE_FOLDER = "Иванов_И.И._Мурманск-Пятигорск_23.09.2026"
+
+
+def test_mirrored_data_keeps_folder_key(source):
+    """
+    План зеркала несёт те же водителя, маршрут и дату, что источник.
+
+    Проверяются ДАННЫЕ, а не окна: имя папки рейса считается из одного и
+    того же ключа (core/contracts/paths.py), поэтому совпадение ключа и есть
+    «документы одного рейса лежат рядом» — безо всякой связи между окнами.
+    """
+    assert contract_folder_name(source) == SOURCE_FOLDER
+
+    for plan in (plan_for_formika(source), plan_for_logistiks(source)):
+        mirrored = {
+            "driver": {"full_name": plan.tabs["driver_tab"]["full_name"]},
+            "contract": {
+                "route": plan.tabs["route_tab"]["route"],
+                "date": plan.tabs["customer_tab"]["date"],
+            },
+        }
+        assert contract_folder_name(mirrored) == SOURCE_FOLDER
+        # Маршрут и дата переносятся как есть, а не пересчитываются.
+        assert mirrored["contract"]["route"] == source["contract"]["route"]
+        assert mirrored["contract"]["date"] == source["contract"]["date"]
+
+
+def test_mirror_then_generate_puts_both_in_one_folder(source, work_dir):
+    """
+    Договор Экспедиторства и зеркалённая заявка Формики — в ОДНОЙ папке.
+
+    Сценарий A из ТЗ: сначала создали договор (папка рейса появилась), потом
+    зеркалили данные в Формику и создали заявку — она обязана лечь в ту же
+    папку, а не рядом и не в папку с суффиксом «_2».
+    """
+    output_dir = work_dir / "mirror_folder"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    expeditor = PerevozkaGenerator(templates_dir=str(TEMPLATES_DIR))
+    contract_path = Path(expeditor.generate(
+        ContractData.coerce({
+            "driver": source["driver"],
+            "contract": source["contract"],
+            "vehicles": source["vehicles"],
+            "tractor": source["tractor"],
+            "trailer": source["trailer"],
+            "loadings": source["loadings"],
+            "unloadings": source["unloadings"],
+        }),
+        output_dir=str(output_dir),
+    ))
+
+    # Данные Формики — ровно то, что раскладывает по вкладкам зеркало.
+    plan = plan_for_formika(source)
+    formika_data = collect_formika_data({
+        "customer": plan.tabs["customer_tab"],
+        "cargo": plan.tabs["cargo_tab"],
+        "route": plan.tabs["route_tab"],
+        "driver": plan.tabs["driver_tab"],
+        "vehicle": plan.tabs["vehicle_tab"],
+    })
+    formika_path = Path(FormikaGenerator(
+        templates_dir=str(TEMPLATES_DIR)
+    ).generate(formika_data, output_dir=str(output_dir)))
+
+    try:
+        assert contract_path.parent.name == SOURCE_FOLDER
+        assert contract_path.parent == formika_path.parent
+        assert sorted(item.name for item in contract_path.parent.iterdir()) == \
+            sorted([contract_path.name, formika_path.name])
+    finally:
+        shutil.rmtree(contract_path.parent, ignore_errors=True)
+
+
+def test_mirrored_folder_names_differ_when_driver_differs(source, work_dir):
+    """Другой водитель в источнике — другая папка: рейсы не смешиваются."""
+    other = dict(source)
+    other["driver"] = dict(source["driver"], full_name="Петров Пётр Петрович")
+
+    assert contract_folder_name(other) != contract_folder_name(source)
+    assert contract_folder_name(other) == "Петров_П.П._Мурманск-Пятигорск_23.09.2026"

@@ -46,6 +46,7 @@ import copy
 import gc
 import logging
 import re
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -614,15 +615,16 @@ def _generate(generator, data, work_dir, name: str):
         path = Path(generator.generate(data, output_dir=str(output_dir)))
 
         assert path.exists(), f"файл не создан: {path}"
-        assert path.parent == output_dir, "файл ушёл мимо изолированной папки"
+        # Внутри изолированной папки — папка рейса, документ уже в ней
+        # (ШАГ «Папка на рейс»: имя из водителя, маршрута и даты договора).
+        assert path.parent.parent == output_dir, "файл ушёл мимо изолированной папки"
 
         yield path
     finally:
-        for leftover in output_dir.glob("*.docx"):
-            try:
-                leftover.unlink(missing_ok=True)
-            except OSError:
-                pass
+        # За тестом убираем и папку рейса: файлов в ней не остаётся.
+        for folder in output_dir.iterdir():
+            if folder.is_dir():
+                shutil.rmtree(folder, ignore_errors=True)
 
 
 def _car_row_numbers(table) -> list:
@@ -739,7 +741,7 @@ def test_lessee_requisites_match_variant(generated_docs):
     """
     doc = Document(str(generated_docs))
     text = _document_text(doc)
-    variant = generated_docs.parent.name.removeprefix("e2e_")
+    variant = generated_docs.parent.parent.name.removeprefix("e2e_")
     # Основание полномочий печатается в п. 1.1 — и только там.
     lessee_line = _lines(doc, "1.1. Арендатор:")[0]
 
@@ -1070,8 +1072,15 @@ def test_empty_points_do_not_break_chain(generator, validator, work_dir):
 # ─────────────────────────────────────────────────────────────
 
 def test_generated_docx_is_written_to_work_dir(generated_docs, work_dir):
-    """Готовый DOCX лежит в изолированной папке внутри work_dir, а не в output/."""
-    assert generated_docs.parent.parent == work_dir
+    """
+    Готовый DOCX лежит в изолированной папке внутри work_dir, а не в output/.
+
+    Сам документ — на уровень глубже: внутри изолированной папки лежит папка
+    рейса (ШАГ «Папка на рейс»).
+    """
+    assert generated_docs.parent.parent.parent == work_dir
+    assert generated_docs.parent.parent.name.startswith("e2e_")
+    assert generated_docs.parent.is_dir()
     assert generated_docs.exists()
     assert generated_docs.suffix == ".docx"
     assert generated_docs.stat().st_size > 10_000, "документ подозрительно пуст"
@@ -1491,7 +1500,7 @@ def test_appendix_signatures_use_party_names(generated_docs):
 
     assert table is not None, "нет таблицы подписей Акта"
     lessee_cell, lessor_cell = table.rows[0].cells
-    variant = generated_docs.parent.name.removeprefix("e2e_")
+    variant = generated_docs.parent.parent.name.removeprefix("e2e_")
 
     lessee_short = LESSEE_OOO_SHORT if variant == "ООО" else LESSEE_IP_SHORT
     lessee_fio = (LESSEE_OOO_SHORT_FIO if variant == "ООО"
@@ -1755,15 +1764,21 @@ def test_generate_does_not_touch_the_source_data(generator, work_dir):
 
 
 def test_generated_files_are_removed_after_test(generator, work_dir):
-    """Файлы теста лежат в своей папке work_dir и удаляются за тестом."""
+    """
+    Файлы теста лежат в своей папке work_dir и удаляются за тестом.
+
+    Вместе с документом убирается и папка рейса: иначе следующая проверка
+    «папка вывода пуста» спотыкалась бы о пустой каталог от прошлого прогона.
+    """
     output_dir = work_dir / "e2e_cleanup_probe"
 
     with _generate(generator, _make_data("ООО"), work_dir,
                    "e2e_cleanup_probe") as path:
         created = path
         assert created.exists()
-        assert created.parent == output_dir
-        assert created.parent.parent == work_dir
+        assert created.parent.parent == output_dir
+        assert created.parent.parent.parent == work_dir
 
     assert not created.exists(), "готовый документ остался после теста"
-    assert not list(output_dir.glob("*.docx"))
+    assert not list(output_dir.rglob("*.docx"))
+    assert [item.name for item in output_dir.iterdir()] == []

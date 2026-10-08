@@ -29,6 +29,7 @@ from typing import Any, Dict, List
 
 import pytest
 
+from core.contracts.paths import contract_folder_name, folder_key_from_form
 from core.contracts.zayavka.generator import (
     CARRIER_NAME,
     CUSTOMER_NAME,
@@ -901,7 +902,9 @@ def test_generator_accepts_collected_data(work_dir) -> None:
         )
 
         assert Path(path).exists(), "генератор не создал файл"
-        assert Path(path).parent == folder.path
+        # Файл лежит в папке рейса внутри папки вывода (ШАГ «Папка на рейс»).
+        trip = contract_folder_name(folder_key_from_form(data))
+        assert Path(path).parent == folder.path / trip
     finally:
         folder.cleanup()
 
