@@ -9,8 +9,9 @@
   * на вкладке «Перевозчики» нет кнопки «👤 Водители…» — дерево её заменяет
     (водители видны прямо под перевозчиком);
   * на вкладке «Водители» есть кнопка «🚛 Перевозчик…»: она активна только
-    при выбранном водителе, у водителя без привязки объясняет, что делать,
-    у привязанного открывает карточку перевозчика;
+    при выбранном водителе и открывает диалог привязки «Перевозчик
+    водителя» (там водителя можно привязать, отвязать и загрузить
+    перевозчика в форму) — подробности в `test_ui_driver_carrier_dialog.py`;
   * «➕ Добавить», «📂 Загрузить в форму», «✏ Редактировать», «🗑 Удалить»,
     «♻ Восстановить» работают и с деревом: перевозчик — с перевозчиком,
     водитель — с водителем.
@@ -184,97 +185,113 @@ def test_carrier_button_enabled_with_selection(manager, isolated_db, carrier_a):
     assert _carrier_card_button(manager).isEnabled() is True
 
 
-def test_carrier_button_shows_info_when_driver_unlinked(
-    manager, isolated_db, info_recorder, monkeypatch
+def test_carrier_button_opens_binding_dialog(
+    qt_app, isolated_db, carrier_a, quiet_dialogs, monkeypatch
 ):
-    """Водитель без привязки: подсказка, а диалог не открывается."""
+    """Кнопка открывает диалог привязки «Перевозчик водителя» с этой записью."""
+    from ui.db_manager_dialog import DbManagerDialog
     import ui.db_manager_dialog as module
 
-    class BombDialog:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("диалог перевозчика открывать нечего")
+    seen = {}
+    loaded = []
 
-    monkeypatch.setattr(module, "EditCarrierDialog", BombDialog)
+    class FakeDialog:
+        def __init__(self, driver, parent=None, on_load_carrier=None):
+            seen["driver"] = dict(driver)
+            seen["on_load_carrier"] = on_load_carrier
+            seen["parent"] = parent
+            self.changed = True
+
+        def exec_(self):
+            seen["exec"] = True
+            return QDialog.Accepted
+
+    monkeypatch.setattr(module, "DriverCarrierDialog", FakeDialog)
+
+    driver_id = _add_driver(isolated_db, DRIVER_NAME, carrier_a)
+    dialog = DbManagerDialog(on_load_carrier=loaded.append)
+    try:
+        dialog._load_drivers()
+        dialog.drivers_table.selectRow(0)
+
+        dialog._on_open_driver_carrier()
+
+        assert seen["exec"] is True
+        assert seen["driver"]["id"] == driver_id
+        assert seen["driver"]["default_carrier_id"] == carrier_a
+        assert seen["parent"] is dialog
+
+        # Обработчик «📂 Загрузить в форму» из диалога доходит до вызывающей
+        # стороны: это тот же обработчик, что и у самого менеджера.
+        record = isolated_db.load_organization_by_id(carrier_a, is_carrier=True)
+        seen["on_load_carrier"](record)
+        assert [item["id"] for item in loaded] == [carrier_a]
+    finally:
+        dialog.close()
+
+
+def test_carrier_button_opens_dialog_for_unlinked_driver(
+    manager, isolated_db, monkeypatch
+):
+    """У водителя без привязки диалог тоже открывается: привязать можно там."""
+    import ui.db_manager_dialog as module
+
+    seen = {}
+
+    class FakeDialog:
+        def __init__(self, driver, parent=None, on_load_carrier=None):
+            seen["driver"] = dict(driver)
+            self.changed = False
+
+        def exec_(self):
+            seen["exec"] = True
+            return QDialog.Accepted
+
+    monkeypatch.setattr(module, "DriverCarrierDialog", FakeDialog)
     _add_driver(isolated_db, DRIVER_NAME)
     manager._load_drivers()
     manager.drivers_table.selectRow(0)
 
     manager._on_open_driver_carrier()
 
-    assert len(info_recorder.texts) == 1
-    assert "не привязан" in info_recorder.texts[0]
-    assert "✏ Редактировать" in info_recorder.texts[0]
+    assert seen["exec"] is True
+    assert seen["driver"]["default_carrier_id"] is None
 
 
-def test_carrier_button_opens_carrier_dialog_when_linked(
-    manager, isolated_db, carrier_a, monkeypatch
+def test_carrier_button_no_exception_without_selection(
+    manager, isolated_db, carrier_a, warning_recorder, monkeypatch
 ):
-    """Водитель привязан: открывается карточка ИМЕННО его перевозчика."""
+    """Строка не выбрана — предупреждение, диалог не открывается."""
     import ui.db_manager_dialog as module
 
-    seen = {}
+    class BombDialog:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("диалог без выбранного водителя не открываем")
 
-    class FakeDialog:
-        def __init__(self, org, is_carrier=True, parent=None):
-            seen["org"] = dict(org)
-            seen["is_carrier"] = is_carrier
-
-        def exec_(self):
-            return QDialog.Accepted
-
-        def get_data(self):
-            return {"full_name": "ООО «Фас Транс-2»", "inn": "7701234567"}
-
-    monkeypatch.setattr(module, "EditCarrierDialog", FakeDialog)
+    monkeypatch.setattr(module, "DriverCarrierDialog", BombDialog)
     _add_driver(isolated_db, DRIVER_NAME, carrier_a)
     manager._load_drivers()
-    manager.drivers_table.selectRow(0)
+    manager.drivers_table.clearSelection()
+    manager.drivers_table.setCurrentCell(-1, -1)
 
-    manager._on_open_driver_carrier()
-
-    assert seen["is_carrier"] is True
-    assert seen["org"]["id"] == carrier_a
-    assert isolated_db.load_organization_by_id(
-        carrier_a, is_carrier=True
-    )["full_name"] == "ООО «Фас Транс-2»"
-    # Дерево перечитано: новое название видно на вкладке «Перевозчики».
-    names = [
-        manager.carriers_tree.topLevelItem(index).text(0)
-        for index in range(manager.carriers_tree.topLevelItemCount())
-    ]
-    assert any("Фас Транс-2" in name for name in names)
-
-
-def test_carrier_button_no_exception_on_missing_carrier(
-    manager, isolated_db, carrier_a, warning_recorder
-):
-    """Привязка ведёт на вычищенную запись — предупреждение вместо падения."""
-    driver_id = _add_driver(isolated_db, DRIVER_NAME, carrier_a)
-    conn = isolated_db.get_connection()
-    try:
-        conn.execute("PRAGMA foreign_keys = OFF")
-        conn.execute("DELETE FROM carriers WHERE id = ?", (carrier_a,))
-        conn.commit()
-    finally:
-        conn.close()
-
-    manager._load_drivers()
-    manager.drivers_table.selectRow(0)
     manager._on_open_driver_carrier()
 
     assert len(warning_recorder.texts) == 1
-    assert "не найдена" in warning_recorder.texts[0]
-    assert isolated_db.load_driver(driver_id)["full_name"] == DRIVER_NAME
+    assert "Выберите водителя" in warning_recorder.texts[0]
 
 
 def test_carrier_button_hidden_in_picker_mode(qt_app, isolated_db, quiet_dialogs):
-    """В режиме выбора справочник только читают: карточки перевозчика нет."""
+    """В режиме выбора справочник только читают: карточки перевозчика нет.
+
+    Проверяем `isHidden()`: окно диалога в тесте не показывается, и
+    `isVisible()` было бы False у любой кнопки.
+    """
     from ui.db_manager_dialog import DbManagerDialog
 
     dialog = DbManagerDialog(None, open_tab="drivers", on_pick=lambda record: None)
     try:
         button = _button(dialog.drivers_tab, CARRIER_BUTTON_TEXT)
-        assert button.isVisible() is False
+        assert button.isHidden() is True
     finally:
         dialog.close()
 
