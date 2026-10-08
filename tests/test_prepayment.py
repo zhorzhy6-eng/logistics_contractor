@@ -15,10 +15,12 @@
   * карта замен перевозки несёт восемь ключей разбивки, при 0 % — пустые;
   * валидатор перевозки ловит отрицательную предоплату и предоплату больше
     стоимости (ошибки) и предоплату 100 % (замечание);
-  * вкладка «Договор»: поле «Предоплата, ₽», расчётный «Предоплата (%)»,
-    процент считается от ИТОГА (суммы с НДС) и НЕ меняет введённую сумму;
+  * вкладка «Договор»: поле «Предоплата, ₽» и расчётный «Предоплата (%)»,
+    ДВУСТОРОННИЙ ввод (сумма ↔ процент), процент считается от ИТОГА
+    (суммы с НДС) и НЕ меняет введённую сумму;
   * в трёх бланках перевозки стоит условный блок `{%p if has_prepayment %}`,
-    а ветка `else` — прежний текст пункта об оплате;
+    а ветка `else` — прежний текст пункта об оплате; номер пункта в обеих
+    ветках — 4.4 (он не зависит от наличия предоплаты);
   * e2e: договор с предоплатой 30 % печатает разбивку, договор без
     предоплаты — прежний текст без единого упоминания предоплаты;
   * база: миграция добавляет колонки contracts.prepayment_amount /
@@ -365,9 +367,11 @@ def tab(qapp, isolated_db) -> ContractTab:
 
 
 def test_tab_has_prepayment_fields(tab):
-    """Оба поля на месте, процент — только для чтения."""
+    """Оба поля на месте и оба редактируемые (двусторонний ввод)."""
     assert tab.prepayment_amount.value() == 0
-    assert tab.prepayment_percent.isReadOnly()
+    assert tab.prepayment_percent.value() == 0
+    assert not tab.prepayment_amount.isReadOnly()
+    assert not tab.prepayment_percent.isReadOnly()
 
 
 def test_tab_percent_is_computed_from_total(tab):
@@ -379,21 +383,32 @@ def test_tab_percent_is_computed_from_total(tab):
 
     assert data["prepayment_amount"] == 30000.0
     assert data["prepayment_percent"] == pytest.approx(24.59)
-    assert tab.prepayment_percent.text() == "24.59 %"
+    assert tab.prepayment_percent.value() == pytest.approx(24.59)
 
 
-def test_tab_percent_empty_without_prepayment(tab):
+def test_tab_both_fields_are_editable(tab):
+    """Оба поля предоплаты — редактируемые поля ввода, не «только чтение»."""
+    for field in (tab.prepayment_amount, tab.prepayment_percent):
+        assert not field.isReadOnly(), field.toolTip()
+
+
+def test_tab_percent_zero_without_prepayment(tab):
     tab.price_input.setValue(100000.0)
 
     assert tab.get_data()["prepayment_percent"] == 0.0
-    assert tab.prepayment_percent.text() == ""
+    assert tab.prepayment_percent.value() == 0.0
 
 
-def test_tab_percent_is_dash_when_price_is_zero(tab):
-    """Предоплата есть, а стоимости ещё нет — процент считать не от чего."""
+def test_tab_percent_zero_when_price_is_zero(tab):
+    """
+    Предоплата есть, а стоимости ещё нет — процент считать не от чего.
+
+    Поле процента — `QDoubleSpinBox`, состояния «пусто» у него нет, поэтому
+    вместо прежнего прочерка «—» показывается ноль.
+    """
     tab.prepayment_amount.setValue(5000.0)
 
-    assert tab.prepayment_percent.text() == "—"
+    assert tab.prepayment_percent.value() == 0.0
     assert tab.get_data()["prepayment_percent"] == 0.0
 
 
@@ -420,10 +435,145 @@ def test_tab_price_change_keeps_amount_and_recomputes_percent(tab):
     )
 
 
+# ─────────────────────────────────────────────────────────────
+# F.1б: двусторонний ввод (сумма ↔ процент)
+# ─────────────────────────────────────────────────────────────
+
+def _exactly_100k(tab) -> None:
+    """Итог с НДС ровно 100 000 ₽: режим «С НДС» и стоимость 100 000."""
+    tab.radio_with_vat.setChecked(True)
+    tab.price_input.setValue(100000.0)
+
+
+def test_enter_amount_updates_percent(tab):
+    """Ввод суммы 50 000 ₽ при итоге 100 000 ₽ → процент 50.00."""
+    _exactly_100k(tab)
+
+    tab.prepayment_amount.setValue(50000.0)
+
+    assert tab.prepayment_percent.value() == pytest.approx(50.00)
+    assert tab.get_data()["prepayment_percent"] == pytest.approx(50.00)
+
+
+def test_enter_percent_updates_amount(tab):
+    """Ввод процента 30 при итоге 100 000 ₽ → сумма 30 000 ₽."""
+    _exactly_100k(tab)
+
+    tab.prepayment_percent.setValue(30.0)
+
+    assert tab.prepayment_amount.value() == pytest.approx(30000.00)
+    assert tab.get_data()["prepayment_amount"] == pytest.approx(30000.00)
+
+
+@pytest.mark.parametrize("percent, amount", [
+    (100.0, 100000.00),
+    (50.0, 50000.00),
+    (33.33, 33330.00),
+    (1.0, 1000.00),
+])
+def test_enter_percent_sets_amount(tab, percent, amount):
+    _exactly_100k(tab)
+
+    tab.prepayment_percent.setValue(percent)
+
+    assert tab.prepayment_amount.value() == pytest.approx(amount)
+
+
+def test_no_infinite_loop_on_sync(tab, monkeypatch):
+    """
+    Синхронизация полей не зацикливается: слоты вызываются по одному разу.
+
+    Без флага `_prepayment_syncing` `setValue` одного поля вызывал бы слот
+    второго, тот — слот первого, и так по кругу.
+    """
+    _exactly_100k(tab)
+
+    calls = {"amount": 0, "percent": 0}
+    original_amount = tab._on_prepayment_changed
+    original_percent = tab._on_prepayment_percent_changed
+
+    def counting_amount():
+        calls["amount"] += 1
+        original_amount()
+
+    def counting_percent():
+        calls["percent"] += 1
+        original_percent()
+
+    tab.prepayment_amount.valueChanged.disconnect()
+    tab.prepayment_percent.valueChanged.disconnect()
+    tab.prepayment_amount.valueChanged.connect(counting_amount)
+    tab.prepayment_percent.valueChanged.connect(counting_percent)
+
+    tab.prepayment_amount.setValue(50000.0)
+
+    assert calls["amount"] == 1, "слот суммы вызван больше одного раза"
+    assert calls["percent"] == 1, "слот процента вызван больше одного раза"
+    assert tab.prepayment_percent.value() == pytest.approx(50.00)
+    assert tab._prepayment_syncing is False, "флаг синхронизации не снят"
+
+
+def test_change_price_keeps_amount_updates_percent(tab):
+    """Смена стоимости не трогает сумму, но обновляет процент."""
+    _exactly_100k(tab)
+    tab.prepayment_amount.setValue(50000.0)
+    assert tab.prepayment_percent.value() == pytest.approx(50.00)
+
+    tab.price_input.setValue(200000.0)
+
+    assert tab.prepayment_amount.value() == pytest.approx(50000.00)
+    assert tab.prepayment_percent.value() == pytest.approx(25.00)
+
+
+def test_enter_percent_100_sets_full_amount(tab):
+    """100 % — предоплата равна всему итогу договора."""
+    _exactly_100k(tab)
+
+    tab.prepayment_percent.setValue(100.0)
+
+    assert tab.prepayment_amount.value() == pytest.approx(100000.00)
+
+
 def test_tab_fill_data_accepts_prepayment_amount(tab):
     tab.fill_data({"prepayment_amount": 45000.0, "price_input": 150000.0})
 
     assert tab.get_data()["prepayment_amount"] == 45000.0
+
+
+def test_tab_fill_data_recomputes_percent_from_amount(tab):
+    """Пришла только сумма — процент считается по ней."""
+    _exactly_100k(tab)
+
+    tab.fill_data({"prepayment_amount": 40000.0})
+
+    assert tab.prepayment_amount.value() == pytest.approx(40000.0)
+    assert tab.prepayment_percent.value() == pytest.approx(40.00)
+
+
+def test_tab_fill_data_recomputes_amount_from_percent(tab):
+    """Пришёл только процент — сумма считается по нему."""
+    _exactly_100k(tab)
+
+    tab.fill_data({"prepayment_percent": 20.0})
+
+    assert tab.prepayment_percent.value() == pytest.approx(20.00)
+    assert tab.prepayment_amount.value() == pytest.approx(20000.00)
+
+
+def test_tab_fill_data_keeps_saved_percent(tab):
+    """
+    Пришли обе величины — сохранённый процент приоритетнее пересчитанного.
+
+    Иначе при загрузке из базы процент «поехал» бы от округления суммы:
+    форма показала бы 30.00 вместо сохранённых 33.33.
+    """
+    _exactly_100k(tab)
+
+    tab.fill_data({"prepayment_amount": 30000.0, "prepayment_percent": 33.33})
+
+    assert tab.prepayment_amount.value() == pytest.approx(30000.0)
+    assert tab.prepayment_percent.value() == pytest.approx(33.33)
+    assert tab.get_data()["prepayment_percent"] == pytest.approx(33.33)
 
 
 def test_tab_fill_data_zero_sets_zero(tab):
@@ -441,7 +591,7 @@ def test_tab_fill_data_zero_sets_zero(tab):
     tab.fill_data({"prepayment_amount": 0})
 
     assert tab.get_data()["prepayment_amount"] == 0.0
-    assert tab.prepayment_percent.text() == ""
+    assert tab.prepayment_percent.value() == 0.0
 
 
 def test_tab_fill_data_ignores_garbage(tab):
@@ -453,15 +603,19 @@ def test_tab_fill_data_ignores_garbage(tab):
     assert tab.get_data()["prepayment_amount"] == 45000.0
 
 
-def test_tab_clear_resets_prepayment(tab):
-    tab.price_input.setValue(100000.0)
+def test_clear_resets_both_fields(tab):
+    """clear() обнуляет и сумму, и процент, и снимает флаг синхронизации."""
+    _exactly_100k(tab)
     tab.prepayment_amount.setValue(30000.0)
 
     tab.clear()
 
+    assert tab.prepayment_amount.value() == 0.0
+    assert tab.prepayment_percent.value() == 0.0
     assert tab.get_data()["prepayment_amount"] == 0.0
     assert tab.get_data()["prepayment_percent"] == 0.0
-    assert tab.prepayment_percent.text() == ""
+    assert tab._prepayment_percent == 0.0
+    assert tab._prepayment_syncing is False
 
 
 # ─────────────────────────────────────────────────────────────
@@ -521,16 +675,33 @@ def test_template_if_branch_has_report_wording(name):
 
 @pytest.mark.parametrize("name", PEREVOZKA_TEMPLATES)
 def test_template_keeps_single_number_for_clause(name):
-    """Номер пункта в ветке `if` — 4.2: прежний 4.4 занят веткой `else`."""
+    """
+    Номер пункта в ОБЕИХ ветках — 4.4: он не зависит от предоплаты.
+
+    Пункт об оплате назывался 4.4 до правки и должен так и называться:
+    меняется только текст внутри пункта.
+    """
     with zipfile.ZipFile(str(TEMPLATES / name)) as archive:
         xml = archive.read("word/document.xml").decode("utf-8")
 
     start = xml.find("{%p if has_prepayment %}")
     end = xml.find("{%p else %}")
-    branch = xml[start:end]
+    endif = xml.find("{%p endif %}")
+    branch_if = xml[start:end]
+    branch_else = xml[end:endif]
 
-    assert "4.2. Оплата услуг" in branch, name
-    assert "4.4." not in branch, f"{name}: в ветке if остался номер 4.4"
+    assert "4.4. Оплата услуг" in branch_if, name
+    assert "4.2." not in branch_if, f"{name}: в ветке if остался номер 4.2"
+    assert "4.4. Оплата производится" in branch_else, name
+
+
+@pytest.mark.parametrize("name", PEREVOZKA_TEMPLATES)
+def test_template_number_is_444_everywhere(name):
+    """В бланке нет пункта «4.2. Оплата услуг» — только 4.4."""
+    with zipfile.ZipFile(str(TEMPLATES / name)) as archive:
+        xml = archive.read("word/document.xml").decode("utf-8")
+
+    assert "4.2. Оплата услуг" not in xml, f"{name}: остался номер 4.2"
 
 
 def test_templates_change_only_in_place(templates_dir):
@@ -567,7 +738,7 @@ def test_contract_with_prepayment_prints_the_split(generator, work_file):
 
     text = payment_text(path)
 
-    assert "4.2. Оплата услуг осуществляется Заказчиком в следующем порядке" in text
+    assert "4.4. Оплата услуг осуществляется Заказчиком в следующем порядке" in text
     assert "63000.00 руб." in text
     assert "шестьдесят три тысячи рублей 00 копеек" in text
     assert "предоплата в размере 30% от стоимости услуг" in text
@@ -575,6 +746,57 @@ def test_contract_with_prepayment_prints_the_split(generator, work_file):
     assert "окончательный расчёт в размере 70% от стоимости услуг" in text
     assert "в течение 15 (пятнадцати) банковских дней" in text
     assert "{%p" not in text, "служебные теги шаблона попали в документ"
+
+
+def test_prepayment_paragraph_uses_444(generator, work_file):
+    """
+    При предоплате > 0 пункт об оплате называется 4.4, а не 4.2.
+
+    Проверяется именно ПУНКТ ОБ ОПЛАТЕ: «4.2.» в договоре есть и само по
+    себе — так пронумерован пункт о статусе плательщика НДС
+    («4.2. Перевозчик подтверждает…»), и он к предоплате отношения не имеет.
+    """
+    path = Path(generator.generate(make_payload(63000.0),
+                                   output_dir=str(work_file("out"))))
+
+    text = " ".join(document_paragraphs(path))
+
+    assert "4.4. Оплата услуг осуществляется Заказчиком" in text
+    assert "4.2. Оплата" not in text, "в договоре остался номер пункта 4.2"
+
+
+def test_no_prepayment_paragraph_uses_444(generator, work_file):
+    """При предоплате 0 в договоре тоже 4.4 — и прежний текст пункта."""
+    path = Path(generator.generate(make_payload(0.0),
+                                   output_dir=str(work_file("out"))))
+
+    text = " ".join(document_paragraphs(path))
+
+    assert "4.4. Оплата производится в течение" in text
+    assert "4.2. Оплата" not in text, "в договоре остался номер пункта 4.2"
+
+
+def test_only_one_444_in_document(generator, work_file):
+    """
+    В разделе об оплате ровно одно «4.4.» — номер не задваивается.
+
+    Вторая ветка условия в готовый документ не печатается: docxtpl
+    оставляет ровно ту, что выбрана по `has_prepayment`.
+    """
+    for prepayment in (63000.0, 0.0):
+        path = Path(generator.generate(make_payload(prepayment),
+                                       output_dir=str(work_file("out"))))
+        paragraphs = document_paragraphs(path)
+        text = " ".join(paragraphs)
+        payment_clauses = [
+            paragraph for paragraph in paragraphs
+            if paragraph.startswith("4.4.")
+        ]
+
+        assert len(payment_clauses) == 1, payment_clauses
+        assert text.count("4.4.") == 1, (
+            f"предоплата {prepayment}: «4.4.» встречается {text.count('4.4.')} раз"
+        )
 
 
 def test_contract_without_prepayment_keeps_the_old_text(generator, work_file):
