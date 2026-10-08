@@ -77,14 +77,33 @@ def quiet_dialogs(monkeypatch):
 @pytest.fixture
 def window(qt_app, isolated_db, warning_recorder, quiet_dialogs, monkeypatch):
     """MainWindow без GigaChat и без блокирующих диалогов."""
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtWidgets import QApplication
+
     from ui.main_window import MainWindow
+    from ui.windows.base_window import clear_source_windows
 
     monkeypatch.setattr(
         MainWindow, "_init_gigachat_client", lambda self, show_dialog=True: False
     )
     win = MainWindow()
     yield win
-    win.close()
+
+    # Окно — top-level виджет, и пока C++ объект жив, `find_expedition_window()`
+    # находит его запасным путём (QApplication.topLevelWidgets), ломая чужие
+    # тесты зеркала. Поэтому закрываем его ПО-НАСТОЯЩЕМУ, доводим удаление
+    # до конца (deleteLater без цикла событий сам не срабатывает) и чистим
+    # реестр окна-источника — как это делает tests/test_window_close_hides.py.
+    try:
+        win.system_theme_watcher.stop()
+    except Exception:  # noqa: BLE001 — наблюдателя может не быть вовсе
+        pass
+    win.force_close()
+    win.deleteLater()
+    app = QApplication.instance()
+    if app is not None:
+        app.sendPostedEvents(None, QEvent.DeferredDelete)
+    clear_source_windows()
 
 
 @pytest.fixture
