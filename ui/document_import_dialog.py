@@ -20,7 +20,7 @@ from pathlib import Path
 from threading import Event
 
 from PyQt5.QtCore import Qt, QObject, QRunnable, pyqtSignal, QUrl
-from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtGui import QBrush, QColor, QDesktopServices
 from PyQt5.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog,
     QHBoxLayout, QLabel, QListWidget, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout)
@@ -53,6 +53,16 @@ FIELD_ACTION_MANUAL = "Ввести вручную"
 UNREAD_FILES_HEADING = "📄 НЕ ПРОЧИТАННЫЕ ФАЙЛЫ"
 FORM_EMPTY_MARK = "— пусто —"
 FORM_DIFFERS_MARK = "≠ "
+
+# ── оформление строк дерева ──
+#: Спорное поле (источники дают разные значения) — светло-красный фон:
+#: видно издалека, но текст остаётся читаемым.
+CONFLICT_BRUSH = QBrush(QColor(255, 214, 214))
+#: Непрочитанное значение — серым курсивом.
+UNREADABLE_BRUSH = QBrush(QColor(130, 130, 130))
+#: Подсказка «проверить» под сущностью.
+NOTE_BRUSH = QBrush(QColor(255, 244, 204))
+NO_BRUSH = QBrush()
 
 INSTRUCTION = (
     "Проверка документов.\n"
@@ -551,6 +561,16 @@ class DocumentImportDialog(QDialog):
         self.tree.setItemWidget(top, COL_ACTION, button)
         self._items[entity.uid] = top
 
+        # Подсказки «проверить» — сразу под сущностью, до источников: это то,
+        # на что оператору нужно посмотреть в первую очередь.
+        for note in entity.notes:
+            note_item = QTreeWidgetItem(top, ["⚠ " + note, "", "", "", ""])
+            note_item.setData(COL_WHAT, Qt.UserRole, ("note", entity.uid))
+            note_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            note_item.setBackground(COL_WHAT, NOTE_BRUSH)
+            note_item.setToolTip(COL_WHAT, "Документы связаны по совпавшим полям. "
+                                           "Проверьте отмеченное по оригиналу.")
+
         for source, values in entity.fields_by_source().items():
             node = QTreeWidgetItem(top, [SOURCE_PREFIX + source if source else NO_SOURCE_LABEL,
                                          "", "", "", ""])
@@ -574,7 +594,28 @@ class DocumentImportDialog(QDialog):
         button.setToolTip("Изменить значение: правка идёт только в форму, оригинал не меняется.")
         button.clicked.connect(partial(self.edit_field, entity.uid, value.field))
         self.tree.setItemWidget(item, COL_ACTION, button)
+        self._add_conflict_variants(item, entity, value)
         self._refresh_field_item(entity, value)
+
+    def _add_conflict_variants(self, item, entity, value):
+        """
+        Спорное поле: оба значения остаются в дереве, каждое со своим файлом.
+
+        Оператор видит, что именно напечатано в каждом документе, и решает
+        сам — правкой поля или выбором одного из значений.
+        """
+        if not value.conflicted:
+            return
+        for source, variant in value.variants:
+            if not variant:
+                continue
+            child = QTreeWidgetItem(item, [source, variant, "", "", ""])
+            child.setData(COL_WHAT, Qt.UserRole, ("variant", entity.uid, value.field))
+            child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            child.setBackground(COL_WHAT, CONFLICT_BRUSH)
+            child.setBackground(COL_VALUE, CONFLICT_BRUSH)
+            child.setToolTip(COL_WHAT, "Значение из этого файла. Подтвердить его "
+                                       "можно кнопкой «Править» у поля выше.")
 
     def _add_unread_files_item(self):
         if not self.unread_files:
@@ -782,6 +823,7 @@ class DocumentImportDialog(QDialog):
             item.setText(COL_TARGET, self._current_text(entity, value))
             item.setToolTip(COL_VALUE, self._value_hint(value))
             item.setToolTip(COL_TARGET, self._target_hint(entity, value))
+            self._apply_field_style(item, value)
             if confirmable:
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             else:
@@ -794,6 +836,17 @@ class DocumentImportDialog(QDialog):
                 button.setText(FIELD_ACTION_EDIT if value.value else FIELD_ACTION_MANUAL)
         finally:
             self._rendering = False
+
+    @staticmethod
+    def _apply_field_style(item, value):
+        """Оформление поля: спорное — на красном фоне, непрочитанное — серым курсивом."""
+        font = item.font(COL_VALUE)
+        font.setItalic(value.unreadable)
+        item.setFont(COL_VALUE, font)
+        item.setForeground(COL_VALUE, UNREADABLE_BRUSH if value.unreadable else NO_BRUSH)
+        background = CONFLICT_BRUSH if value.conflicted else NO_BRUSH
+        item.setBackground(COL_WHAT, background)
+        item.setBackground(COL_VALUE, background)
 
     def _refresh_entity_item(self, uid):
         entity = entity_by_uid(self.entities, uid)
@@ -854,12 +907,18 @@ class DocumentImportDialog(QDialog):
 
     @staticmethod
     def _entity_hint(entity):
-        return (f"Найдено в файлах: {entity.sources_text()}.\n"
-                f"Если данные верные — нажмите «{entity.button_text}».\n"
-                "Если что-то не так — правьте поле и подтверждайте отдельно.")
+        lines = [f"Найдено в файлах: {entity.sources_text()}."]
+        if entity.needs_review:
+            lines.append("Опознать по документам не удалось — проверьте поля вручную.")
+        lines.extend("⚠ " + note for note in entity.notes)
+        lines.append(f"Если данные верные — нажмите «{entity.button_text}».")
+        lines.append("Если что-то не так — правьте поле и подтверждайте отдельно.")
+        return "\n".join(lines)
 
     def _entity_summary(self, entity, confirmed):
         text = entity.counts_text()
+        if entity.needs_review:
+            text += " · требует ручной проверки"
         if confirmed:
             text += f" · подтверждено: {confirmed}"
         return text

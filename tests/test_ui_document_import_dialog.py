@@ -318,6 +318,79 @@ def test_progress_counts_disputed_fields(dialog):
     assert "654321" in item.toolTip(COL_VALUE)
 
 
+def test_conflict_field_keeps_both_values_in_tree(dialog):
+    """Спорное поле: оба значения остаются в дереве, каждое со своим файлом."""
+    from PyQt5.QtCore import Qt
+    load(dialog, [
+        Evidence("driver", {"full_name": FIO, "passport_number": PASSPORT_NUMBER},
+                 "passport_01.jpg", "Текст"),
+        Evidence("driver", {"full_name": FIO, "passport_number": "654321"},
+                 "passport_02.jpg", "OCR"),
+    ])
+    item = dialog.field_item(entity_of(dialog, "driver").uid, "passport_number")
+    variants = [(item.child(i).text(COL_WHAT), item.child(i).text(COL_VALUE))
+                for i in range(item.childCount())]
+    assert sorted(variants) == [("passport_01.jpg", PASSPORT_NUMBER),
+                                ("passport_02.jpg", "654321")]
+    # Спорное поле — на красном фоне, у значений тоже.
+    assert item.background(COL_VALUE).style() != Qt.NoBrush
+    assert item.child(0).background(COL_VALUE).style() != Qt.NoBrush
+    # Значения-варианты нельзя подтвердить или править как поле.
+    assert not item.child(0).flags() & Qt.ItemIsUserCheckable
+
+
+def test_unreadable_field_value_is_gray_italic(dialog):
+    from PyQt5.QtCore import Qt
+    load(dialog, [Evidence("driver", {"full_name": FIO}, "passport_01.jpg", "Текст")])
+    driver = entity_of(dialog, "driver")
+    item = dialog.field_item(driver.uid, "passport_number")
+    assert item.text(COL_VALUE) == "[не прочитано]"
+    assert item.font(COL_VALUE).italic()
+    color = item.foreground(COL_VALUE).color()
+    assert item.foreground(COL_VALUE).style() != Qt.NoBrush
+    assert color.red() == color.green() == color.blue()      # серый
+    # Читаемое поле серым не становится.
+    readable = dialog.field_item(driver.uid, "full_name")
+    assert not readable.font(COL_VALUE).italic()
+    assert readable.foreground(COL_VALUE).style() == Qt.NoBrush
+
+
+def test_entity_without_name_is_marked_in_tree(dialog):
+    """Сущность без опознания видна оператору, а не молчит."""
+    load(dialog, [Evidence("driver", {"license_number": "349327"}, "vu_01.jpg", "OCR")])
+    driver = entity_of(dialog, "driver")
+    assert driver.needs_review
+    assert driver.key == "unknown_1"
+    item = dialog.entity_item(driver.uid)
+    assert "опознать не удалось" in item.text(COL_WHAT)
+    assert "требует ручной проверки" in item.text(COL_VALUE)
+    assert "Опознать по документам не удалось" in item.toolTip(COL_WHAT)
+    assert "Опознать не удалось — 1" in dialog.progress_label.text()
+
+
+def test_review_note_is_shown_under_entity(dialog):
+    """Паспорт и ВУ связаны по ФИО — подсказка про дату рождения видна в дереве."""
+    load(dialog, [
+        Evidence("driver", {"full_name": FIO, "birth_date": BIRTH,
+                            "passport_number": PASSPORT_NUMBER}, "passport_01.jpg", "Текст"),
+        Evidence("driver", {"full_name": FIO, "license_number": "349327"},
+                 "vu_01.jpg", "OCR"),
+    ])
+    driver = entity_of(dialog, "driver")
+    item = dialog.entity_item(driver.uid)
+    children = [item.child(i).text(COL_WHAT) for i in range(item.childCount())]
+    notes = [text for text in children if text.startswith("⚠")]
+    assert len(notes) == 1
+    assert notes[0].startswith("⚠ проверить:")
+    assert "Дата рождения" in notes[0]
+    assert "vu_01.jpg" in notes[0]
+    assert "проверить" in item.toolTip(COL_WHAT)
+    # Подсказка не прячется вместе с непрочитанными полями.
+    note_index = children.index(notes[0])
+    dialog.hide_unreadable_button.setChecked(True)
+    assert not item.child(note_index).isHidden()
+
+
 def test_unread_files_are_shown_separately(dialog):
     dialog.task = SimpleNamespace(cancel=Event())
     dialog.receive("synthetic.png, стр. 1", [], "")
