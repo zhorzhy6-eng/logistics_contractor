@@ -1055,6 +1055,17 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["nds_status_text"] = nds_status_text
         replacements["vat_rate"] = f"{vat_rate_num:.0f}%"
 
+        # ── Предоплата: разбивка оплаты на предоплату и окончательный расчёт ──
+        # База процента — итог договора (`total_amount`, сумма с НДС):
+        # именно её видит заказчик в п. 4.1 бланка. Сумма предоплаты введена
+        # оператором в рублях, поэтому при изменении стоимости
+        # пересчитывается только процент (см.
+        # BaseContractGenerator._split_payment).
+        prepayment = float(contract.get("prepayment_amount", 0) or 0)
+        split = self._split_payment(total_amount, prepayment)
+        replacements.update(split)
+        self._log_split_payment(split)
+
         logger.info(
             f"Итоговые суммы: без НДС={price_without_vat:.2f}, "
             f"НДС={nds_amount:.2f} ({vat_rate_num:.0f}%), итого={total_amount:.2f}"
@@ -1078,6 +1089,26 @@ class PerevozkaGenerator(BaseContractGenerator):
 
         logger.debug(f"Сформировано {len(replacements)} плейсхолдеров")
         return replacements
+
+    # ─────────────────────────────────────────────────────────
+    # Предоплата
+    # ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _log_split_payment(split: Dict[str, Any]) -> None:
+        """
+        Пишет в лог факт разбивки оплаты — БЕЗ сумм, только проценты.
+
+        Суммы договора в логе не место (AGENTS.md § 3.3), а проценты ничего
+        не раскрывают: по ним видно только пропорцию.
+        """
+        if split.get("has_prepayment"):
+            logger.info(
+                f"Предоплата: {split['prepayment_percent']}%, "
+                f"остаток: {split['balance_percent']}%"
+            )
+        else:
+            logger.info("Предоплата не предусмотрена")
 
     # ─────────────────────────────────────────────────────────
     # Год договора
