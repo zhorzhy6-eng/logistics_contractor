@@ -410,6 +410,68 @@ DRIVER_FIELDS: Tuple[str, ...] = (
 )
 
 
+def carrier_id(value: Any) -> Any:
+    """
+    Основной перевозчик водителя для плана зеркала.
+
+    Пустое значение (None, пустая строка, 0, мусор) даёт "": поле тогда
+    в план не попадает вовсе. Число остаётся числом — в целевой вкладке
+    это id записи того же справочника carriers, и сравнивать его надо
+    с id, а не со строкой.
+
+    Переносится именно ССЫЛКА на перевозчика, а не его реквизиты: стороны
+    договора зеркало не переносит (в бланках Формики и Логистикса они
+    фиксированы), а привязка водителя — часть карточки водителя.
+    """
+    if value is None or isinstance(value, bool):
+        return ""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return ""
+    return number if number > 0 else ""
+
+
+def _keep_target_carrier(plan: MirrorPlan, target_window: Any) -> None:
+    """
+    Не перезаписывает основной перевозчик, уже выбранный в цели.
+
+    План несёт default_carrier_id водителя источника. Если у целевой вкладки
+    своё значение И ОНО ДРУГОЕ — поле убирается из плана и попадает
+    в конфликты: перевозчика в цели мог выбрать оператор, и молча заменять
+    его нельзя. Пустое значение цели конфликтом не считается — заполнить
+    пустое поле можно молча (как и у остальных полей плана).
+
+    Вкладка цели, которая такого поля не отдаёт вовсе (у Формики
+    и Логистикса в форме водителя его нет), ничего не перезапишет: ключ
+    просто не найдётся в её данных. Проверка на это и опирается.
+    """
+    fields = plan.tabs.get("driver_tab")
+    if not fields or "default_carrier_id" not in fields:
+        return
+
+    current = _tab_data(target_window, "driver_tab")
+    if "default_carrier_id" not in current:
+        return
+
+    old_value = current.get("default_carrier_id")
+    new_value = fields.get("default_carrier_id")
+    if is_empty(old_value) or text(old_value) == text(new_value):
+        return
+
+    fields.pop("default_carrier_id", None)
+    if not fields:
+        plan.tabs.pop("driver_tab", None)
+
+    plan.conflicts.append(
+        ("driver_tab", "default_carrier_id", old_value, new_value)
+    )
+    logger.info(
+        "Зеркало: в цели уже выбран основной перевозчик — поле "
+        "оставлено как есть, конфликт записан"
+    )
+
+
 def _vehicle_rows(vehicles: Any, keys: Iterable[str]) -> List[Dict[str, str]]:
     """
     Машины источника строками целевой вкладки.
@@ -471,7 +533,10 @@ def plan_for_formika(source: Mapping[str, Any]) -> MirrorPlan:
             "unloading_address": text(unloading.get("address")),
         }),
         "driver_tab": _drop_empty({
-            field: text(driver.get(field)) for field in DRIVER_FIELDS
+            **{field: text(driver.get(field)) for field in DRIVER_FIELDS},
+            # Основной перевозчик водителя (ШАГ «Привязка водителей
+            # к перевозчикам»): переносится ссылка, а не реквизиты.
+            "default_carrier_id": carrier_id(driver.get("default_carrier_id")),
         }),
         "vehicle_tab": _drop_empty({
             "tractor_brand": text(tractor.get("brand_model")),
@@ -579,7 +644,13 @@ def plan_for_logistiks(source: Mapping[str, Any]) -> MirrorPlan:
             "loading_addresses": loading_addresses,
             "consignees": consignees,
         }),
-        "driver_tab": _drop_empty({"full_name": text(driver.get("full_name"))}),
+        "driver_tab": _drop_empty({
+            "full_name": text(driver.get("full_name")),
+            # Основной перевозчик водителя (ШАГ «Привязка водителей»):
+            # у Логистикса в бланке печатается только ФИО, но привязка
+            # едет вместе с карточкой водителя.
+            "default_carrier_id": carrier_id(driver.get("default_carrier_id")),
+        }),
         "vehicle_tab": _drop_empty({
             "tractor_brand": text(tractor.get("brand_model")),
             "tractor_plate": text(tractor.get("plate_number")),
@@ -760,6 +831,9 @@ def mirror_from_expedition(target_window: Any,
         return None
 
     plan.conflicts = collect_conflicts(target_window, plan, target_type=target_type)
+    # Основной перевозчик цели не перезаписывается: заполненное значение
+    # остаётся у цели и превращается в конфликт (ШАГ «Привязка водителей»).
+    _keep_target_carrier(plan, target_window)
     return plan
 
 
@@ -772,6 +846,7 @@ __all__ = [
     "SOURCE_SECTIONS",
     "MirrorPlan",
     "FieldProfile",
+    "carrier_id",
     "collect_source",
     "collect_conflicts",
     "current_target_data",

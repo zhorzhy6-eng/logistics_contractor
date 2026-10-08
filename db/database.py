@@ -11,6 +11,7 @@
 по которому идёт сортировка: сначала по городу, потом по всему адресу.
 """
 
+import datetime
 import logging
 import os
 import sqlite3
@@ -70,6 +71,12 @@ INDEXES = (
     ("idx_vehicles_contract",         "vehicles(contract_id)"),
     ("idx_vehicles_vin",              "vehicles(vin)"),
     ("idx_drivers_full_name",         "drivers(full_name)"),
+    # Привязка водителей к перевозчикам (ШАГ «Привязка водителей
+    # к перевозчикам»): основной перевозчик водителя и история работы.
+    ("idx_drivers_default_carrier",   "drivers(default_carrier_id)"),
+    ("idx_driver_carriers_driver",    "driver_carriers(driver_id)"),
+    ("idx_driver_carriers_carrier",   "driver_carriers(carrier_id)"),
+    ("idx_driver_carriers_active",    "driver_carriers(driver_id, ended_at)"),
     ("idx_address_book_point_address", "address_book(point_type, address)"),
     # Шаг 4 оптимизации: индекс под сортировку справочника адресов.
     ("idx_address_book_sort_nocase",
@@ -151,6 +158,10 @@ def _needs_migration(cursor: sqlite3.Cursor) -> bool:
         ("drivers", "birth_place"),
         ("drivers", "passport_issuer"),
         ("drivers", "phone"),
+        # Привязка водителей к перевозчикам (ШАГ «Привязка водителей
+        # к перевозчикам»): основной перевозчик водителя. Перед этой
+        # миграцией тоже делается резервная копия базы.
+        ("drivers", "default_carrier_id"),
         ("address_book", "city"),
         ("address_book", "salon_name"),
         ("address_book", "salon_code"),
@@ -362,6 +373,9 @@ def init_database() -> None:
     cursor = conn.cursor()
 
     # ── drivers ──
+    # default_carrier_id — основной перевозчик водителя (ШАГ «Привязка
+    # водителей к перевозчикам»): подставляется в договор по умолчанию.
+    # У водителей, заведённых раньше, значение NULL — данные не теряются.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS drivers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -380,8 +394,10 @@ def init_database() -> None:
             license_expiry_date TEXT,
             license_categories TEXT,
             phone TEXT,
+            default_carrier_id INTEGER,
             is_deleted INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (default_carrier_id) REFERENCES carriers(id) ON DELETE SET NULL
         )
     """)
 
@@ -466,6 +482,24 @@ def init_database() -> None:
             trailer_color TEXT,
             trailer_year TEXT,
             FOREIGN KEY (driver_id) REFERENCES drivers(id) ON DELETE CASCADE
+        )
+    """)
+
+    # ── driver_carriers: история работы водителя у перевозчиков ──
+    # ШАГ «Привязка водителей к перевозчикам»: связь «водитель ↔ перевозчик»
+    # была видна только через договоры. Запись без ended_at — активная связь.
+    # CREATE TABLE IF NOT EXISTS безопасен и на чистой, и на рабочей базе,
+    # поэтому в _needs_migration таблица не вносится.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS driver_carriers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            driver_id INTEGER NOT NULL,
+            carrier_id INTEGER NOT NULL,
+            started_at TEXT,
+            ended_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (driver_id) REFERENCES drivers(id) ON DELETE CASCADE,
+            FOREIGN KEY (carrier_id) REFERENCES carriers(id) ON DELETE CASCADE
         )
     """)
 
@@ -587,6 +621,23 @@ def init_database() -> None:
                 logger.info(f"Добавлена колонка drivers.{col_name}")
             except Exception as e:
                 logger.warning(f"Не удалось добавить колонку {col_name}: {e}")
+
+    # ── Миграция: drivers.default_carrier_id (ШАГ «Привязка водителей
+    # к перевозчикам») ──
+    # Основной перевозчик водителя: ALTER TABLE ADD COLUMN добавляет колонку
+    # к существующей таблице и НЕ трогает строки — у уже заведённых водителей
+    # значение NULL (привязки нет, поведение прежнее).
+    if not _column_exists(cursor, "drivers", "default_carrier_id"):
+        try:
+            cursor.execute(
+                "ALTER TABLE drivers ADD COLUMN default_carrier_id INTEGER "
+                "REFERENCES carriers(id) ON DELETE SET NULL"
+            )
+            logger.info("Добавлена колонка drivers.default_carrier_id")
+        except Exception as e:
+            logger.warning(
+                f"Не удалось добавить drivers.default_carrier_id: {e}"
+            )
 
     if not _column_exists(cursor, "vehicles", "contract_id"):
         cursor.execute(
@@ -760,6 +811,23 @@ def init_database() -> None:
 # CRUD: Водители
 # ─────────────────────────────────────────────────────────────
 
+def _carrier_id_or_none(value: Any) -> Optional[int]:
+    """
+    ID перевозчика из данных формы: пустое значение — это NULL.
+
+    Вкладка отдаёт «— не указан —» как None, но через промежуточные
+    словари значение может прийти пустой строкой или нулём — все они
+    значат «привязки нет».
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 def save_driver(driver_data: Dict[str, Any]) -> int:
     conn = get_connection()
     cursor = conn.cursor()
@@ -771,8 +839,8 @@ def save_driver(driver_data: Dict[str, Any]) -> int:
             registration_address,
             license_series, license_number,
             license_issue_date, license_expiry_date, license_categories,
-            phone
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            phone, default_carrier_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         driver_data.get("full_name", ""),
         driver_data.get("birth_date", ""),
@@ -789,6 +857,9 @@ def save_driver(driver_data: Dict[str, Any]) -> int:
         driver_data.get("license_expiry_date", ""),
         driver_data.get("license_categories", ""),
         driver_data.get("phone", ""),
+        # Основной перевозчик (ШАГ «Привязка водителей к перевозчикам»).
+        # Ключа нет — водитель заводится без привязки (NULL).
+        _carrier_id_or_none(driver_data.get("default_carrier_id")),
     ))
     driver_id = cursor.lastrowid
     # FTS5: без триггеров — обновляем индекс вручную там же, где пишем данные.
@@ -845,6 +916,21 @@ def update_driver(driver_id: int, driver_data: Dict[str, Any]) -> bool:
                 conn, "fts_drivers", driver_id,
                 (driver_data.get("full_name", ""),), (old[0],),
             )
+
+        # Основной перевозчик (ШАГ «Привязка водителей к перевозчикам»)
+        # обновляется ТОЛЬКО когда ключ пришёл в данных: вкладка аренды
+        # собирает запись из своих полей (merge_driver_records), и этого
+        # ключа в ней нет — иначе сохранение из аренды обнулило бы
+        # привязку, выставленную в «Экспедиторстве».
+        if "default_carrier_id" in driver_data:
+            cursor.execute(
+                "UPDATE drivers SET default_carrier_id = ? WHERE id = ?",
+                (
+                    _carrier_id_or_none(driver_data.get("default_carrier_id")),
+                    driver_id,
+                ),
+            )
+
         conn.commit()
         return True
     except Exception as e:
@@ -878,6 +964,7 @@ def search_drivers(
     search_term: str,
     limit: int = 50,
     include_deleted: bool = False,
+    with_carrier_name: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Поиск водителей по ФИО, паспорту или телефону.
@@ -896,9 +983,24 @@ def search_drivers(
 
     include_deleted=True показывает и мягко удалённых (режим «Показывать
     удалённых» в менеджере базы) — иначе они не должны попадаться в поиске.
+
+    with_carrier_name=True добавляет к записи название основного
+    перевозчика (`carrier_name`) — менеджеру базы нужна колонка
+    «Перевозчик». По умолчанию (False) набор колонок прежний, чтобы
+    не менять существующие вызовы.
     """
     conn = get_connection()
     cursor = conn.cursor()
+
+    carrier_column = (
+        ", COALESCE(NULLIF(TRIM(c.full_name), ''), c.short_name, '') "
+        "AS carrier_name"
+        if with_carrier_name else ""
+    )
+    carrier_join = (
+        "LEFT JOIN carriers c ON c.id = d.default_carrier_id "
+        if with_carrier_name else ""
+    )
 
     try:
         only_active = 1 if include_deleted else 0
@@ -909,7 +1011,8 @@ def search_drivers(
             try:
                 _ensure_fts_fresh(conn, "fts_drivers")
                 cursor.execute(
-                    "SELECT d.* FROM drivers d "
+                    f"SELECT d.*{carrier_column} FROM drivers d "
+                    f"{carrier_join}"
                     "JOIN fts_drivers f ON f.rowid = d.id "
                     "WHERE fts_drivers MATCH ? AND (d.is_deleted = 0 OR ?) "
                     "ORDER BY d.full_name COLLATE NOCASE LIMIT ?",
@@ -929,12 +1032,13 @@ def search_drivers(
         # ── Путь 2: LIKE (как раньше) ──
         like = f"%{search_term}%"
         cursor.execute(
-            "SELECT * FROM drivers "
-            "WHERE (is_deleted = 0 OR ?) AND ("
-            "      full_name LIKE ? "
-            "   OR (COALESCE(passport_series, '') || ' ' || COALESCE(passport_number, '')) LIKE ? "
-            "   OR COALESCE(phone, '') LIKE ?) "
-            "ORDER BY full_name COLLATE NOCASE LIMIT ?",
+            f"SELECT d.*{carrier_column} FROM drivers d "
+            f"{carrier_join}"
+            "WHERE (d.is_deleted = 0 OR ?) AND ("
+            "      d.full_name LIKE ? "
+            "   OR (COALESCE(d.passport_series, '') || ' ' || COALESCE(d.passport_number, '')) LIKE ? "
+            "   OR COALESCE(d.phone, '') LIKE ?) "
+            "ORDER BY d.full_name COLLATE NOCASE LIMIT ?",
             (only_active, like, like, like, int(limit)),
         )
         rows = cursor.fetchall()
@@ -944,13 +1048,33 @@ def search_drivers(
         conn.close()
 
 
-def get_all_drivers(include_deleted: bool = False) -> List[Dict[str, Any]]:
-    """Все водители; по умолчанию без мягко удалённых."""
+def get_all_drivers(
+    include_deleted: bool = False,
+    with_carrier_name: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Все водители; по умолчанию без мягко удалённых.
+
+    with_carrier_name=True добавляет название основного перевозчика
+    (`carrier_name`); по умолчанию набор колонок прежний.
+    """
+    carrier_column = (
+        ", COALESCE(NULLIF(TRIM(c.full_name), ''), c.short_name, '') "
+        "AS carrier_name"
+        if with_carrier_name else ""
+    )
+    carrier_join = (
+        "LEFT JOIN carriers c ON c.id = d.default_carrier_id "
+        if with_carrier_name else ""
+    )
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT * FROM drivers WHERE is_deleted = 0 OR ? "
-        "ORDER BY full_name COLLATE NOCASE",
+        f"SELECT d.*{carrier_column} FROM drivers d "
+        f"{carrier_join}"
+        "WHERE d.is_deleted = 0 OR ? "
+        "ORDER BY d.full_name COLLATE NOCASE",
         (1 if include_deleted else 0,),
     )
     rows = cursor.fetchall()
@@ -1039,9 +1163,300 @@ def delete_driver(driver_id: int) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────
+# CRUD: Привязка водителей к перевозчикам
+# ─────────────────────────────────────────────────────────────
+# ШАГ «Привязка водителей к перевозчикам». До него связь «водитель ↔
+# перевозчик» существовала только через договоры (contracts.driver_id +
+# contracts.carrier_id), и в справочнике водителей не было видно, на кого
+# он работает. Теперь у водителя есть основной перевозчик
+# (drivers.default_carrier_id), а таблица driver_carriers хранит историю:
+# запись без ended_at — активная связь.
+#
+# Мягкое удаление ничего не рвёт: delete_driver() не трогает историю
+# (её видно после restore_driver), а delete_organization(is_carrier=True)
+# не обнуляет drivers.default_carrier_id — запись перевозчика остаётся
+# в базе, как и ссылки договоров.
+
+def _active_link_sql(prefix: str = "") -> str:
+    """
+    Условие «связь ещё активна» для колонки ended_at.
+
+    Пустая строка приравнена к NULL: так активными остаются и записи,
+    добавленные в обход link_driver_to_carrier.
+
+    :param prefix: префикс таблицы («dc.»), если запрос с JOIN.
+    """
+    column = f"{prefix}ended_at"
+    return f"({column} IS NULL OR {column} = '')"
+
+
+#: То же условие без префикса таблицы — для запросов к одной driver_carriers.
+ACTIVE_LINK_SQL = _active_link_sql()
+
+
+def _today_iso() -> str:
+    """Сегодняшняя дата в ISO (ГГГГ-ММ-ДД) — формат дат справочника."""
+    return datetime.date.today().isoformat()
+
+
+def link_driver_to_carrier(
+    driver_id: int,
+    carrier_id: int,
+    started_at: str = "",
+    ended_at: str = "",
+) -> int:
+    """
+    Добавляет запись в driver_carriers.
+
+    Если у водителя уже есть АКТИВНАЯ связь с этим же перевозчиком
+    (ended_at пуст) — новую не создаёт, возвращает id существующей.
+
+    Переход к ДРУГОМУ перевозчику закрывает прежние активные связи: у них
+    проставляется ended_at (дата начала новой связи, а если она не задана —
+    сегодняшняя). Так в истории не остаётся двух «текущих» перевозчиков.
+
+    :param started_at: дата начала работы (пусто — сегодняшняя).
+    :param ended_at: дата окончания (пусто — связь активная).
+    :return: id записи в driver_carriers.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT id FROM driver_carriers "
+            "WHERE driver_id = ? AND carrier_id = ? "
+            f"  AND {ACTIVE_LINK_SQL} "
+            "ORDER BY id DESC LIMIT 1",
+            (driver_id, carrier_id),
+        )
+        row = cursor.fetchone()
+        if row:
+            logger.debug(
+                f"Связь водителя ID={driver_id} с перевозчиком "
+                f"ID={carrier_id} уже активна — запись не создаётся"
+            )
+            return int(row[0])
+
+        start = str(started_at or "").strip() or _today_iso()
+        finish = str(ended_at or "").strip() or None
+
+        cursor.execute(
+            "UPDATE driver_carriers SET ended_at = ? "
+            "WHERE driver_id = ? AND carrier_id != ? "
+            f"  AND {ACTIVE_LINK_SQL}",
+            (start, driver_id, carrier_id),
+        )
+        closed = cursor.rowcount
+
+        cursor.execute(
+            "INSERT INTO driver_carriers "
+            "(driver_id, carrier_id, started_at, ended_at) "
+            "VALUES (?, ?, ?, ?)",
+            (driver_id, carrier_id, start, finish),
+        )
+        link_id = cursor.lastrowid
+        conn.commit()
+
+        logger.info(
+            f"Водитель привязан к перевозчику: driver_id={driver_id}, "
+            f"carrier_id={carrier_id}, закрыто прежних связей: {closed}"
+        )
+        audit.log_event(
+            "driver_linked_to_carrier",
+            driver_id=driver_id,
+            carrier_id=carrier_id,
+            count=closed,
+        )
+        return int(link_id)
+    except Exception as e:
+        logger.error(f"Ошибка привязки водителя к перевозчику: {e}")
+        if conn:
+            conn.rollback()
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def unlink_driver_from_carrier(
+    driver_id: int,
+    carrier_id: int,
+    ended_at: str = "",
+) -> bool:
+    """
+    Закрывает активную связь (ставит ended_at).
+
+    Если ended_at пуст — сегодняшняя дата. Запись НЕ удаляется: история
+    работы у перевозчика остаётся в базе.
+
+    :return: True, если активная связь была и закрыта.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        finish = str(ended_at or "").strip() or _today_iso()
+        cursor.execute(
+            "UPDATE driver_carriers SET ended_at = ? "
+            "WHERE driver_id = ? AND carrier_id = ? "
+            f"  AND {ACTIVE_LINK_SQL}",
+            (finish, driver_id, carrier_id),
+        )
+        closed = cursor.rowcount
+        conn.commit()
+
+        logger.info(
+            f"Связь водителя с перевозчиком закрыта: driver_id={driver_id}, "
+            f"carrier_id={carrier_id}, записей закрыто: {closed}"
+        )
+        if closed:
+            audit.log_event(
+                "driver_unlinked_from_carrier",
+                driver_id=driver_id,
+                carrier_id=carrier_id,
+                count=closed,
+            )
+        return closed > 0
+    except Exception as e:
+        logger.error(f"Ошибка закрытия связи водителя с перевозчиком: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_driver_carriers(
+    driver_id: int,
+    active_only: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    История работы водителя у перевозчиков.
+
+    С JOIN на carriers, чтобы вернуть название перевозчика
+    (`carrier_name`). Сортировка: активные первыми, потом по started_at
+    по убыванию (свежие — выше).
+
+    :param active_only: только действующие связи (ended_at пуст).
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        sql = (
+            "SELECT dc.id, dc.driver_id, dc.carrier_id, "
+            "       dc.started_at, dc.ended_at, dc.created_at, "
+            "       COALESCE(NULLIF(TRIM(c.full_name), ''), c.short_name, '') "
+            "           AS carrier_name, "
+            "       COALESCE(c.short_name, '') AS carrier_short_name, "
+            "       COALESCE(c.inn, '') AS carrier_inn "
+            "FROM driver_carriers dc "
+            "LEFT JOIN carriers c ON c.id = dc.carrier_id "
+            "WHERE dc.driver_id = ?"
+        )
+        if active_only:
+            sql += f" AND {_active_link_sql('dc.')}"
+        sql += (
+            " ORDER BY (dc.ended_at IS NULL OR dc.ended_at = '') DESC, "
+            "          dc.started_at DESC, dc.id DESC"
+        )
+
+        cursor.execute(sql, (driver_id,))
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_carrier_drivers(
+    carrier_id: int,
+    active_only: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Водители, работающие у перевозчика.
+
+    С JOIN на drivers: возвращаются все колонки водителя плюс поля связи
+    (`link_id`, `carrier_id`, `started_at`, `ended_at`).
+
+    :param active_only: только действующие связи (ended_at пуст).
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        sql = (
+            "SELECT d.*, dc.id AS link_id, dc.carrier_id AS carrier_id, "
+            "       dc.started_at AS started_at, dc.ended_at AS ended_at "
+            "FROM driver_carriers dc "
+            "JOIN drivers d ON d.id = dc.driver_id "
+            "WHERE dc.carrier_id = ?"
+        )
+        if active_only:
+            sql += f" AND {_active_link_sql('dc.')}"
+        sql += " ORDER BY d.full_name COLLATE NOCASE"
+
+        cursor.execute(sql, (carrier_id,))
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+    finally:
+        conn.close()
+
+
+def set_default_carrier(
+    driver_id: int,
+    carrier_id: Optional[int],
+) -> bool:
+    """
+    Устанавливает основной перевозчик водителя.
+
+    Если carrier_id заполнен — обновляет drivers.default_carrier_id и (если
+    активной связи ещё нет) пишет запись в driver_carriers.
+    Если carrier_id = None — очищает default_carrier_id; история работы
+    (driver_carriers) при этом НЕ трогается.
+
+    :return: True, если значение записано.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE drivers SET default_carrier_id = ? WHERE id = ?",
+            (carrier_id, driver_id),
+        )
+        updated = cursor.rowcount
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка установки основного перевозчика: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+    if carrier_id is None:
+        logger.info(f"Основной перевозчик водителя очищен: driver_id={driver_id}")
+        return updated > 0
+
+    logger.info(
+        f"Основной перевозчик водителя: driver_id={driver_id}, "
+        f"carrier_id={carrier_id}"
+    )
+    # Активной связи может не быть (например, водителя только что завели):
+    # тогда она появляется здесь же. Если связь уже есть — link ничего
+    # не создаёт.
+    link_driver_to_carrier(driver_id, carrier_id)
+    return True
+
+
+# ─────────────────────────────────────────────────────────────
 # CRUD: Тягач и прицеп водителя
 # ─────────────────────────────────────────────────────────────
-
 def save_driver_vehicle(driver_id: int, vehicle_data: Dict[str, Any]) -> bool:
     conn = None
     try:
@@ -1347,6 +1762,87 @@ def get_all_organizations(
     cols = [desc[0] for desc in cursor.description]
     conn.close()
     return [dict(zip(cols, row)) for row in rows]
+
+
+def load_organization(
+    org_id: int,
+    is_carrier: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Организация по ID — включая мягко удалённую (is_deleted = 1).
+
+    Нужна, чтобы подставить в форму перевозчика, на которого закреплён
+    водитель (drivers.default_carrier_id): по ID запись отдаётся даже
+    убранной из справочника — ссылка договора и привязка водителя должны
+    её пережить.
+    """
+    table = "carriers" if is_carrier else "customers"
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT * FROM {table} WHERE id = ?", (org_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        cols = [desc[0] for desc in cursor.description]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def find_organization_id(
+    org_data: Dict[str, Any],
+    is_carrier: bool = False,
+) -> Optional[int]:
+    """
+    ID существующей организации по её реквизитам.
+
+    Ищет по ИНН (главный ключ), затем по полному наименованию.
+    Возвращает None, если запись НЕ найдена. НИКОГДА не создаёт
+    новую запись.
+
+    Мягко удалённые (is_deleted=1) тоже находятся — ссылка в договоре
+    должна пережить мягкое удаление из справочника.
+
+    :param org_data: словарь с реквизитами (inn, full_name, ...)
+    :param is_carrier: True → carriers, False → customers
+    """
+    table = "carriers" if is_carrier else "customers"
+
+    inn = str(org_data.get("inn") or "").strip()
+    full_name = str(org_data.get("full_name") or "").strip()
+
+    if not inn and not full_name:
+        return None
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # 1. По ИНН (самый надёжный ключ)
+        if inn:
+            cursor.execute(
+                f"SELECT id FROM {table} WHERE inn = ? LIMIT 1",
+                (inn,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return int(row[0])
+
+        # 2. По полному наименованию (если ИНН пуст или не нашёлся)
+        if full_name:
+            cursor.execute(
+                f"SELECT id FROM {table} "
+                f"WHERE full_name = ? COLLATE NOCASE LIMIT 1",
+                (full_name,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return int(row[0])
+
+        return None
+    finally:
+        conn.close()
 
 
 def restore_organization(org_id: int, is_carrier: bool = False) -> bool:

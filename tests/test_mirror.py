@@ -996,3 +996,93 @@ def test_mirrored_folder_names_differ_when_driver_differs(source, work_dir):
 
     assert contract_folder_name(other) != contract_folder_name(source)
     assert contract_folder_name(other) == "Петров_П.П._Мурманск-Пятигорск_23.09.2026"
+
+
+# ─────────────────────────────────────────────────────────────
+# Основной перевозчик водителя (ШАГ «Привязка водителей
+# к перевозчикам», часть E.2)
+# ─────────────────────────────────────────────────────────────
+
+def test_carrier_id_of_driver_goes_to_both_plans(source):
+    """Привязка водителя едет в план и Формики, и Логистикса."""
+    with_carrier = dict(source)
+    with_carrier["driver"] = dict(source["driver"], default_carrier_id=7)
+
+    for plan in (plan_for_formika(with_carrier), plan_for_logistiks(with_carrier)):
+        assert plan.tabs["driver_tab"]["default_carrier_id"] == 7
+
+
+def test_plan_without_carrier_has_no_key(source):
+    """Привязки нет — ключа в плане нет вовсе (пустое место не переносится)."""
+    for plan in (plan_for_formika(source), plan_for_logistiks(source)):
+        assert "default_carrier_id" not in plan.tabs["driver_tab"]
+
+
+def test_plan_carrier_does_not_leak_requisites(source):
+    """Переносится ссылка, а не реквизиты перевозчика."""
+    with_carrier = dict(source)
+    with_carrier["driver"] = dict(
+        source["driver"], default_carrier_id=7, carrier_name="ООО «Альфа»"
+    )
+
+    plan = plan_for_formika(with_carrier)
+
+    assert plan.tabs["driver_tab"]["default_carrier_id"] == 7
+    assert "carrier_name" not in plan.tabs["driver_tab"]
+    assert "carrier" not in plan.tabs
+
+
+def test_carrier_id_zero_is_not_transferred(source):
+    """Ноль и мусор — «привязки нет»: в план они не попадают."""
+    for value in (0, "", "нет", None):
+        empty = dict(source)
+        empty["driver"] = dict(source["driver"], default_carrier_id=value)
+        assert "default_carrier_id" not in plan_for_formika(empty).tabs["driver_tab"]
+
+
+def test_target_carrier_is_not_overwritten(source):
+    """
+    В цели уже выбран перевозчик — поле убирается из плана, конфликт записан.
+
+    Перевозчика мог выбрать оператор: молча заменять его нельзя (требование
+    E.2 — «не перезаписывать, добавить в conflicts»).
+    """
+    with_carrier = dict(source)
+    with_carrier["driver"] = dict(source["driver"], default_carrier_id=7)
+
+    target = FakeTarget({"driver_tab": DictTab({"default_carrier_id": 3})})
+    mirrored = mirror_from_expedition(
+        target, "formika", main_window=FakeExpedition(**with_carrier)
+    )
+
+    assert "default_carrier_id" not in mirrored.tabs["driver_tab"]
+    assert ("driver_tab", "default_carrier_id", 3, 7) in mirrored.conflicts
+
+
+def test_target_carrier_matching_source_is_not_a_conflict(source):
+    """Тот же перевозчик в цели — конфликта нет, поле остаётся в плане."""
+    with_carrier = dict(source)
+    with_carrier["driver"] = dict(source["driver"], default_carrier_id=7)
+
+    target = FakeTarget({"driver_tab": DictTab({"default_carrier_id": 7})})
+    mirrored = mirror_from_expedition(
+        target, "formika", main_window=FakeExpedition(**with_carrier)
+    )
+
+    assert mirrored.tabs["driver_tab"]["default_carrier_id"] == 7
+    assert mirrored.conflicts == []
+
+
+def test_empty_target_carrier_is_filled_silently(source):
+    """Пустое поле цели заполняется молча: это не конфликт."""
+    with_carrier = dict(source)
+    with_carrier["driver"] = dict(source["driver"], default_carrier_id=7)
+
+    target = FakeTarget({"driver_tab": DictTab({"default_carrier_id": None})})
+    mirrored = mirror_from_expedition(
+        target, "formika", main_window=FakeExpedition(**with_carrier)
+    )
+
+    assert mirrored.tabs["driver_tab"]["default_carrier_id"] == 7
+    assert mirrored.conflicts == []
+

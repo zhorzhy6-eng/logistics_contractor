@@ -12,19 +12,25 @@
 
 import logging
 import re
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QLineEdit, QDateEdit,
     QTextEdit, QGroupBox, QLabel, QScrollArea, QPushButton,
-    QHBoxLayout, QApplication,
+    QHBoxLayout, QApplication, QComboBox,
 )
 from PyQt5.QtCore import QDate, pyqtSignal
 
+from db.database import get_all_organizations
+from ui import theme
 from ui.tabs.base_tab import DadataDriverMixin
 from ui.widgets import PasteableLineEdit, PasteableTextEdit, PasteableDateEdit, RecognitionPanel
 
 logger = logging.getLogger("ui.tabs.driver_tab")
+
+#: Первый пункт списка перевозчиков: водитель может быть не привязан ни
+#: к кому (у водителей, заведённых до этого шага, привязки нет).
+CARRIER_NONE_TITLE = "— не указан —"
 
 
 # ============================================================
@@ -94,6 +100,34 @@ class DriverTab(DadataDriverMixin, QWidget):
         )
         self.recognition_panel.recognize_requested.connect(self._on_recognize_requested)
         layout.addWidget(self.recognition_panel)
+
+        # ── Группа «Перевозчик» (ШАГ «Привязка водителей к перевозчикам») ──
+        # Связь «водитель ↔ перевозчик» раньше существовала только через
+        # договоры, поэтому в справочнике водителей не было видно, на кого он
+        # работает. Здесь выбирается ОСНОВНОЙ перевозчик: он подставляется
+        # в договор, если в форме перевозчик не заполнен.
+        carrier_group = QGroupBox("Перевозчик (где работает водитель)")
+        carrier_layout = QFormLayout(carrier_group)
+
+        self.carrier_combo = QComboBox()
+        self.carrier_combo.setToolTip(
+            "Основной перевозчик водителя. Подставляется в договор,\n"
+            "если в нём перевозчик не выбран."
+        )
+        carrier_layout.addRow("Основной перевозчик", self.carrier_combo)
+
+        self.btn_refresh_carriers = theme.secondary_button(
+            "🔄 Обновить список",
+            tooltip="Перечитать перевозчиков из справочника: он мог\n"
+                    "пополниться, пока вкладка открыта",
+        )
+        self.btn_refresh_carriers.clicked.connect(self._on_refresh_carriers)
+        carrier_layout.addRow("", self.btn_refresh_carriers)
+
+        layout.addWidget(carrier_group)
+
+        # Список перевозчиков — из общего справочника (таблица carriers).
+        self.fill_carriers()
 
         # ── Группа «Паспортные данные» ──
         passport_group = QGroupBox("Паспортные данные")
@@ -209,6 +243,87 @@ class DriverTab(DadataDriverMixin, QWidget):
 
         logger.debug("DriverTab инициализирована")
 
+    # ─────────────────────────────────────────────────────────
+    # Перевозчик водителя (ШАГ «Привязка водителей к перевозчикам»)
+    # ─────────────────────────────────────────────────────────
+
+    def fill_carriers(self) -> int:
+        """
+        Перечитывает справочник перевозчиков в выпадающий список.
+
+        Первый пункт — «— не указан —» (itemData = None), дальше перевозчики
+        из общего справочника: itemText — полное наименование (или
+        сокращённое, если полного нет), itemData — id.
+
+        Список берётся из базы при каждом вызове: перевозчиков заводят в
+        «Менеджере базы» прямо во время работы, поэтому у кнопки «Обновить
+        список» и у этого метода одна задача.
+
+        :return: сколько перевозчиков в списке (без пункта «не указан»).
+        """
+        selected = self.carrier_combo.currentData() if hasattr(
+            self, "carrier_combo"
+        ) else None
+
+        carriers: List[Dict[str, Any]] = []
+        try:
+            carriers = get_all_organizations(is_carrier=True)
+        except Exception as e:  # noqa: BLE001 — без справочника вкладка живёт
+            logger.warning(f"Справочник перевозчиков недоступен: {e}")
+
+        self.carrier_combo.blockSignals(True)
+        self.carrier_combo.clear()
+        self.carrier_combo.addItem(CARRIER_NONE_TITLE, None)
+
+        for org in carriers:
+            name = str(org.get("full_name") or org.get("short_name") or "").strip()
+            if not name:
+                continue
+            self.carrier_combo.addItem(name, org.get("id"))
+
+        # Прежний выбор не теряется, если перевозчик остался в справочнике.
+        self._select_carrier(selected)
+        self.carrier_combo.blockSignals(False)
+
+        count = self.carrier_combo.count() - 1
+        logger.info(f"Список перевозчиков обновлён: {count}")
+        return count
+
+    def _select_carrier(self, carrier_id: Any) -> bool:
+        """
+        Выбирает перевозчика по id.
+
+        Нет такого пункта (или id пуст) — встаёт «— не указан —»: пустая
+        привязка это нормальное состояние, а не ошибка.
+        """
+        if carrier_id is None or carrier_id == "":
+            self.carrier_combo.setCurrentIndex(0)
+            return False
+
+        try:
+            wanted = int(carrier_id)
+        except (TypeError, ValueError):
+            logger.debug("Привязка водителя: id перевозчика не число — сброшено")
+            self.carrier_combo.setCurrentIndex(0)
+            return False
+
+        for index in range(self.carrier_combo.count()):
+            if self.carrier_combo.itemData(index) == wanted:
+                self.carrier_combo.setCurrentIndex(index)
+                return True
+
+        logger.debug(
+            f"Привязка водителя: перевозчик ID={wanted} в списке не найден — "
+            f"оставлено «{CARRIER_NONE_TITLE}»"
+        )
+        self.carrier_combo.setCurrentIndex(0)
+        return False
+
+    def _on_refresh_carriers(self):
+        """Кнопка «🔄 Обновить список»: перечитать справочник перевозчиков."""
+        count = self.fill_carriers()
+        logger.debug(f"UI: список перевозчиков обновлён вручную ({count})")
+
     def get_data(self) -> Dict[str, Any]:
         """Собирает данные из полей."""
         return {
@@ -227,6 +342,8 @@ class DriverTab(DadataDriverMixin, QWidget):
             "license_expiry_date": self.license_expiry_date.date().toString("yyyy-MM-dd"),
             "license_categories": self.license_categories.text().strip(),
             "phone": self.phone.text().strip(),
+            # Основной перевозчик: None — «— не указан —».
+            "default_carrier_id": self.carrier_combo.currentData(),
         }
 
     def fill_data(self, data: Dict[str, Any]) -> None:
@@ -271,6 +388,11 @@ class DriverTab(DadataDriverMixin, QWidget):
         if data.get("phone"):
             self.phone.setText(data["phone"])
 
+        # Основной перевозчик: ключа может не быть (распознавание, зеркало,
+        # старые данные) — тогда выбор не трогаем.
+        if "default_carrier_id" in data:
+            self._select_carrier(data.get("default_carrier_id"))
+
         logger.info("Данные водителя заполнены")
 
     def clear(self) -> None:
@@ -290,6 +412,8 @@ class DriverTab(DadataDriverMixin, QWidget):
         self.license_expiry_date.setDate(QDate.currentDate().addYears(10))
         self.license_categories.clear()
         self.phone.clear()
+        # Основной перевозчик — на «— не указан —» (список не перечитываем).
+        self._select_carrier(None)
         self.recognition_panel.clear()
 
         logger.debug("Поля водителя очищены")
