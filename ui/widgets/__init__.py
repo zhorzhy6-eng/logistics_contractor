@@ -31,6 +31,7 @@ from ui.widgets.table_helpers import (
     hidden_column_keys,
     install_column_settings_menu,
     install_tooltip_on_table,
+    make_table_expandable,
     restore_column_widths,
     save_column_widths,
     setup_point_table,
@@ -464,6 +465,7 @@ __all__ = [
     # Настройка таблиц (ШАГ FIX-5) — реэкспорт из table_helpers.
     'setup_point_table',
     'install_tooltip_on_table',
+    'make_table_expandable',
     'save_column_widths',
     'restore_column_widths',
     # Состав колонок (ШАГ FIX-6, часть B3) — тоже реэкспорт.
