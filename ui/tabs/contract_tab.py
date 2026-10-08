@@ -330,26 +330,30 @@ class ContractTab(TabMixin, QWidget):
         price_layout.addRow("Срок оплаты (дней) *", self.payment_days)
 
         # ── Предоплата (разбивка оплаты на предоплату и окончательный расчёт) ──
-        # Оператор вводит СУММУ в рублях, процент считается от итоговой
-        # стоимости (та же сумма, что печатается в договоре как «Итого»).
-        # При изменении стоимости сумма НЕ пересчитывается — она введена
-        # руками; пересчитывается только процент.
+        # Вводить можно ЛЮБОЕ из двух полей: оператор называет либо сумму
+        # в рублях, либо процент, и второе поле пересчитывается. База
+        # процента — итог договора (сумма с НДС), та же величина, что
+        # печатается в договоре. При изменении стоимости сумма предоплаты
+        # НЕ пересчитывается (её ввёл оператор) — обновляется только процент.
         self.prepayment_amount = NoWheelDoubleSpinBox()
         self.prepayment_amount.setRange(0, 100000000)
         self.prepayment_amount.setDecimals(2)
         self.prepayment_amount.setSuffix(" ₽")
         self.prepayment_amount.setValue(0)
         self.prepayment_amount.setToolTip(
-            "Сумма предоплаты в рублях. 0 — предоплата не предусмотрена."
+            "Сумма предоплаты в рублях. 0 — предоплата не предусмотрена. "
+            "Можно вводить и здесь, и в поле «%» — второе поле пересчитается."
         )
         price_layout.addRow("Предоплата, ₽", self.prepayment_amount)
 
-        self.prepayment_percent = QLineEdit()
-        self.prepayment_percent.setReadOnly(True)
-        self.prepayment_percent.setProperty("readonlyField", True)
-        self.prepayment_percent.setStyleSheet(theme.readonly_field_qss())
+        self.prepayment_percent = NoWheelDoubleSpinBox()
+        self.prepayment_percent.setRange(0, 100)
+        self.prepayment_percent.setDecimals(2)
+        self.prepayment_percent.setSuffix(" %")
+        self.prepayment_percent.setValue(0)
         self.prepayment_percent.setToolTip(
-            "Процент предоплаты от итоговой стоимости (рассчитывается)"
+            "Процент предоплаты. Можно вводить и здесь, и в поле «Сумма» — "
+            "второе поле пересчитается."
         )
         price_layout.addRow("Предоплата (%)", self.prepayment_percent)
 
@@ -384,8 +388,13 @@ class ContractTab(TabMixin, QWidget):
         self.vat_rate.textChanged.connect(self._calculate_price)
         self.radio_with_vat.toggled.connect(self._calculate_price)
         self.radio_without_vat.toggled.connect(self._calculate_price)
-        # Сумма предоплаты меняет только процент (стоимость не трогает).
-        self.prepayment_amount.valueChanged.connect(self._calculate_price)
+        # Предоплата двусторонняя: ввод суммы считает процент, ввод процента
+        # считает сумму. Слоты защищены флагом _prepayment_syncing, иначе
+        # setValue одного поля вызывал бы слот второго и так по кругу.
+        self.prepayment_amount.valueChanged.connect(self._on_prepayment_changed)
+        self.prepayment_percent.valueChanged.connect(
+            self._on_prepayment_percent_changed
+        )
 
         # ── Автоподстановка ставки НДС ──
         self.carrier_type.currentIndexChanged.connect(self._on_carrier_type_changed)
@@ -403,8 +412,10 @@ class ContractTab(TabMixin, QWidget):
         self._salon_timer.setInterval(SALON_LOOKUP_DELAY_MS)
         self._salon_timer.timeout.connect(self._lookup_salon_name)
 
-        # Процент предоплаты: до первого расчёта предоплаты нет.
+        # Процент предоплаты и флаг синхронизации полей: до первого расчёта
+        # предоплаты нет, синхронизация не идёт.
         self._prepayment_percent = 0.0
+        self._prepayment_syncing = False
 
         self._generate_contract_number()
         self._calculate_price()
@@ -815,29 +826,157 @@ class ContractTab(TabMixin, QWidget):
         self.price_without_vat.setText(f"{price_without_vat:.2f} ₽")
         self.price_with_vat.setText(f"{price_with_vat:.2f} ₽")
 
-        self._calculate_prepayment_percent(price_with_vat)
+        self._sync_prepayment_percent_from_amount()
 
-    def _calculate_prepayment_percent(self, total: float) -> None:
-        """
-        Считает процент предоплаты от итоговой стоимости (суммы с НДС).
+    # ─────────────────────────────────────────────────────────
+    # Предоплата: двусторонний ввод (сумма ↔ процент)
+    # ─────────────────────────────────────────────────────────
 
-        База процента — та же сумма, которая печатается в договоре как итог
-        (price_with_vat); при её изменении пересчитывается ТОЛЬКО процент:
-        сумма предоплаты введена оператором в рублях и не трогается.
+    def _current_total_with_vat(self) -> float:
         """
+        Текущий итог с НДС — база для процента предоплаты.
+
+        Читается из самого поля «Стоимость (с НДС)»: это ровно та величина,
+        которую видит оператор и которая печатается в договоре как итог.
+        Поле показывает сумму с суффиксом «₽», поэтому он снимается; запятая
+        как десятичный разделитель тоже принимается. Непонятное значение
+        даёт 0.0 — процент считать не от чего, падать вкладке незачем.
+        """
+        try:
+            text = (
+                self.price_with_vat.text()
+                .replace("₽", "").replace("\u00a0", "")
+                .replace(" ", "").replace(",", ".")
+                .strip()
+            )
+            return float(text)
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _sync_prepayment_percent_from_amount(self) -> None:
+        """
+        Обновляет ПРОЦЕНТ по текущей сумме предоплаты и итогу договора.
+
+        Вызывается после изменения стоимости: сумму предоплаты оператор
+        ввёл руками, поэтому она не трогается — пересчитывается только
+        процент.
+        """
+        if self._prepayment_syncing:
+            return
+
+        total = self._current_total_with_vat()
         prepay = float(self.prepayment_amount.value() or 0)
 
         if total > 0 and prepay > 0:
             percent = round(prepay / total * 100, 2)
-            self._prepayment_percent = percent
-            self.prepayment_percent.setText(f"{percent:.2f} %")
-        elif prepay > 0 and total == 0:
-            # Стоимость ещё не введена — процент считать не от чего.
-            self._prepayment_percent = 0.0
-            self.prepayment_percent.setText("—")
         else:
-            self._prepayment_percent = 0.0
-            self.prepayment_percent.setText("")
+            # Стоимости ещё нет или предоплаты нет — процент нулевой.
+            percent = 0.0
+
+        self._prepayment_syncing = True
+        try:
+            self.prepayment_percent.setValue(percent)
+            self._prepayment_percent = percent
+        finally:
+            self._prepayment_syncing = False
+
+    def _on_prepayment_changed(self) -> None:
+        """Оператор изменил СУММУ предоплаты — пересчитать процент."""
+        if self._prepayment_syncing:
+            return
+
+        self._prepayment_syncing = True
+        try:
+            total = self._current_total_with_vat()
+            prepay = float(self.prepayment_amount.value() or 0)
+            if total > 0 and prepay > 0:
+                percent = round(prepay / total * 100, 2)
+                self.prepayment_percent.setValue(percent)
+                self._prepayment_percent = percent
+            else:
+                self.prepayment_percent.setValue(0)
+                self._prepayment_percent = 0.0
+        finally:
+            self._prepayment_syncing = False
+
+    def _on_prepayment_percent_changed(self) -> None:
+        """Оператор изменил ПРОЦЕНТ — пересчитать сумму предоплаты."""
+        if self._prepayment_syncing:
+            return
+
+        self._prepayment_syncing = True
+        try:
+            total = self._current_total_with_vat()
+            percent = float(self.prepayment_percent.value() or 0)
+            if total > 0 and percent > 0:
+                amount = round(total * percent / 100, 2)
+                self.prepayment_amount.setValue(amount)
+                self._prepayment_percent = percent
+            else:
+                self.prepayment_amount.setValue(0)
+                self._prepayment_percent = 0.0
+        finally:
+            self._prepayment_syncing = False
+
+    def _apply_prepayment(self, data: Dict[str, Any]) -> None:
+        """
+        Восстанавливает поля предоплаты из данных (распознавание, база).
+
+        Пара «сумма + процент» берётся из данных как есть: сохранённый
+        процент приоритетнее пересчитанного, иначе при загрузке из базы он
+        «поехал» бы от округления суммы. Если пришла только одна величина —
+        вторая считается от неё. Если нет ни одной — поля не трогаются:
+        распознавание без блока стоимости не должно стирать введённое.
+
+        Оба поля заполняются под флагом синхронизации, и расчёт делается
+        ОДИН раз после него: иначе каждый `setValue` тянул бы за собой слот
+        второго поля.
+        """
+        if "prepayment_amount" not in data and "prepayment_percent" not in data:
+            return
+
+        amount = self._prepayment_number(data.get("prepayment_amount"), 100000000)
+        percent = self._prepayment_number(data.get("prepayment_percent"), 100)
+        if amount is None and percent is None:
+            return
+
+        self._prepayment_syncing = True
+        try:
+            if amount is not None:
+                self.prepayment_amount.setValue(amount)
+            if percent is not None:
+                self.prepayment_percent.setValue(percent)
+        finally:
+            self._prepayment_syncing = False
+
+        if amount is not None and percent is None:
+            # Процента в данных нет — считаем его по сумме.
+            self._on_prepayment_changed()
+        elif percent is not None and amount is None:
+            # Суммы в данных нет — считаем её по проценту.
+            self._on_prepayment_percent_changed()
+        else:
+            # Обе величины пришли из данных: сохранённый процент
+            # приоритетнее пересчитанного.
+            self._prepayment_percent = percent
+
+    @staticmethod
+    def _prepayment_number(value: Any, limit: float) -> Optional[float]:
+        """
+        Число из значения поля предоплаты; None — если это не число.
+
+        Значения вне допустимых границ тоже дают None: подставлять
+        «предоплату» из мусора нельзя, поле останется как есть.
+        """
+        if value is None or value == "":
+            return None
+        try:
+            number = float(value)
+        except (ValueError, TypeError):
+            return None
+        if 0 <= number <= limit:
+            return number
+        return None
 
     # ─────────────────────────────────────────────────────────
     # Сбор данных
@@ -1009,16 +1148,13 @@ class ContractTab(TabMixin, QWidget):
             self.payment_days.setText(str(payment_days))
 
         # ── Предоплата ──
-        # Ноль НЕ сбрасывает введённое значение: у распознавания 0 значит
-        # «предоплаты в документе не было», и стирать ею введённую сумму
-        # нельзя (как у сумм и срока оплаты в других вкладках).
-        if "prepayment_amount" in data:
-            try:
-                amount = float(data["prepayment_amount"] or 0)
-                if 0 <= amount <= 100000000:
-                    self.prepayment_amount.setValue(amount)
-            except (ValueError, TypeError):
-                pass
+        # Поля восстанавливаются парой: если в данных есть и сумма, и процент,
+        # берётся СОХРАНЁННЫЙ процент (иначе при загрузке из базы он «поехал»
+        # бы от округления суммы). Если есть только сумма — процент
+        # считается от неё, если только процент — по нему считается сумма.
+        # Заполнение идёт ПОСЛЕДНИМ, после _calculate_price() ниже: иначе
+        # пересчёт стоимости переписал бы восстановленный процент.
+        prepayment_from_data = data
 
         if data.get("special_conditions"):
             self.special_conditions.setPlainText(data["special_conditions"])
@@ -1057,6 +1193,10 @@ class ContractTab(TabMixin, QWidget):
                 self._set_date(self.unloading_plan_date, last_unloading_date)
 
         self._calculate_price()
+
+        # Предоплата — последней: _calculate_price() обновляет процент по
+        # сумме, а из данных процент мог прийти своим (см. выше).
+        self._apply_prepayment(prepayment_from_data)
 
         # Отправляем сигналы после заполнения
         self.loadings_changed.emit()
@@ -1098,8 +1238,14 @@ class ContractTab(TabMixin, QWidget):
         # подстановка выглядела как ввод оператора (ШАГ FIX-6, часть C).
         self.price_input.setValue(0)
         self.payment_days.setText("10")
-        self.prepayment_amount.setValue(0)
-        self.prepayment_percent.setText("")
+        # Предоплата: оба поля к нулю. Значения ставятся под флагом
+        # синхронизации, чтобы setValue не тянул за собой встречный расчёт.
+        self._prepayment_syncing = True
+        try:
+            self.prepayment_amount.setValue(0)
+            self.prepayment_percent.setValue(0)
+        finally:
+            self._prepayment_syncing = False
         self._prepayment_percent = 0.0
         self.special_conditions.clear()
         self.radio_without_vat.setChecked(True)
