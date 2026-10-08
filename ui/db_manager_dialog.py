@@ -1609,8 +1609,8 @@ class DbManagerDialog(QDialog):
         # Включаем сортировку и сортируем по «Наименование» (колонка 0).
         # Явный sortItems нужен: одного setSortingEnabled(True) после
         # заполнения Qt не хватает — модель пересортировывает не всегда
-        # (проверено пробой tests/_tmp/_tree_sort_probe.py). Порядок — как
-        # у таблиц справочника: по наименованию.
+        # (проверено пробой на временной базе). Порядок — как у таблиц
+        # справочника: по наименованию.
         tree.setSortingEnabled(True)
         tree.sortItems(CARRIER_COL_NAME, Qt.AscendingOrder)
 
