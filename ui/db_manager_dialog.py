@@ -11,6 +11,16 @@
 
 Сортировка: включена по клику на заголовок, при загрузке — по алфавиту.
 
+Вкладка «Перевозчики» — дерево (ШАГ «Дерево перевозчиков»)
+----------------------------------------------------------
+Верхний уровень — перевозчики, дети — водители, привязанные к перевозчику
+через `drivers.default_carrier_id`. Стрелка «+»/«−» раскрывает список;
+двойной клик по перевозчику подтягивает ТОЛЬКО перевозчика (водителя
+оператор впишет сам, если тот временный), двойной клик по водителю —
+и водителя, и его перевозчика. Поиск фильтрует оба уровня: совпал
+перевозчик — видны все его водители, совпал водитель — виден его
+перевозчик и сам водитель.
+
 Два режима работы
 -----------------
 Режим выбирается аргументом `open_tab` (шаг FIX-1-T2):
@@ -35,14 +45,14 @@
 """
 
 import logging
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Optional, Callable, List, Set, Tuple
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
     QWidget, QTableWidget, QTableWidgetItem, QHeaderView,
     QPushButton, QMessageBox, QLabel, QAbstractItemView,
     QLineEdit, QFormLayout, QScrollArea, QGroupBox, QTextEdit,
-    QCheckBox, QComboBox, QDateEdit,
+    QCheckBox, QComboBox, QDateEdit, QTreeWidget, QTreeWidgetItem,
 )
 from PyQt5.QtCore import Qt, QTimer, QDate
 
@@ -53,6 +63,7 @@ from db.database import (
     get_all_organizations,
     delete_driver,
     delete_organization,
+    load_organization,
     restore_driver,
     restore_organization,
     save_driver,
@@ -120,6 +131,59 @@ DRIVERS_COLUMNS_CONFIG = (
 ORGANIZATIONS_COLUMN_MINIMUMS = {0: 50, 1: 160, 2: 100, 3: 90, 4: 140, 5: 80}
 DRIVERS_COLUMN_MINIMUMS = {0: 50, 1: 160, 2: 160, 3: 110, 4: 140, 5: 140, 6: 80}
 
+# ── Дерево перевозчиков (ШАГ «Дерево перевозчиков») ──
+# Вкладка «Перевозчики» — не таблица, а дерево: верхний уровень —
+# перевозчики, дети — их водители (drivers.default_carrier_id).
+# Колонок пять (без «ID» таблицы организаций): запись лежит в данных узла,
+# а не в отдельной колонке. У водителя своих ИНН и КПП нет, поэтому те же
+# колонки означают другое: «Директор» — дата рождения, «Статус» — телефон.
+CARRIER_TREE_HEADERS = ("Наименование", "ИНН", "КПП", "Директор", "Статус")
+
+CARRIER_TREE_COLUMNS_CONFIG = (
+    (0, MODE_FIXED, 340),   # Наименование (у водителя — «👤 ФИО»)
+    (1, MODE_FIXED, 130),   # ИНН
+    (2, MODE_FIXED, 120),   # КПП
+    (3, MODE_FIXED, 220),   # Директор / дата рождения водителя
+    (4, MODE_FIXED, 150),   # Статус / телефон водителя
+)
+
+CARRIER_TREE_COLUMN_MINIMUMS = {0: 200, 1: 100, 2: 90, 3: 140, 4: 120}
+
+#: Номера колонок дерева перевозчиков (читаются по имени, а не по числу).
+CARRIER_COL_NAME = 0
+CARRIER_COL_INN = 1
+CARRIER_COL_KPP = 2
+CARRIER_COL_DIRECTOR = 3
+CARRIER_COL_STATUS = 4
+
+#: Колонка, в данных которой лежит запись узла (одна на все колонки).
+NODE_COLUMN = 0
+
+#: Роли данных узла: сама запись справочника и вид узла.
+NODE_RECORD_ROLE = Qt.UserRole
+NODE_KIND_ROLE = Qt.UserRole + 1
+
+NODE_KIND_CARRIER = "carrier"
+NODE_KIND_DRIVER = "driver"
+
+#: Приставки узлов: по ним видно уровень дерева.
+CARRIER_NODE_PREFIX = "🚛 "
+DRIVER_NODE_PREFIX = "👤 "
+
+#: Что показывать вместо пустого ФИО водителя.
+DRIVER_WITHOUT_NAME = "(без ФИО)"
+
+#: Подпись мягко удалённой записи (колонка «Статус», как и раньше).
+DELETED_STATUS_TITLE = "удалён"
+
+#: Ключи QSettings для раскладки таблиц справочника.
+ORGANIZATIONS_WIDTHS_KEY = "ui/db_manager/organizations"
+DRIVERS_WIDTHS_KEY = "ui/db_manager/drivers"
+#: Раскладка дерева перевозчиков.
+CARRIER_TREE_WIDTHS_KEY = "ui/db_manager/carriers_tree"
+#: Раскладка таблицы истории работы водителя у перевозчиков.
+DRIVER_CARRIERS_WIDTHS_KEY = "ui/db_manager/driver_carriers"
+
 #: Номера колонок таблицы водителей: читаются по имени, чтобы добавление
 #: колонки «Перевозчик» не сдвинуло молча остальные (ШАГ «Привязка
 #: водителей к перевозчикам»).
@@ -134,12 +198,6 @@ DRIVER_COL_STATUS = 6
 #: Пункт фильтра «Все перевозчики» и «без перевозчика» в списке водителей.
 CARRIER_FILTER_ALL = -1
 CARRIER_FILTER_NONE = 0
-
-#: Ключи QSettings для раскладки таблиц справочника.
-ORGANIZATIONS_WIDTHS_KEY = "ui/db_manager/organizations"
-DRIVERS_WIDTHS_KEY = "ui/db_manager/drivers"
-#: Раскладка таблицы истории работы водителя у перевозчиков.
-DRIVER_CARRIERS_WIDTHS_KEY = "ui/db_manager/driver_carriers"
 
 
 # ═════════════════════════════════════════════════════════════
@@ -819,7 +877,8 @@ class DbManagerDialog(QDialog):
         if self.picker_tab:
             layout.addWidget(theme.page_title(
                 "Выбор записи из справочника",
-                "💡 Двойной клик по строке — выбрать запись и заполнить вкладку\n"
+                "💡 Двойной клик по записи — выбрать её и заполнить вкладку\n"
+                "💡 Стрелка «+» у перевозчика — показать его водителей\n"
                 "💡 Клик по заголовку столбца — сортировка\n"
                 "💡 Справочник общий: то, что сохранено здесь, видно и в других "
                 "окнах программы",
@@ -827,7 +886,9 @@ class DbManagerDialog(QDialog):
         else:
             layout.addWidget(theme.page_title(
                 "Управление сохранёнными записями",
-                "💡 Двойной клик по строке — загрузить запись в форму\n"
+                "💡 Двойной клик по записи — загрузить её в форму\n"
+                "💡 Перевозчик: стрелка «+» показывает его водителей, двойной "
+                "клик по водителю подтягивает и водителя, и перевозчика\n"
                 "💡 Клик по заголовку столбца — сортировка\n"
                 "💡 «➕ Добавить» создаёт новую запись вручную\n"
                 "💡 Удаление мягкое: запись скрывается из справочника и её можно "
@@ -845,7 +906,7 @@ class DbManagerDialog(QDialog):
 
         self.tabs = QTabWidget()
 
-        self.carriers_tab = self._create_org_tab(is_carrier=True)
+        self.carriers_tab = self._create_carrier_tab()
         self.tabs.addTab(self.carriers_tab, "🚛 Перевозчики")
 
         self.drivers_tab = self._create_driver_tab()
@@ -890,6 +951,19 @@ class DbManagerDialog(QDialog):
         self._driver_timer.setInterval(250)
         self._driver_timer.timeout.connect(self._apply_driver_filter)
 
+        # ── Поиск по дереву перевозчиков (ШАГ «Дерево перевозчиков») ──
+        # Фильтруются оба уровня сразу, поэтому запрос идёт к базе через
+        # паузу, как и у таблиц: на каждое нажатие клавиши — лишняя работа.
+        self._carrier_search_text = ""
+        self._carrier_timer = QTimer(self)
+        self._carrier_timer.setSingleShot(True)
+        self._carrier_timer.setInterval(250)
+        self._carrier_timer.timeout.connect(self._apply_carrier_tree_filter)
+
+        #: Раскрытые перевозчики: состояние переживает перестройку дерева
+        #: (после правки, удаления или поиска).
+        self._expanded_carrier_ids: Set[int] = set()
+
         self._load_all()
 
         logger.debug(
@@ -902,18 +976,20 @@ class DbManagerDialog(QDialog):
     # ─────────────────────────────────────────────────────────
 
     def _create_org_tab(self, is_carrier: bool) -> QWidget:
+        """
+        Вкладка справочника организаций ТАБЛИЦЕЙ (заказчики).
+
+        Перевозчики живут в дереве (`_create_carrier_tab`): у них есть
+        подчинённый уровень — водители. Общие части вкладок (строка поиска,
+        панель кнопок) вынесены в помощники, чтобы обе вкладки выглядели
+        одинаково и подписи кнопок не разъезжались.
+        """
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        search_layout = QHBoxLayout()
-        search_layout.addWidget(QLabel("🔍 Поиск:"))
-        search_input = QLineEdit()
-        search_input.setPlaceholderText("Наименование, ИНН или ФИО директора...")
-        search_input.setClearButtonEnabled(True)
-        search_layout.addWidget(search_input, 1)
-        btn_reset = theme.secondary_button("Сбросить")
-        search_layout.addWidget(btn_reset)
-        layout.addLayout(search_layout)
+        search_input = self._build_org_search_row(
+            layout, "Наименование, ИНН или ФИО директора..."
+        )
 
         table = QTableWidget()
         table.setColumnCount(6)
@@ -941,65 +1017,229 @@ class DbManagerDialog(QDialog):
         table.setWordWrap(False)
 
         # ── Двойной клик = загрузить в форму ──
-        table.doubleClicked.connect(lambda: self._on_load_org(is_carrier))
+        table.doubleClicked.connect(self._on_load_customer)
 
         #: Роль таблицы: по этому признаку выбирается таблица-источник и
         #: обработчик записи (в аренде — арендатор / арендодатель).
         table.setProperty("is_carrier", is_carrier)
 
-        if is_carrier:
-            self.carriers_table = table
-        else:
-            self.customers_table = table
+        self.customers_table = table
 
         layout.addWidget(table)
 
+        buttons = self._build_org_button_bar(layout, is_carrier)
+
+        # В режиме выбора справочник только читают: кнопки, которые его
+        # меняют, прячем — оставляем «Загрузить в форму».
+        if self.picker_tab:
+            self._apply_picker_mode(buttons)
+
+        search_input.textChanged.connect(self._on_customer_search_changed)
+
+        return widget
+
+    def _create_carrier_tab(self) -> QWidget:
+        """
+        Вкладка «Перевозчики» — дерево «перевозчик → его водители».
+
+        Верхний уровень — перевозчики, дети — водители, привязанные через
+        `drivers.default_carrier_id`. Дети заполняются сразу, без ленивой
+        подгрузки: водителей у одного перевозчика единицы, а поиск и
+        сортировка должны видеть оба уровня.
+        """
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        search_input = self._build_org_search_row(
+            layout, "Перевозчик, ИНН, ФИО директора или водителя..."
+        )
+
+        tree = QTreeWidget()
+        tree.setColumnCount(len(CARRIER_TREE_HEADERS))
+        tree.setHeaderLabels(list(CARRIER_TREE_HEADERS))
+
+        # ── Раскрытие, выделение, сортировка ──
+        # Стрелки «+»/«−» раскрывают узел; двойной клик занят загрузкой
+        # записи в форму, поэтому раскрывать им ничего не нужно.
+        tree.setRootIsDecorated(True)
+        tree.setAlternatingRowColors(True)
+        tree.setSelectionBehavior(QAbstractItemView.SelectRows)
+        tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tree.setSortingEnabled(True)
+        tree.header().setSectionsMovable(True)
+        tree.header().setStretchLastSection(False)
+
+        # Ширины, минимумы, подсказки и раскладка — общий помощник таблиц:
+        # шапка дерева настраивается так же (table_header умеет QTreeWidget).
+        setup_point_table(
+            tree,
+            CARRIER_TREE_COLUMNS_CONFIG,
+            storage_key=CARRIER_TREE_WIDTHS_KEY,
+            minimums=CARRIER_TREE_COLUMN_MINIMUMS,
+        )
+        install_tooltip_on_table(tree)
+
+        # ── Двойной клик = загрузить запись в форму ──
+        # Перевозчик — только перевозчик, водитель — водитель и его
+        # перевозчик (разбирает _on_carrier_item_double_clicked). Щелчок по
+        # стрелке «+»/«−» сюда не приходит: Qt отдаёт украшение узла себе
+        # (QTreeView::mouseDoubleClickEvent не шлёт doubleClicked для него).
+        tree.itemDoubleClicked.connect(self._on_carrier_item_double_clicked)
+
+        # Состояние раскрытия переживает перестройку дерева (правка,
+        # удаление, поиск): запоминаем раскрытые перевозчики по ID.
+        tree.itemExpanded.connect(self._on_carrier_node_expanded)
+        tree.itemCollapsed.connect(self._on_carrier_node_collapsed)
+
+        #: Признак роли вкладки — как у таблиц организаций.
+        tree.setProperty("is_carrier", True)
+
+        self.carriers_tree = tree
+        layout.addWidget(tree)
+
+        buttons = self._build_org_button_bar(layout, is_carrier=True)
+
+        if self.picker_tab:
+            self._apply_picker_mode(buttons)
+
+        search_input.textChanged.connect(self._on_carrier_search_changed)
+
+        return widget
+
+    def _build_org_search_row(
+        self, layout: QVBoxLayout, placeholder: str
+    ) -> QLineEdit:
+        """
+        Строка поиска вкладки справочника: поле и кнопка «Сбросить».
+
+        Возвращает поле: вкладка сама решает, что делать с текстом
+        (у заказчиков фильтр по таблице, у перевозчиков — по дереву).
+        Кнопка «Сбросить» подключена к `clear()` самого поля — очистка
+        вызовет textChanged, и список вернётся к полному (без lambda).
+        """
+        search_layout = QHBoxLayout()
+        search_layout.addWidget(QLabel("🔍 Поиск:"))
+        search_input = QLineEdit()
+        search_input.setPlaceholderText(placeholder)
+        search_input.setClearButtonEnabled(True)
+        search_layout.addWidget(search_input, 1)
+        btn_reset = theme.secondary_button("Сбросить")
+        btn_reset.clicked.connect(search_input.clear)
+        search_layout.addWidget(btn_reset)
+        layout.addLayout(search_layout)
+        return search_input
+
+    def _build_org_button_bar(
+        self, layout: QVBoxLayout, is_carrier: bool
+    ) -> Tuple[QPushButton, ...]:
+        """
+        Панель кнопок вкладки справочника — общая для дерева и таблицы.
+
+        Подписи, роли темы и порядок кнопок заданы здесь один раз (на это
+        опираются тесты менеджера базы), а обработчики берутся у своей роли.
+        Слоты — связанные методы БЕЗ параметров: `lambda` в `connect`
+        запрещены (AGENTS.md § 5.1, цикл ссылок Python ↔ Qt).
+
+        :return: кнопки в порядке добавления — их получает `_apply_picker_mode`.
+        """
+        if is_carrier:
+            on_add = self._on_add_carrier
+            on_load = self._on_load_carrier
+            on_edit = self._on_edit_carrier
+            on_delete = self._on_delete_carrier
+            on_restore = self._on_restore_carrier
+            add_tooltip = "Создать нового перевозчика вручную"
+        else:
+            on_add = self._on_add_customer
+            on_load = self._on_load_customer
+            on_edit = self._on_edit_customer
+            on_delete = self._on_delete_customer
+            on_restore = self._on_restore_customer
+            add_tooltip = "Создать нового заказчика вручную"
+
         button_layout = QHBoxLayout()
 
-        btn_add = theme.primary_button(
-            "➕ Добавить",
-            tooltip=(
-                "Создать нового перевозчика вручную"
-                if is_carrier else
-                "Создать нового заказчика вручную"
-            ),
-        )
-        btn_add.clicked.connect(lambda: self._on_add_org(is_carrier))
+        btn_add = theme.primary_button("➕ Добавить", tooltip=add_tooltip)
+        btn_add.clicked.connect(on_add)
         button_layout.addWidget(btn_add)
 
         btn_load = theme.secondary_button("📂 Загрузить в форму")
-        btn_load.clicked.connect(lambda: self._on_load_org(is_carrier))
+        btn_load.clicked.connect(on_load)
         button_layout.addWidget(btn_load)
 
         btn_edit = theme.secondary_button("✏ Редактировать")
-        btn_edit.clicked.connect(lambda: self._on_edit_org(is_carrier))
+        btn_edit.clicked.connect(on_edit)
         button_layout.addWidget(btn_edit)
 
         btn_delete = theme.danger_button("🗑 Удалить")
-        btn_delete.clicked.connect(lambda: self._on_delete_org(is_carrier))
+        btn_delete.clicked.connect(on_delete)
         button_layout.addWidget(btn_delete)
 
         btn_restore = theme.secondary_button(
             "♻ Восстановить",
             tooltip="Вернуть мягко удалённую запись в справочник",
         )
-        btn_restore.clicked.connect(lambda: self._on_restore_org(is_carrier))
+        btn_restore.clicked.connect(on_restore)
         button_layout.addWidget(btn_restore)
 
         button_layout.addStretch()
         layout.addLayout(button_layout)
 
-        # В режиме выбора справочник только читают: кнопки, которые его
-        # меняют, прячем — оставляем «Загрузить в форму».
-        if self.picker_tab:
-            self._apply_picker_mode(
-                (btn_add, btn_load, btn_edit, btn_delete, btn_restore)
-            )
+        return (btn_add, btn_load, btn_edit, btn_delete, btn_restore)
 
-        search_input.textChanged.connect(lambda text, c=is_carrier: self._schedule_org_filter(c, text))
-        btn_reset.clicked.connect(lambda: search_input.clear())
+    # ── Слоты кнопок вкладок справочника ──
+    # Отдельные методы без параметров, а не lambda с ролью: сигнал clicked
+    # передаёт признак нажатия, а замыкание завело бы цикл ссылок
+    # Python ↔ Qt (AGENTS.md § 5.1).
 
-        return widget
+    def _on_add_carrier(self) -> None:
+        """«➕ Добавить» на вкладке «Перевозчики»."""
+        self._on_add_org(True)
+
+    def _on_load_carrier(self) -> None:
+        """«📂 Загрузить в форму» на вкладке «Перевозчики»."""
+        self._on_load_org(True)
+
+    def _on_edit_carrier(self) -> None:
+        """«✏ Редактировать» на вкладке «Перевозчики»."""
+        self._on_edit_org(True)
+
+    def _on_delete_carrier(self) -> None:
+        """«🗑 Удалить» на вкладке «Перевозчики»."""
+        self._on_delete_org(True)
+
+    def _on_restore_carrier(self) -> None:
+        """«♻ Восстановить» на вкладке «Перевозчики»."""
+        self._on_restore_org(True)
+
+    def _on_add_customer(self) -> None:
+        """«➕ Добавить» на вкладке «Заказчики»."""
+        self._on_add_org(False)
+
+    def _on_load_customer(self) -> None:
+        """«📂 Загрузить в форму» / двойной клик на вкладке «Заказчики»."""
+        self._on_load_org(False)
+
+    def _on_edit_customer(self) -> None:
+        """«✏ Редактировать» на вкладке «Заказчики»."""
+        self._on_edit_org(False)
+
+    def _on_delete_customer(self) -> None:
+        """«🗑 Удалить» на вкладке «Заказчики»."""
+        self._on_delete_org(False)
+
+    def _on_restore_customer(self) -> None:
+        """«♻ Восстановить» на вкладке «Заказчики»."""
+        self._on_restore_org(False)
+
+    def _on_customer_search_changed(self, text: str) -> None:
+        """Ввод в поиске заказчиков: отложенная фильтрация таблицы."""
+        self._schedule_org_filter(False, text)
+
+    def _on_carrier_search_changed(self, text: str) -> None:
+        """Ввод в поиске перевозчиков: отложенная фильтрация дерева."""
+        self._schedule_carrier_tree_filter(text)
+
 
     def _create_driver_tab(self) -> QWidget:
         widget = QWidget()
@@ -1094,16 +1334,38 @@ class DbManagerDialog(QDialog):
         btn_restore.clicked.connect(self._on_restore_driver)
         button_layout.addWidget(btn_restore)
 
+        # ── Карточка перевозчика водителя (ШАГ «Дерево перевозчиков») ──
+        # На вкладке «Перевозчики» этой кнопки нет: там дерево, и до
+        # перевозчика водителя видно по родителю. Здесь же водитель один,
+        # и к его перевозчику нужен быстрый путь.
+        self.btn_carrier_card = theme.secondary_button(
+            "🚛 Перевозчик…",
+            tooltip=(
+                "Открыть карточку перевозчика выбранного водителя.\n"
+                "Если водитель ни за кем не закреплён — подскажем, что делать."
+            ),
+        )
+        self.btn_carrier_card.clicked.connect(self._on_open_driver_carrier)
+        self.btn_carrier_card.setEnabled(False)
+        button_layout.addWidget(self.btn_carrier_card)
+
         button_layout.addStretch()
         layout.addLayout(button_layout)
+
+        # Кнопка карточки активна только при выбранном водителе: открывать
+        # нечего, пока строка не выбрана.
+        table.itemSelectionChanged.connect(self._on_driver_selection_changed)
 
         if self.picker_tab:
             self._apply_picker_mode(
                 (btn_add, btn_load, btn_edit, btn_delete, btn_restore)
             )
+            # В режиме выбора справочник только читают: карточка перевозчика
+            # здесь такая же правка, как «✏ Редактировать».
+            self.btn_carrier_card.setVisible(False)
 
         search_input.textChanged.connect(self._schedule_driver_filter)
-        btn_reset.clicked.connect(lambda: search_input.clear())
+        btn_reset.clicked.connect(search_input.clear)
 
         return widget
 
@@ -1155,6 +1417,16 @@ class DbManagerDialog(QDialog):
         self._load_drivers()
 
     def _load_organizations(self, is_carrier: bool) -> None:
+        """
+        Перечитывает вкладку справочника организаций.
+
+        У перевозчиков вкладка — дерево (ШАГ «Дерево перевозчиков»),
+        у заказчиков — таблица: роль выбирает представление.
+        """
+        if is_carrier:
+            self._load_carriers_tree()
+            return
+
         try:
             orgs = get_all_organizations(
                 is_carrier=is_carrier, include_deleted=self._show_deleted()
@@ -1194,6 +1466,285 @@ class DbManagerDialog(QDialog):
         # Включаем сортировку и сортируем по «Наименование» (колонка 1)
         table.setSortingEnabled(True)
         table.sortByColumn(1, Qt.AscendingOrder)
+
+    # ─────────────────────────────────────────────────────────
+    # Дерево перевозчиков (ШАГ «Дерево перевозчиков»)
+    # ─────────────────────────────────────────────────────────
+
+    def _load_carriers_tree(self) -> None:
+        """
+        Перечитывает дерево перевозчиков.
+
+        Читает оба уровня разом: перевозчиков (верхний уровень) и водителей
+        (дети — те, у кого заполнен `default_carrier_id`). Мягко удалённые
+        показываются по переключателю «Показывать удалённые»: по умолчанию
+        их нет ни на одном уровне.
+        """
+        show_deleted = self._show_deleted()
+
+        try:
+            carriers = get_all_organizations(
+                is_carrier=True, include_deleted=show_deleted
+            )
+        except Exception as e:
+            logger.error(f"Ошибка загрузки перевозчиков: {e}")
+            carriers = []
+
+        try:
+            # with_carrier_name не нужен: родитель в дереве и есть перевозчик.
+            drivers = get_all_drivers(include_deleted=show_deleted)
+        except Exception as e:
+            logger.error(f"Ошибка загрузки водителей для дерева: {e}")
+            drivers = []
+
+        self._fill_carriers_tree(carriers, drivers, self._carrier_search_text)
+        logger.info(
+            f"Дерево перевозчиков: перевозчиков {len(carriers)}, "
+            f"водителей {len(drivers)}"
+        )
+
+    def _fill_carriers_tree(
+        self,
+        carriers: List[Dict[str, Any]],
+        drivers: List[Dict[str, Any]],
+        search_text: str = "",
+    ) -> None:
+        """
+        Собирает дерево: перевозчики и их водители.
+
+        :param search_text: поиск по ОБОИМ уровням. Перевозчик подошёл —
+        виден со всеми своими водителями; подошёл водитель — виден его
+        перевозчик и только совпавшие водители; ни того, ни другого —
+        перевозчика в дереве нет. Пустой поиск — все.
+
+        Раскрытие: совпадение внутри перевозчика раскрывается сразу, иначе
+        узел возвращается в то состояние, в котором оператор его оставил
+        (`_expanded_carrier_ids`).
+        """
+        tree = self.carriers_tree
+        needle = (search_text or "").strip().lower()
+
+        drivers_by_carrier: Dict[int, List[Dict[str, Any]]] = {}
+        for driver in drivers:
+            carrier_id = self._as_id(driver.get("default_carrier_id"))
+            if carrier_id is None:
+                continue
+            drivers_by_carrier.setdefault(carrier_id, []).append(driver)
+
+        # Отключаем сортировку, пока заполняем (как у таблиц справочника).
+        tree.setSortingEnabled(False)
+        tree.clear()
+
+        shown = 0
+        for org in carriers:
+            carrier_id = self._as_id(org.get("id"))
+            children = drivers_by_carrier.get(carrier_id, [])
+
+            if not needle or self._carrier_matches_search(org, needle):
+                matching_children = children
+            else:
+                matching_children = [
+                    driver for driver in children
+                    if self._driver_matches_search(driver, needle)
+                ]
+                if not matching_children:
+                    continue
+
+            parent = self._make_carrier_item(org)
+            tree.addTopLevelItem(parent)
+            shown += 1
+
+            for driver in matching_children:
+                parent.addChild(self._make_driver_item(driver))
+
+            if needle and matching_children:
+                parent.setExpanded(True)
+            elif carrier_id in self._expanded_carrier_ids:
+                parent.setExpanded(True)
+
+        # Включаем сортировку и сортируем по «Наименование» (колонка 0).
+        # Явный sortItems нужен: одного setSortingEnabled(True) после
+        # заполнения Qt не хватает — модель пересортировывает не всегда
+        # (проверено пробой tests/_tmp/_tree_sort_probe.py). Порядок — как
+        # у таблиц справочника: по наименованию.
+        tree.setSortingEnabled(True)
+        tree.sortItems(CARRIER_COL_NAME, Qt.AscendingOrder)
+
+        if needle:
+            logger.info(
+                f"Поиск по дереву перевозчиков: запрос {len(needle)} симв., "
+                f"перевозчиков {shown}"
+            )
+
+    def _make_carrier_item(self, org: Dict[str, Any]) -> QTreeWidgetItem:
+        """Узел перевозчика: наименование, ИНН, КПП, директор, статус."""
+        name = str(org.get("full_name") or org.get("short_name") or "").strip()
+        item = QTreeWidgetItem([
+            f"{CARRIER_NODE_PREFIX}{name}",
+            str(org.get("inn") or ""),
+            str(org.get("kpp") or ""),
+            str(org.get("director_name") or ""),
+            DELETED_STATUS_TITLE if org.get("is_deleted") else "",
+        ])
+        self._mark_node(item, org, NODE_KIND_CARRIER)
+        return item
+
+    def _make_driver_item(self, driver: Dict[str, Any]) -> QTreeWidgetItem:
+        """
+        Узел водителя внутри перевозчика.
+
+        Колонки те же, но означают другое (вариант A разбора ТЗ): ИНН и КПП
+        у водителя нет, «Директор» — дата рождения, «Статус» — телефон.
+        У мягко удалённого водителя в «Статусе» стоит «удалён»: это важнее
+        телефона, а сам телефон виден на вкладке «Водители».
+        """
+        full_name = str(driver.get("full_name") or "").strip()
+        status = (
+            DELETED_STATUS_TITLE if driver.get("is_deleted")
+            else str(driver.get("phone") or "")
+        )
+        item = QTreeWidgetItem([
+            f"{DRIVER_NODE_PREFIX}{full_name or DRIVER_WITHOUT_NAME}",
+            "",
+            "",
+            str(driver.get("birth_date") or ""),
+            status,
+        ])
+        self._mark_node(item, driver, NODE_KIND_DRIVER)
+        return item
+
+    def _mark_node(
+        self, item: QTreeWidgetItem, record: Dict[str, Any], kind: str
+    ) -> None:
+        """
+        Кладёт запись и вид узла в данные строки.
+
+        Запись — в `NODE_RECORD_ROLE` (её читают действия: загрузка, правка,
+        удаление), вид — в `NODE_KIND_ROLE`. Мягко удалённый узел целиком
+        подкрашивается, как строка таблицы.
+        """
+        item.setData(NODE_COLUMN, NODE_RECORD_ROLE, record)
+        item.setData(NODE_COLUMN, NODE_KIND_ROLE, kind)
+
+        if record.get("is_deleted"):
+            brush = theme.deleted_row_color()
+            for column in range(len(CARRIER_TREE_HEADERS)):
+                item.setForeground(column, brush)
+
+    @staticmethod
+    def _node_record(item: Optional[QTreeWidgetItem]) -> Dict[str, Any]:
+        """Запись справочника, лежащая в узле дерева (пусто — не узел)."""
+        if item is None:
+            return {}
+        record = item.data(NODE_COLUMN, NODE_RECORD_ROLE)
+        return record if isinstance(record, dict) else {}
+
+    @staticmethod
+    def _node_kind(item: Optional[QTreeWidgetItem]) -> str:
+        """Вид узла: NODE_KIND_CARRIER / NODE_KIND_DRIVER (пусто — не узел)."""
+        if item is None:
+            return ""
+        return str(item.data(NODE_COLUMN, NODE_KIND_ROLE) or "")
+
+    @staticmethod
+    def _as_id(value: Any) -> Optional[int]:
+        """ID записи числом; пустое и мусор — None."""
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _selected_carrier_node(self) -> Optional[QTreeWidgetItem]:
+        """
+        Выбранный узел дерева перевозчиков (None — ничего не выбрано).
+
+        Сначала текущий узел, затем выделение: после перестройки дерева
+        «текущего» может не быть, а выделенная строка остаётся.
+        """
+        tree = getattr(self, "carriers_tree", None)
+        if tree is None:
+            return None
+
+        item = tree.currentItem()
+        if item is not None:
+            return item
+
+        selected = tree.selectedItems()
+        return selected[0] if selected else None
+
+    def _carrier_tab_selection(self) -> Tuple[str, Dict[str, Any]]:
+        """Что выбрано на вкладке «Перевозчики»: (вид узла, запись)."""
+        item = self._selected_carrier_node()
+        return self._node_kind(item), self._node_record(item)
+
+    @staticmethod
+    def _text_matches(values: Tuple[Any, ...], needle: str) -> bool:
+        """Есть ли подстрока поиска хотя бы в одном из значений."""
+        return any(needle in str(value or "").lower() for value in values)
+
+    def _carrier_matches_search(self, org: Dict[str, Any], needle: str) -> bool:
+        """Поля перевозчика, по которым ищет дерево (те же, что у таблицы)."""
+        return self._text_matches(
+            (
+                org.get("full_name"),
+                org.get("short_name"),
+                org.get("inn"),
+                org.get("kpp"),
+                org.get("director_name"),
+            ),
+            needle,
+        )
+
+    def _driver_matches_search(self, driver: Dict[str, Any], needle: str) -> bool:
+        """Поля водителя, по которым ищет дерево (как на вкладке «Водители»)."""
+        passport = (
+            f"{driver.get('passport_series') or ''} "
+            f"{driver.get('passport_number') or ''}"
+        )
+        return self._text_matches(
+            (driver.get("full_name"), passport, driver.get("phone")),
+            needle,
+        )
+
+    def _on_carrier_node_expanded(self, item: QTreeWidgetItem) -> None:
+        """Узел раскрыт: запоминаем перевозчика — дерево перестраивается."""
+        carrier_id = self._carrier_id_of_node(item)
+        if carrier_id is not None:
+            self._expanded_carrier_ids.add(carrier_id)
+
+    def _on_carrier_node_collapsed(self, item: QTreeWidgetItem) -> None:
+        """Узел свёрнут: перевозчик больше не раскрыт."""
+        carrier_id = self._carrier_id_of_node(item)
+        if carrier_id is not None:
+            self._expanded_carrier_ids.discard(carrier_id)
+
+    def _carrier_id_of_node(self, item: QTreeWidgetItem) -> Optional[int]:
+        """ID перевозчика, к которому относится узел (для детей — родителя)."""
+        if item is None:
+            return None
+        parent = item if item.parent() is None else item.parent()
+        return self._as_id(self._node_record(parent).get("id"))
+
+    # ─────────────────────────────────────────────────────────
+    # Поиск по дереву перевозчиков
+    # ─────────────────────────────────────────────────────────
+
+    def _schedule_carrier_tree_filter(self, text: str) -> None:
+        """Откладывает фильтрацию дерева (debounce 250 мс, как у таблиц)."""
+        self._carrier_search_text = text or ""
+        self._carrier_timer.start()
+
+    def _apply_carrier_tree_filter(self) -> None:
+        """
+        Применяет поиск к дереву: перечитывает оба уровня из базы.
+
+        Фильтрация идёт по уже загруженным записям, но уровней два, и
+        «водитель, которого видно только вместе с перевозчиком» — это
+        именно запрос к базе, а не перерисовка строк.
+        """
+        self._load_carriers_tree()
 
     def _load_drivers(self) -> None:
         try:
@@ -1453,26 +2004,32 @@ class DbManagerDialog(QDialog):
     # Действия
     # ─────────────────────────────────────────────────────────
 
-    def _org_table(self, is_carrier: bool) -> QTableWidget:
+    def _org_table(self, is_carrier: bool) -> Optional[QTableWidget]:
         """
-        Таблица организаций нужной роли.
+        Таблица организаций нужной роли (заказчики).
 
-        Основной путь — именованные атрибуты вкладок (carriers_table /
-        customers_table): они создаются в __init__ и всегда соответствуют
-        своей роли. Признак is_carrier на таблице — запасной вариант и метка
-        для тестов: у QVariant пустое значение и False неразличимы, поэтому
-        сравнение идёт по exact-значению, а не по приведению к bool.
+        Перевозчики в ШАГЕ «Дерево перевозчиков» переехали на дерево:
+        таблицы у этой роли больше нет, поэтому для неё возвращается None,
+        а запись берётся из узла (`_carrier_tab_selection`).
+
+        Основной путь — именованный атрибут customers_table: он создаётся
+        в __init__ и всегда соответствует своей роли. Признак is_carrier на
+        таблице — запасной вариант и метка для тестов: у QVariant пустое
+        значение и False неразличимы, поэтому сравнение идёт по
+        exact-значению, а не по приведению к bool.
         """
-        attribute = "carriers_table" if is_carrier else "customers_table"
-        table = getattr(self, attribute, None)
+        if is_carrier:
+            return None
+
+        table = getattr(self, "customers_table", None)
         if table is not None:
             return table
 
         for candidate in self.findChildren(QTableWidget):
-            if candidate.property("is_carrier") is is_carrier:
+            if candidate.property("is_carrier") is False:
                 return candidate
 
-        logger.error(f"Таблица организаций не найдена (is_carrier={is_carrier})")
+        logger.error("Таблица заказчиков не найдена")
         return None
 
     def _picker_load(self, is_carrier: bool, record: Dict[str, Any]) -> bool:
@@ -1500,6 +2057,16 @@ class DbManagerDialog(QDialog):
         return True
 
     def _on_load_org(self, is_carrier: bool) -> None:
+        """
+        «📂 Загрузить в форму» на вкладке справочника организаций.
+
+        У перевозчиков вкладка — дерево: выбран может быть любой уровень,
+        и разбирает его `_load_carrier_item`. У заказчиков — таблица.
+        """
+        if is_carrier:
+            self._load_carrier_item(self._selected_carrier_node())
+            return
+
         table = self._org_table(is_carrier)
         row = -1 if table is None else table.currentRow()
 
@@ -1517,18 +2084,88 @@ class DbManagerDialog(QDialog):
         try:
             # Режим выбора: запись уходит во вкладку, которая открыла диалог
             # (в аренде — «Арендатор» или «Арендодатель»).
-            if self._picker_load(is_carrier, org):
+            if self._picker_load(False, org):
                 self.accept()
                 return
 
-            if is_carrier and self.on_load_carrier:
-                self.on_load_carrier(org)
-            elif not is_carrier and self.on_load_customer:
+            if self.on_load_customer:
                 self.on_load_customer(org)
             self.accept()
         except Exception as e:
             logger.error(f"Ошибка загрузки организации: {e}")
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить запись:\n\n{e}")
+
+    # ── Дерево перевозчиков: загрузка узла в форму ──
+
+    def _on_carrier_item_double_clicked(
+        self, item: QTreeWidgetItem, column: int
+    ) -> None:
+        """
+        Двойной клик по узлу дерева перевозчиков.
+
+        Перевозчик → в форму уходит ТОЛЬКО перевозчик: вкладка «Водитель»
+        не трогается, оператор сам решит, кого вписать (например, временного
+        водителя, которого нет в базе). Водитель → в форму уходит И водитель,
+        И его перевозчик (перевозчика подтягивает MainWindow).
+
+        Щелчок по стрелке «+»/«−» сюда не приходит: Qt считает украшение
+        узла своим (QTreeView::mouseDoubleClickEvent не шлёт doubleClicked,
+        если клик пришёлся на украшение) — узел только раскрывается.
+        Двойной клик по пустому месту дерева тоже ничего не делает: узла нет,
+        а без узла и записи нет (для кнопки «Загрузить в форму» подсказка
+        «Выберите запись из списка» остаётся — см. `_load_carrier_item`).
+        """
+        if item is None:
+            return
+        self._load_carrier_item(item)
+
+    def _load_carrier_item(self, item: Optional[QTreeWidgetItem]) -> None:
+        """Загружает в форму узел дерева перевозчиков (перевозчика или водителя)."""
+        record = self._node_record(item)
+        if not record:
+            QMessageBox.warning(self, "Загрузка", "Выберите запись из списка.")
+            return
+
+        try:
+            if self._node_kind(item) == NODE_KIND_DRIVER:
+                self._load_driver_node(item, record)
+                return
+            self._load_carrier_record(record)
+        except Exception as e:
+            logger.error(f"Ошибка загрузки записи дерева перевозчиков: {e}")
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить запись:\n\n{e}")
+
+    def _load_driver_node(
+        self, item: Optional[QTreeWidgetItem], driver: Dict[str, Any]
+    ) -> None:
+        """
+        Водитель, выбранный в дереве перевозчиков.
+
+        В режиме ВЫБОРА вкладка «Перевозчики» отдаёт перевозчика (так её
+        открывает аренда — «Арендодатель»), поэтому выбранный водитель
+        означает «водитель вот этого перевозчика»: отдаём родителя.
+        В остальных случаях — обычная загрузка водителя.
+        """
+        if self.picker_tab == OPEN_TAB_CARRIERS:
+            parent = self._node_record(item.parent() if item is not None else None)
+            if parent:
+                self._load_carrier_record(parent)
+                return
+            logger.warning("Узел водителя без перевозчика — загружаем водителя")
+
+        self._load_driver_record(driver)
+
+    def _load_carrier_record(self, org: Dict[str, Any]) -> None:
+        """Отдаёт перевозчика в форму; вкладка «Водитель» не трогается."""
+        logger.info(f"Загрузка перевозчика из справочника: ID={org.get('id')}")
+
+        if self._picker_load(True, org):
+            self.accept()
+            return
+
+        if self.on_load_carrier:
+            self.on_load_carrier(org)
+        self.accept()
 
     def _on_load_driver(self) -> None:
         table = self.drivers_table
@@ -1545,6 +2182,16 @@ class DbManagerDialog(QDialog):
             QMessageBox.warning(self, "Загрузка", "Не удалось прочитать запись.")
             return
 
+        self._load_driver_record(driver)
+
+    def _load_driver_record(self, driver: Dict[str, Any]) -> None:
+        """
+        Отдаёт водителя в форму — общий путь таблицы и дерева.
+
+        Тягач/прицеп подмешиваются в запись здесь же: MainWindow заполняет
+        ими вкладку «Тягач и полуприцеп», и из дерева перевозчиков водитель
+        должен прийти с тем же набором полей, что из таблицы «Водители».
+        """
         try:
             # Подгружаем тягач/прицеп и подмешиваем в данные водителя
             if driver.get("id"):
@@ -1578,6 +2225,23 @@ class DbManagerDialog(QDialog):
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить запись:\n\n{e}")
 
     def _on_edit_org(self, is_carrier: bool) -> None:
+        """
+        «✏ Редактировать» на вкладке справочника.
+
+        В дереве перевозчиков выбран может быть водитель: тогда открывается
+        диалог ВОДИТЕЛЯ (свой у перевозчика — диалог организации).
+        """
+        if is_carrier:
+            kind, record = self._carrier_tab_selection()
+            if not record:
+                QMessageBox.warning(self, "Редактирование", "Выберите запись.")
+                return
+            if kind == NODE_KIND_DRIVER:
+                self._edit_driver_record(record)
+            else:
+                self._edit_org_record(record, True)
+            return
+
         table = self._org_table(is_carrier)
         row = table.currentRow()
 
@@ -1592,6 +2256,10 @@ class DbManagerDialog(QDialog):
             QMessageBox.warning(self, "Редактирование", "Не удалось прочитать запись.")
             return
 
+        self._edit_org_record(org, is_carrier)
+
+    def _edit_org_record(self, org: Dict[str, Any], is_carrier: bool) -> None:
+        """Правка организации: диалог и сохранение (общий путь таблицы и дерева)."""
         org_id = org.get("id")
         dialog = EditCarrierDialog(org, is_carrier=is_carrier, parent=self)
 
@@ -1619,6 +2287,10 @@ class DbManagerDialog(QDialog):
             QMessageBox.warning(self, "Редактирование", "Не удалось прочитать запись.")
             return
 
+        self._edit_driver_record(driver)
+
+    def _edit_driver_record(self, driver: Dict[str, Any]) -> None:
+        """Правка водителя (и его ТС) — общий путь таблицы и дерева."""
         driver_id = driver.get("id")
         dialog = EditDriverDialog(driver, parent=self)
 
@@ -1636,7 +2308,7 @@ class DbManagerDialog(QDialog):
             ok2 = save_driver_vehicle(driver_id, vehicle_data)
 
             if ok1 and ok2:
-                self._load_drivers()
+                self._refresh_driver_views()
                 QMessageBox.information(self, "Готово", "Данные водителя и ТС обновлены.")
             else:
                 QMessageBox.critical(self, "Ошибка", "Не удалось сохранить изменения.")
@@ -1708,7 +2380,7 @@ class DbManagerDialog(QDialog):
             logger.info(f"Водитель создан: ID={driver_id}")
             audit.log_event("driver_created", driver_id=driver_id)
 
-            self._load_drivers()
+            self._refresh_driver_views()
             QMessageBox.information(self, "Готово", "Водитель добавлен.")
         except Exception as e:
             logger.exception("Ошибка создания водителя")
@@ -1716,7 +2388,31 @@ class DbManagerDialog(QDialog):
                 self, "Ошибка", f"Не удалось добавить водителя:\n{e}"
             )
 
+    def _refresh_driver_views(self) -> None:
+        """
+        Перечитывает оба представления водителей.
+
+        Водитель виден и в таблице вкладки «Водители», и дочерним узлом
+        дерева перевозчиков (ШАГ «Дерево перевозчиков»). После правки,
+        добавления, удаления и восстановления обновлять нужно оба, иначе
+        дерево покажет прежнюю привязку.
+        """
+        self._load_drivers()
+        self._load_carriers_tree()
+
     def _on_delete_org(self, is_carrier: bool) -> None:
+        """«🗑 Удалить»: у перевозчиков — узел дерева (перевозчик или водитель)."""
+        if is_carrier:
+            kind, record = self._carrier_tab_selection()
+            if not record:
+                QMessageBox.warning(self, "Удаление", "Выберите запись из списка.")
+                return
+            if kind == NODE_KIND_DRIVER:
+                self._delete_driver_record(record)
+            else:
+                self._delete_org_record(record, True)
+            return
+
         table = self._org_table(is_carrier)
         row = table.currentRow()
 
@@ -1731,6 +2427,10 @@ class DbManagerDialog(QDialog):
             QMessageBox.warning(self, "Удаление", "Не удалось прочитать запись.")
             return
 
+        self._delete_org_record(org, is_carrier)
+
+    def _delete_org_record(self, org: Dict[str, Any], is_carrier: bool) -> None:
+        """Мягкое удаление организации (общий путь таблицы и дерева)."""
         org_id = org.get("id")
         org_name = org.get("full_name", "без названия")
 
@@ -1764,7 +2464,18 @@ class DbManagerDialog(QDialog):
             QMessageBox.critical(self, "Ошибка", f"Не удалось удалить:\n\n{e}")
 
     def _on_restore_org(self, is_carrier: bool) -> None:
-        """Возвращает мягко удалённую организацию в справочник."""
+        """«♻ Восстановить»: у перевозчиков — узел дерева (организация или водитель)."""
+        if is_carrier:
+            kind, record = self._carrier_tab_selection()
+            if not record:
+                QMessageBox.warning(self, "Восстановление", "Выберите запись из списка.")
+                return
+            if kind == NODE_KIND_DRIVER:
+                self._restore_driver_record(record)
+            else:
+                self._restore_org_record(record, True)
+            return
+
         table = self._org_table(is_carrier)
         row = table.currentRow()
 
@@ -1781,6 +2492,10 @@ class DbManagerDialog(QDialog):
             )
             return
 
+        self._restore_org_record(org, is_carrier)
+
+    def _restore_org_record(self, org: Dict[str, Any], is_carrier: bool) -> None:
+        """Возвращает мягко удалённую организацию в справочник."""
         if not org.get("is_deleted"):
             QMessageBox.information(
                 self, "Восстановление", "Эта запись и так доступна в справочнике."
@@ -1818,6 +2533,10 @@ class DbManagerDialog(QDialog):
             QMessageBox.warning(self, "Удаление", "Не удалось прочитать запись.")
             return
 
+        self._delete_driver_record(driver)
+
+    def _delete_driver_record(self, driver: Dict[str, Any]) -> None:
+        """Мягкое удаление водителя (общий путь таблицы и дерева)."""
         driver_id = driver.get("id")
         driver_name = driver.get("full_name", "без имени")
 
@@ -1837,7 +2556,7 @@ class DbManagerDialog(QDialog):
         try:
             success = delete_driver(driver_id)
             if success:
-                self._load_drivers()
+                self._refresh_driver_views()
                 QMessageBox.information(
                     self, "Успех",
                     "Водитель убран из справочника.\n"
@@ -1868,6 +2587,10 @@ class DbManagerDialog(QDialog):
             )
             return
 
+        self._restore_driver_record(driver)
+
+    def _restore_driver_record(self, driver: Dict[str, Any]) -> None:
+        """Возвращает мягко удалённого водителя в справочник (таблица и дерево)."""
         if not driver.get("is_deleted"):
             QMessageBox.information(
                 self, "Восстановление", "Этот водитель и так доступен в справочнике."
@@ -1877,7 +2600,7 @@ class DbManagerDialog(QDialog):
         driver_id = driver.get("id")
         try:
             if restore_driver(driver_id):
-                self._load_drivers()
+                self._refresh_driver_views()
                 QMessageBox.information(
                     self, "Готово", "Водитель возвращён в справочник."
                 )
@@ -1891,3 +2614,65 @@ class DbManagerDialog(QDialog):
             QMessageBox.critical(
                 self, "Ошибка", f"Не удалось восстановить:\n\n{e}"
             )
+
+    # ─────────────────────────────────────────────────────────
+    # Карточка перевозчика выбранного водителя (вкладка «Водители»)
+    # ─────────────────────────────────────────────────────────
+
+    def _on_driver_selection_changed(self) -> None:
+        """Выбор строки в таблице водителей: кнопка карточки перевозчика."""
+        button = getattr(self, "btn_carrier_card", None)
+        if button is None:  # до создания кнопки (не должно случаться)
+            return
+        button.setEnabled(self._driver_row_record() is not None)
+
+    def _driver_row_record(self) -> Optional[Dict[str, Any]]:
+        """Запись водителя, выбранная в таблице вкладки «Водители»."""
+        table = getattr(self, "drivers_table", None)
+        row = -1 if table is None else table.currentRow()
+        if row < 0:
+            return None
+
+        item = table.item(row, DRIVER_COL_ID)
+        record = item.data(Qt.UserRole) if item else None
+        return record if isinstance(record, dict) else None
+
+    def _on_open_driver_carrier(self) -> None:
+        """
+        «🚛 Перевозчик…»: карточка перевозчика выбранного водителя.
+
+        Это тот же диалог организации, что и «✏ Редактировать» на вкладке
+        «Перевозчики»: правка идёт в справочник, а не в запись водителя.
+        У водителя без привязки открывать нечего — подсказываем, что делать.
+        """
+        self._log_ui_action("нажата кнопка «🚛 Перевозчик…»")
+
+        driver = self._driver_row_record()
+        if driver is None:
+            QMessageBox.warning(self, "Перевозчик", "Выберите водителя из списка.")
+            return
+
+        carrier_id = self._as_id(driver.get("default_carrier_id"))
+        if carrier_id is None:
+            QMessageBox.information(
+                self,
+                "Перевозчик",
+                "Водитель не привязан к перевозчику. Откройте "
+                "«✏ Редактировать» и выберите перевозчика.",
+            )
+            return
+
+        record = load_organization(carrier_id, is_carrier=True)
+        if not record:
+            logger.warning(
+                f"Перевозчик ID={carrier_id} из карточки водителя не найден"
+            )
+            QMessageBox.warning(
+                self,
+                "Перевозчик",
+                "Запись перевозчика не найдена в справочнике. "
+                "Выберите перевозчика в «✏ Редактировать».",
+            )
+            return
+
+        self._edit_org_record(record, True)

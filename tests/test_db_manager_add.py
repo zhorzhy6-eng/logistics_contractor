@@ -6,7 +6,8 @@
 Проверяется кнопка «➕ Добавить» на трёх вкладках:
   * диалог открывается в режиме создания (пустые поля, заголовок «➕ Новый …»);
   * по «Сохранить» вызывается save_organization / save_driver (+ ТС);
-  * запись появляется в таблице диалога и в базе;
+  * запись появляется в списке диалога и в базе (перевозчики — дерево,
+    заказчики и водители — таблицы);
   * редактирование существующих записей по-прежнему идёт через update_*;
   * кнопки созданы через ui/theme.py (никаких inline-стилей).
 
@@ -167,8 +168,9 @@ def test_add_carrier_creates_record(manager, isolated_db, monkeypatch):
     saved = isolated_db.get_all_organizations(is_carrier=True)
     assert [o["full_name"] for o in saved] == ["ООО «Новый Перевозчик»"]
     assert saved[0]["inn"] == "7701234567"
-    # запись появилась и в таблице диалога
-    assert manager.carriers_table.rowCount() == 1
+    # запись появилась и в дереве на вкладке «Перевозчики»
+    # (ШАГ «Дерево перевозчиков»: таблицу заменило дерево)
+    assert manager.carriers_tree.topLevelItemCount() == 1
 
 
 def test_add_customer_creates_record(manager, isolated_db, monkeypatch):
@@ -195,7 +197,7 @@ def test_add_org_cancel_creates_nothing(manager, isolated_db, monkeypatch):
     manager._on_add_org(is_carrier=True)
 
     assert isolated_db.get_all_organizations(is_carrier=True) == []
-    assert manager.carriers_table.rowCount() == 0
+    assert manager.carriers_tree.topLevelItemCount() == 0
 
 
 # ─────────────────────────────────────────────────────────────
@@ -272,7 +274,8 @@ def test_edit_org_still_updates(manager, isolated_db, monkeypatch):
 
     org_id = isolated_db.save_organization({"full_name": "ООО «Старое»"}, is_carrier=True)
     manager._load_organizations(is_carrier=True)
-    manager.carriers_table.selectRow(0)
+    # Перевозчики — дерево: выбираем верхний уровень (сам перевозчик).
+    manager.carriers_tree.setCurrentItem(manager.carriers_tree.topLevelItem(0))
 
     monkeypatch.setattr(EditCarrierDialog, "exec_", lambda self: QDialog.Accepted)
     monkeypatch.setattr(

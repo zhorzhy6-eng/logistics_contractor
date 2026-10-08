@@ -17,6 +17,7 @@ from db.database import (
     save_organization,
     find_organization_id,
     load_organization,
+    load_organization_by_id,
     save_contract_with_details,
     load_driver_vehicle,
 )
@@ -1583,6 +1584,11 @@ class MainWindow(QMainWindow):
             # Полное соответствие записи из справочника (см. комментарий
             # в _load_customer_from_db про частичное заполнение).
             self.driver_tab.clear()
+            # Справочник перевозчиков мог пополниться, пока окно открыто
+            # (перевозчиков заводят в «Менеджере базы» прямо во время
+            # работы): без перечитывания привязка водителя не нашлась бы
+            # в списке и вкладка показала бы «— не указан —».
+            self.driver_tab.fill_carriers()
             self.driver_tab.fill_data(driver)
             self.trailer_tab.clear()
 
@@ -1614,6 +1620,32 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     logger.exception(
                         f"Не удалось загрузить ТС водителя ID={driver_id}: {e}"
+                    )
+
+            # ── Подтянуть перевозчика водителя (если привязан) ──
+            # Раньше грузился только водитель, а перевозчик (даже если он
+            # есть в карточке) не подставлялся — приходилось выбирать вручную.
+            # Теперь привязка используется автоматически, и мягко удалённый
+            # перевозчик тоже (load_organization_by_id читает запись по ID).
+            carrier_id = driver.get("default_carrier_id")
+            if carrier_id:
+                try:
+                    carrier = load_organization_by_id(
+                        carrier_id, is_carrier=True
+                    )
+                    if carrier:
+                        self.carrier_tab.clear()
+                        self.carrier_tab.fill_data(carrier)
+                        logger.info(
+                            f"Перевозчик подтянут из водителя: ID={carrier_id}"
+                        )
+                        self._log_ui_action(
+                            "перевозчик подтянут из карточки водителя",
+                            id=carrier_id,
+                        )
+                except Exception as e:  # noqa: BLE001 — водителя грузим дальше
+                    logger.exception(
+                        f"Не удалось подтянуть перевозчика ID={carrier_id}: {e}"
                     )
 
             self.tabs.setCurrentWidget(self.driver_tab)
