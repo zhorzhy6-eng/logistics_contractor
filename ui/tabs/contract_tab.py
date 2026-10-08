@@ -329,6 +329,30 @@ class ContractTab(TabMixin, QWidget):
         self.payment_days.setText("10")
         price_layout.addRow("Срок оплаты (дней) *", self.payment_days)
 
+        # ── Предоплата (разбивка оплаты на предоплату и окончательный расчёт) ──
+        # Оператор вводит СУММУ в рублях, процент считается от итоговой
+        # стоимости (та же сумма, что печатается в договоре как «Итого»).
+        # При изменении стоимости сумма НЕ пересчитывается — она введена
+        # руками; пересчитывается только процент.
+        self.prepayment_amount = NoWheelDoubleSpinBox()
+        self.prepayment_amount.setRange(0, 100000000)
+        self.prepayment_amount.setDecimals(2)
+        self.prepayment_amount.setSuffix(" ₽")
+        self.prepayment_amount.setValue(0)
+        self.prepayment_amount.setToolTip(
+            "Сумма предоплаты в рублях. 0 — предоплата не предусмотрена."
+        )
+        price_layout.addRow("Предоплата, ₽", self.prepayment_amount)
+
+        self.prepayment_percent = QLineEdit()
+        self.prepayment_percent.setReadOnly(True)
+        self.prepayment_percent.setProperty("readonlyField", True)
+        self.prepayment_percent.setStyleSheet(theme.readonly_field_qss())
+        self.prepayment_percent.setToolTip(
+            "Процент предоплаты от итоговой стоимости (рассчитывается)"
+        )
+        price_layout.addRow("Предоплата (%)", self.prepayment_percent)
+
         layout.addWidget(price_group)
 
         # ── Особые условия ──
@@ -360,6 +384,8 @@ class ContractTab(TabMixin, QWidget):
         self.vat_rate.textChanged.connect(self._calculate_price)
         self.radio_with_vat.toggled.connect(self._calculate_price)
         self.radio_without_vat.toggled.connect(self._calculate_price)
+        # Сумма предоплаты меняет только процент (стоимость не трогает).
+        self.prepayment_amount.valueChanged.connect(self._calculate_price)
 
         # ── Автоподстановка ставки НДС ──
         self.carrier_type.currentIndexChanged.connect(self._on_carrier_type_changed)
@@ -376,6 +402,9 @@ class ContractTab(TabMixin, QWidget):
         self._salon_timer.setSingleShot(True)
         self._salon_timer.setInterval(SALON_LOOKUP_DELAY_MS)
         self._salon_timer.timeout.connect(self._lookup_salon_name)
+
+        # Процент предоплаты: до первого расчёта предоплаты нет.
+        self._prepayment_percent = 0.0
 
         self._generate_contract_number()
         self._calculate_price()
@@ -786,6 +815,30 @@ class ContractTab(TabMixin, QWidget):
         self.price_without_vat.setText(f"{price_without_vat:.2f} ₽")
         self.price_with_vat.setText(f"{price_with_vat:.2f} ₽")
 
+        self._calculate_prepayment_percent(price_with_vat)
+
+    def _calculate_prepayment_percent(self, total: float) -> None:
+        """
+        Считает процент предоплаты от итоговой стоимости (суммы с НДС).
+
+        База процента — та же сумма, которая печатается в договоре как итог
+        (price_with_vat); при её изменении пересчитывается ТОЛЬКО процент:
+        сумма предоплаты введена оператором в рублях и не трогается.
+        """
+        prepay = float(self.prepayment_amount.value() or 0)
+
+        if total > 0 and prepay > 0:
+            percent = round(prepay / total * 100, 2)
+            self._prepayment_percent = percent
+            self.prepayment_percent.setText(f"{percent:.2f} %")
+        elif prepay > 0 and total == 0:
+            # Стоимость ещё не введена — процент считать не от чего.
+            self._prepayment_percent = 0.0
+            self.prepayment_percent.setText("—")
+        else:
+            self._prepayment_percent = 0.0
+            self.prepayment_percent.setText("")
+
     # ─────────────────────────────────────────────────────────
     # Сбор данных
     # ─────────────────────────────────────────────────────────
@@ -831,6 +884,11 @@ class ContractTab(TabMixin, QWidget):
         loading_plan_time_to_str = self.loading_plan_time_to.time().toString("HH:mm")
         unloading_plan_date_iso = self.unloading_plan_date.date().toString("yyyy-MM-dd")
 
+        try:
+            prepay_amount = float(self.prepayment_amount.value() or 0)
+        except (ValueError, TypeError):
+            prepay_amount = 0.0
+
         return {
             "number": self.number.text().strip(),
             "date": self.date.date().toString("yyyy-MM-dd"),
@@ -852,6 +910,8 @@ class ContractTab(TabMixin, QWidget):
             "price_with_vat": price_with_vat,
             "vat_type": "with_vat" if self.radio_with_vat.isChecked() else "without_vat",
             "payment_days": payment_days,
+            "prepayment_amount": prepay_amount,
+            "prepayment_percent": getattr(self, "_prepayment_percent", 0.0),
             "special_conditions": self.special_conditions.toPlainText().strip(),
             "loading_plan_date": loading_plan_date_iso,
             "loading_plan_time_from": loading_plan_time_from_str,
@@ -948,6 +1008,18 @@ class ContractTab(TabMixin, QWidget):
         if payment_days:
             self.payment_days.setText(str(payment_days))
 
+        # ── Предоплата ──
+        # Ноль НЕ сбрасывает введённое значение: у распознавания 0 значит
+        # «предоплаты в документе не было», и стирать ею введённую сумму
+        # нельзя (как у сумм и срока оплаты в других вкладках).
+        if "prepayment_amount" in data:
+            try:
+                amount = float(data["prepayment_amount"] or 0)
+                if 0 <= amount <= 100000000:
+                    self.prepayment_amount.setValue(amount)
+            except (ValueError, TypeError):
+                pass
+
         if data.get("special_conditions"):
             self.special_conditions.setPlainText(data["special_conditions"])
 
@@ -1026,6 +1098,9 @@ class ContractTab(TabMixin, QWidget):
         # подстановка выглядела как ввод оператора (ШАГ FIX-6, часть C).
         self.price_input.setValue(0)
         self.payment_days.setText("10")
+        self.prepayment_amount.setValue(0)
+        self.prepayment_percent.setText("")
+        self._prepayment_percent = 0.0
         self.special_conditions.clear()
         self.radio_without_vat.setChecked(True)
 

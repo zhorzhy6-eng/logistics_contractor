@@ -160,6 +160,11 @@ def _needs_migration(cursor: sqlite3.Cursor) -> bool:
         # Наименование салона в точке маршрута (ШАГ FIX-6, часть F):
         # перед этой миграцией тоже делается резервная копия базы.
         ("contract_points", "name"),
+        # Предоплата (ШАГ «Предоплата»): сумма и процент по договору.
+        # Колонки общие для таблицы contracts, но заполняет их только
+        # Экспедиторство — остальные типы пишут 0 по умолчанию.
+        ("contracts", "prepayment_amount"),
+        ("contracts", "prepayment_percent"),
     )
     for table, column in required_columns:
         if not _column_exists(cursor, table, column):
@@ -481,6 +486,8 @@ def init_database() -> None:
             driver_id INTEGER,
             customer_id INTEGER,
             carrier_id INTEGER,
+            prepayment_amount REAL DEFAULT 0,
+            prepayment_percent REAL DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (driver_id) REFERENCES drivers(id) ON DELETE SET NULL,
             FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL,
@@ -608,6 +615,23 @@ def init_database() -> None:
             logger.info("Добавлена колонка contract_points.name")
         except Exception as e:
             logger.warning(f"Не удалось добавить contract_points.name: {e}")
+
+    # ── Миграция: contracts — предоплата (ШАГ «Предоплата») ──
+    # Сумма и процент предоплаты по договору. Процент хранится рядом с
+    # суммой, хотя его можно пересчитать: он показывает, каким оператор
+    # видел договор на момент сохранения (стоимость могли потом изменить).
+    # ALTER TABLE ADD COLUMN добавляет колонки к существующей таблице и НЕ
+    # трогает строки: у уже сохранённых договоров предоплата = 0.
+    for column, sql_type in (
+        ("prepayment_amount", "REAL DEFAULT 0"),
+        ("prepayment_percent", "REAL DEFAULT 0"),
+    ):
+        if not _column_exists(cursor, "contracts", column):
+            try:
+                cursor.execute(f"ALTER TABLE contracts ADD COLUMN {column} {sql_type}")
+                logger.info(f"Добавлена колонка contracts.{column}")
+            except Exception as e:
+                logger.warning(f"Не удалось добавить contracts.{column}: {e}")
 
     # ── Миграция: address_book — справочник салонов (ШАГ FIX-2.2) ──
     # Справочник адресов стал справочником МЕСТ ВЫГРУЗКИ: у записи появились
@@ -1700,6 +1724,13 @@ def save_vehicles(
 # ─────────────────────────────────────────────────────────────
 
 def save_contract(contract_data: Dict[str, Any], conn: Optional[sqlite3.Connection] = None) -> int:
+    """
+    Сохраняет шапку договора.
+
+    Предоплата (ШАГ «Предоплата»): пишутся сумма `prepayment_amount` и
+    процент `prepayment_percent`. Старые вызовы без этих ключей работают
+    как раньше — в колонки уходит 0.
+    """
     own_connection = conn is None
     if conn is None:
         conn = get_connection()
@@ -1708,8 +1739,9 @@ def save_contract(contract_data: Dict[str, Any], conn: Optional[sqlite3.Connecti
         INSERT INTO contracts (
             contract_number, contract_date, start_date, end_date,
             route, price_without_vat, vat_rate, price_with_vat,
-            currency, special_conditions, driver_id, customer_id, carrier_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            currency, special_conditions, driver_id, customer_id, carrier_id,
+            prepayment_amount, prepayment_percent
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         contract_data.get("number", ""),
         contract_data.get("date", ""),
@@ -1724,6 +1756,8 @@ def save_contract(contract_data: Dict[str, Any], conn: Optional[sqlite3.Connecti
         contract_data.get("driver_id", None),
         contract_data.get("customer_id", None),
         contract_data.get("carrier_id", None),
+        contract_data.get("prepayment_amount", 0) or 0,
+        contract_data.get("prepayment_percent", 0) or 0,
     ))
     contract_id = cursor.lastrowid
     if own_connection:

@@ -30,7 +30,7 @@ import re
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Mapping, Optional
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence
 
 from core.contract_data import ContractData
 from core.num_to_words import amount_to_words
@@ -889,6 +889,102 @@ class BaseContractGenerator(ABC):
     # ─────────────────────────────────────────────────────────
     # Нормализация значений
     # ─────────────────────────────────────────────────────────
+
+    @classmethod
+    def _split_payment(cls, total: float, prepayment: float) -> Dict[str, Any]:
+        """
+        Разбивает итоговую сумму договора на предоплату и остаток.
+
+        Оператор вводит СУММУ предоплаты в рублях (вкладка «Стоимость»),
+        а процент считается от итоговой стоимости — той самой, которая
+        печатается в договоре как «Итого» / «Итого с НДС». Поэтому база
+        процента у каждого типа своя, и передаёт её генератор.
+
+        Второй аргумент — сумма, а НЕ процент: при изменении стоимости
+        введённая руками сумма не пересчитывается, пересчитывается только
+        процент. Ровно это и делает метод при каждом рендере.
+
+        :param total: итоговая стоимость договора (база для процентов)
+        :param prepayment: сумма предоплаты в рублях (0 — предоплаты нет)
+        :return: словарь с восемью ключами для карты замен шаблона:
+
+            has_prepayment          — переключатель ветки шаблона;
+            prepayment_amount       — сумма предоплаты цифрами («63 000.00»);
+            prepayment_amount_words — та же сумма прописью;
+            prepayment_percent      — процент предоплаты («30»);
+            balance_amount          — остаток цифрами («147 000.00»);
+            balance_amount_words    — остаток прописью;
+            balance_percent         — процент остатка («70»).
+
+        Предоплаты нет (0, отрицательная, стоимость не задана, предоплата
+        больше стоимости) — все ключи пустые, а has_prepayment = False:
+        шаблон печатает старую формулировку пункта об оплате без изменений.
+        Случай «предоплата больше стоимости» ловит валидатор типа, но и
+        генератор не должен падать или печатать отрицательный остаток.
+        """
+        result: Dict[str, Any] = {
+            "has_prepayment": False,
+            "prepayment_amount": "",
+            "prepayment_amount_words": "",
+            "prepayment_percent": "0",
+            "balance_amount": "",
+            "balance_amount_words": "",
+            "balance_percent": "0",
+        }
+        try:
+            total = float(total or 0)
+            prepayment = float(prepayment or 0)
+        except (ValueError, TypeError):
+            # Мусор в поле — считаем, что предоплаты нет: генерация договора
+            # не должна падать из-за одного поля.
+            return result
+
+        if total <= 0 or prepayment <= 0:
+            return result
+
+        if prepayment > total:
+            # Страховка: валидатор ловит, но и генератор не падает.
+            logger.warning(
+                "Предоплата больше стоимости — разбивка оплаты не печатается"
+            )
+            return result
+
+        prepayment = round(prepayment, 2)
+        balance = round(total - prepayment, 2)
+        percent = round(prepayment / total * 100, 2)
+        balance_percent = round(100 - percent, 2)
+
+        def fmt_percent(value: float) -> str:
+            """«30» / «33.33» — без лишних нулей."""
+            return f"{value:.2f}".rstrip("0").rstrip(".")
+
+        result.update({
+            "has_prepayment": True,
+            "prepayment_amount": f"{prepayment:.2f}",
+            "prepayment_amount_words": cls._lower_first(amount_to_words(prepayment)),
+            "prepayment_percent": fmt_percent(percent),
+            "balance_amount": f"{balance:.2f}",
+            "balance_amount_words": cls._lower_first(amount_to_words(balance)),
+            "balance_percent": fmt_percent(balance_percent),
+        })
+        return result
+
+    @staticmethod
+    def _lower_first(text: str) -> str:
+        """
+        Первая буква — строчная.
+
+        `core.num_to_words.amount_to_words` печатает сумму с заглавной
+        («Шестьдесят три тысячи рублей 00 копеек»): в бланке сумма стоит
+        после двоеточия и заглавная уместна. В строке разбивки оплаты сумма
+        стоит в середине фразы («— 63 000.00 руб. (шестьдесят три тысячи
+        рублей 00 копеек) — предоплата…»), поэтому здесь она приводится
+        к строчной. Сама функция не меняется: на её выводе держатся бланки
+        перевозки, Формики, Логистикса и аренды.
+        """
+        if not text:
+            return text
+        return text[0].lower() + text[1:]
 
     @staticmethod
     def _single_line(value: Any) -> str:
