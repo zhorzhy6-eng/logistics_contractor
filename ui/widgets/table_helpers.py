@@ -17,7 +17,10 @@
   * ``save_column_widths`` / ``restore_column_widths`` — раскладка колонок
     в QSettings: оператор растянул границу — после перезапуска она та же;
   * ``install_tooltip_on_table`` — полный текст ячейки во всплывающей
-    подсказке (обрезанный адрес иначе не прочитать).
+    подсказке (обрезанный адрес иначе не прочитать);
+  * ``make_table_expandable`` — политика «растягивайся по вертикали»:
+    таблица точек забирает свободное место, длинный адрес переносится по
+    словам, а высота строки вмещает две строки текста.
 
 Ключ ``storage_key`` включает сохранение: таблица помнит свои ширины
 (запись идёт с паузой после того, как оператор отпустил границу) и
@@ -38,7 +41,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from PyQt5.QtCore import QObject, QPoint, QSettings, QTimer, Qt
-from PyQt5.QtWidgets import QHeaderView, QMenu, QTableWidget
+from PyQt5.QtWidgets import QHeaderView, QMenu, QSizePolicy, QTableWidget
 
 from ui.widgets.column_settings import (
     ColumnSpec,
@@ -72,6 +75,12 @@ RESIZE_MODES: Dict[str, Any] = {
 #: Пауза перед записью ширин: оператор тянет границу мыши, и сохранять
 #: размер на каждый пиксель незачем.
 AUTOSAVE_DELAY_MS = 500
+
+#: Высота строки таблицы точек: две строки текста. При шрифте интерфейса
+#: одна строка занимает около 19 пикселей, а строка таблицы по умолчанию
+#: (31 пиксель) вмещает только одну — второй строке перенесённого адреса
+#: места уже нет, и адрес обрезается.
+ROW_HEIGHT_TWO_LINES = 40
 
 #: Свойство таблицы, под которым она помнит свой ключ QSettings.
 STORAGE_KEY_PROPERTY = "columnWidthsStorageKey"
@@ -381,6 +390,35 @@ def setup_point_table(
     _apply_minimums(table, minimums)
 
 
+def make_table_expandable(table: QTableWidget) -> None:
+    """
+    Даёт таблице политику «растягивайся по вертикали».
+
+    Проблема: QTableWidget внутри QVBoxLayout по умолчанию получает
+    минимум высоты, а свободное место уходит в stretch ниже. Из-за
+    этого длинные адреса обрезаются, а вторая строка не видна.
+
+    Явный SizePolicy.Expanding по вертикали говорит layout-у:
+    «эта таблица хочет всё свободное место». Это то же поведение,
+    что у таблицы «Перевозимые авто» (ui/tabs/vehicles_tab.py).
+
+    Плюс:
+      * setWordWrap(True) — длинный текст переносится в ячейке,
+        а не обрезается многоточием;
+      * высота строки по умолчанию 40px — две строки текста видны.
+
+    Вызывается вкладками рядом с setup_point_table, а НЕ из него самого:
+    через setup_point_table идут ещё таблицы справочника салонов, менеджера
+    базы, импорта документов и — через setup_keyed_table — таблица
+    «Перевозимые авто», у которой строка должна остаться прежней высоты
+    (она эталон, см. `tests/test_ui_vehicles_tab.py`). Так же поступает
+    соседний помощник `install_tooltip_on_table`.
+    """
+    table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+    table.setWordWrap(True)
+    table.verticalHeader().setDefaultSectionSize(ROW_HEIGHT_TWO_LINES)
+
+
 def install_tooltip_on_table(table: QTableWidget) -> None:
     """
     Подсказка на ячейки таблицы: при наведении видно полный текст.
@@ -632,6 +670,7 @@ __all__ = [
     "MODE_FIXED",
     "RESIZE_MODES",
     "AUTOSAVE_DELAY_MS",
+    "ROW_HEIGHT_TWO_LINES",
     "STORAGE_KEY_PROPERTY",
     "COLUMN_SPECS_PROPERTY",
     "COLUMN_STORAGE_KEY_PROPERTY",
@@ -640,6 +679,7 @@ __all__ = [
     "WidthsSaver",
     "setup_point_table",
     "setup_keyed_table",
+    "make_table_expandable",
     "install_tooltip_on_table",
     "apply_cell_tooltip",
     "save_column_widths",

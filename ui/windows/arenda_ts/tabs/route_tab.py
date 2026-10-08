@@ -44,7 +44,7 @@ from ui.tabs.base_tab import TabMixin
 from ui.widgets import PasteableLineEdit, RecognitionPanel
 from ui.widgets.table_helpers import (
     MODE_CONTENTS, MODE_FIXED, MODE_STRETCH,
-    install_tooltip_on_table, setup_point_table,
+    install_tooltip_on_table, make_table_expandable, setup_point_table,
 )
 
 logger = logging.getLogger("ui.windows.arenda_ts.tabs.route_tab")
@@ -94,6 +94,13 @@ UNLOADING_COLUMN_MINIMUMS = {COL_NAME: 100, COL_DATE: 80}
 #: Ключи QSettings для раскладки колонок (у таблиц она своя).
 LOADINGS_WIDTHS_KEY = "ui/arenda_ts/loadings_columns"
 UNLOADINGS_WIDTHS_KEY = "ui/arenda_ts/unloadings_columns"
+
+#: Нижняя граница ВЫСОТЫ таблиц точек: шапка (около 21) плюс две полные
+#: строки по 40 пикселей. Было 90 — видно было полторы строки. Верхние
+#: границы у погрузки и выгрузки свои (180 и 160), ниже минимум не бывает.
+POINT_TABLE_MIN_HEIGHT = 120
+LOADING_TABLE_MAX_HEIGHT = 180
+UNLOADING_TABLE_MAX_HEIGHT = 160
 
 #: Пояснение к колонке «Дата» таблицы точек ВЫГРУЗКИ (шаг FIX-1-T2).
 #: В договор эта колонка не идёт: п. 3.3.2 бланка печатает планируемую дату
@@ -238,9 +245,13 @@ class RouteTab(TabMixin, QWidget):
             minimums=table_minimums,
         )
         install_tooltip_on_table(table)
+        make_table_expandable(table)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        table.setMinimumHeight(90)
-        table.setMaximumHeight(180 if width_for_time else 160)
+        table.setMinimumHeight(POINT_TABLE_MIN_HEIGHT)
+        table.setMaximumHeight(
+            LOADING_TABLE_MAX_HEIGHT if width_for_time
+            else UNLOADING_TABLE_MAX_HEIGHT
+        )
         # Колонка «Дата» есть и у погрузки, и у выгрузки, но пояснение нужно
         # только выгрузке: дата погрузки — это плановая дата подачи ТС, она
         # печатается в бланке (п. 3.2).

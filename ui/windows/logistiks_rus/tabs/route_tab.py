@@ -51,7 +51,7 @@ from ui.tabs.base_tab import TabMixin
 from ui.widgets import PasteableDateEdit, PasteableLineEdit, RecognitionPanel
 from ui.widgets.table_helpers import (
     MODE_CONTENTS, MODE_STRETCH,
-    install_tooltip_on_table, setup_point_table,
+    install_tooltip_on_table, make_table_expandable, setup_point_table,
 )
 
 logger = logging.getLogger("ui.windows.logistiks_rus.tabs.route_tab")
@@ -84,6 +84,12 @@ CONSIGNEES_COLUMNS_CONFIG = (
 #: Нижние границы ширин: адрес обрезался в узкой колонке.
 LOADING_ADDRESSES_COLUMN_MINIMUMS = {COL_LOADING_ADDRESS: 150}
 CONSIGNEES_COLUMN_MINIMUMS = {COL_NAME: 100, COL_ADDRESS: 150}
+
+#: Нижняя граница ВЫСОТЫ таблиц точек: шапка (около 21) плюс две полные
+#: строки по 40 пикселей. Было 80 — видно было полторы строки. Верхняя
+#: граница у таблиц своя (160): выше неё растягиваться некуда.
+POINT_TABLE_MIN_HEIGHT = 120
+POINT_TABLE_MAX_HEIGHT = 160
 
 #: Ключи QSettings для раскладки колонок (у таблиц она своя).
 LOADING_ADDRESSES_WIDTHS_KEY = "ui/logistiks_rus/loading_addresses_columns"
@@ -284,9 +290,10 @@ class RouteTab(TabMixin, QWidget):
             minimums=LOADING_ADDRESSES_COLUMN_MINIMUMS,
         )
         install_tooltip_on_table(table)
+        make_table_expandable(table)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        table.setMinimumHeight(80)
-        table.setMaximumHeight(160)
+        table.setMinimumHeight(POINT_TABLE_MIN_HEIGHT)
+        table.setMaximumHeight(POINT_TABLE_MAX_HEIGHT)
         for row in range(MIN_ROWS):
             self._init_loading_address_row(table, row)
         return table
@@ -302,9 +309,10 @@ class RouteTab(TabMixin, QWidget):
             minimums=CONSIGNEES_COLUMN_MINIMUMS,
         )
         install_tooltip_on_table(table)
+        make_table_expandable(table)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        table.setMinimumHeight(80)
-        table.setMaximumHeight(160)
+        table.setMinimumHeight(POINT_TABLE_MIN_HEIGHT)
+        table.setMaximumHeight(POINT_TABLE_MAX_HEIGHT)
         for row in range(MIN_ROWS):
             self._init_point_row(table, row)
         return table

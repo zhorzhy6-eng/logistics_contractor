@@ -35,10 +35,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
 from PyQt5.QtCore import QDate  # noqa: E402
+from PyQt5.QtGui import QFontMetrics  # noqa: E402
 from PyQt5.QtTest import QSignalSpy  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QApplication, QComboBox, QDoubleSpinBox, QFrame, QGroupBox, QHeaderView,
-    QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget,
+    QLineEdit, QMessageBox, QPushButton, QSizePolicy, QSpinBox, QTableWidget,
     QTableWidgetItem, QWidget,
 )
 
@@ -48,6 +49,7 @@ from ui.tabs.base_tab import TabMixin  # noqa: E402
 from ui.widgets import (  # noqa: E402
     PasteableLineEdit, PasteableTextEdit, RecognitionPanel,
 )
+from ui.widgets.table_helpers import ROW_HEIGHT_TWO_LINES  # noqa: E402
 from ui.windows.arenda_ts import data as data_module  # noqa: E402
 from ui.windows.arenda_ts.data import build  # noqa: E402
 from ui.windows.arenda_ts.tabs import (  # noqa: E402
@@ -1102,6 +1104,63 @@ def test_route_widths_persist_between_sessions(qt_app):
     assert second.unloadings_table.horizontalHeader().sectionSize(
         route_tab_module.COL_DATE
     ) == 90
+
+
+# ─────────────────────────────────────────────────────────────
+# Высота таблиц точек — растяжение по вертикали (ШАГ «Высота таблиц точек»)
+# ─────────────────────────────────────────────────────────────
+
+def test_point_tables_expand_vertically(qt_app):
+    """
+    Обе таблицы точек аренды растягиваются по вертикали.
+
+    Такое же поведение у таблицы «Перевозимые авто» Экспедиторства (эталон):
+    свободное место забирает таблица, а не stretch-распорка под ней.
+    """
+    tab = RouteTab()
+
+    for table in (tab.loadings_table, tab.unloadings_table):
+        assert table.sizePolicy().verticalPolicy() == QSizePolicy.Expanding
+        assert table.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
+
+
+def test_point_table_minimum_height_allows_two_rows(qt_app):
+    """
+    Минимум высоты — 120 пикселей, а не 90.
+
+    Шапка (около 21) и две полные строки по 40; верхние границы у таблиц
+    свои (180 у погрузки, 160 у выгрузки) и минимум не перебивают.
+    """
+    tab = RouteTab()
+
+    for table, maximum in (
+        (tab.loadings_table, route_tab_module.LOADING_TABLE_MAX_HEIGHT),
+        (tab.unloadings_table, route_tab_module.UNLOADING_TABLE_MAX_HEIGHT),
+    ):
+        assert table.minimumHeight() == route_tab_module.POINT_TABLE_MIN_HEIGHT
+        assert table.minimumHeight() >= 120
+        assert table.minimumHeight() <= maximum
+        assert table.maximumHeight() == maximum
+        assert table.verticalHeader().defaultSectionSize() == ROW_HEIGHT_TWO_LINES
+        assert table.wordWrap() is True
+
+
+def test_point_table_row_takes_two_lines_of_the_current_font(qt_app):
+    """
+    Строка таблицы точек вмещает две строки текущего шрифта.
+
+    Длинный адрес переносится по словам; при прежней высоте строки
+    (31 пиксель по умолчанию) вторая строка адреса обрезалась.
+    """
+    tab = RouteTab()
+
+    for table in (tab.loadings_table, tab.unloadings_table):
+        metrics = QFontMetrics(table.font())
+
+        assert (
+            table.verticalHeader().defaultSectionSize()
+            >= 2 * metrics.lineSpacing()
+        )
 
 
 def test_tooltip_on_long_address_keeps_unloading_date_tooltip(qt_app):

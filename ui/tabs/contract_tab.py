@@ -37,7 +37,7 @@ from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
 from ui.widgets.table_helpers import (
     MODE_CONTENTS, MODE_FIXED, MODE_STRETCH,
-    install_tooltip_on_table, setup_point_table,
+    install_tooltip_on_table, make_table_expandable, setup_point_table,
 )
 from ui import theme
 from ui.address_book_dialog import AddressBookDialog
@@ -69,6 +69,13 @@ POINT_COLUMNS_CONFIG = (
 
 #: Нижние границы ширин: «Дат» и «Вре» в шапке — это слишком узкие колонки.
 POINT_COLUMN_MINIMUMS = {COL_NAME: 100, COL_DATE: 80, COL_TIME: 70}
+
+#: Нижняя граница ВЫСОТЫ таблиц точек: 120 пикселей — это шапка (около 21)
+#: и две полные строки по 40 (ROW_HEIGHT_TWO_LINES). Было 80: видно было
+#: полторы строки, и адрес второй точки оператор не читал. Минимум не мешает
+#: растяжению: политика Expanding отдаёт таблице свободное место, а 120 —
+#: это пол, ниже которого она не сжимается.
+POINT_TABLE_MIN_HEIGHT = 120
 
 #: Ключи QSettings для раскладки колонок (у таблиц она своя).
 LOADINGS_WIDTHS_KEY = "ui/contract_tab/loadings_columns"
@@ -433,6 +440,10 @@ class ContractTab(TabMixin, QWidget):
         Обе таблицы вкладки (погрузки и выгрузки) устроены одинаково,
         отличается только ключ хранения раскладки, поэтому настройка живёт
         здесь, а не дублируется дважды (ШАГ FIX-5).
+
+        Высота: таблица растягивается по вертикали, длинный адрес
+        переносится по словам, строка вмещает две строки текста
+        (ШАГ «Высота таблиц точек»).
         """
         table = QTableWidget(1, len(POINT_HEADERS))
         table.setHorizontalHeaderLabels(list(POINT_HEADERS))
@@ -443,8 +454,9 @@ class ContractTab(TabMixin, QWidget):
             minimums=POINT_COLUMN_MINIMUMS,
         )
         install_tooltip_on_table(table)
+        make_table_expandable(table)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        table.setMinimumHeight(80)
+        table.setMinimumHeight(POINT_TABLE_MIN_HEIGHT)
         return table
 
     # ─────────────────────────────────────────────────────────

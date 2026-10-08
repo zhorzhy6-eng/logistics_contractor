@@ -10,7 +10,10 @@
   * минимальные ширины колонок;
   * подсказка с полным текстом ячейки (itemEntered + mouse tracking);
   * сохранение и восстановление ширин через QSettings;
-  * без ключа хранилища таблица ничего не пишет.
+  * без ключа хранилища таблица ничего не пишет;
+  * растяжение по вертикали (make_table_expandable): политика Expanding,
+    перенос по словам и высота строки в две строки текста — чтобы длинный
+    адрес точки маршрута был виден целиком.
 
 QSettings перенаправлен в tests/_tmp (см. `isolated_qsettings` в
 tests/conftest.py): рабочие настройки оператора не читаются и не пишутся.
@@ -25,15 +28,16 @@ import pytest  # noqa: E402
 
 pytest.importorskip("PyQt5")
 
+from PyQt5.QtGui import QFontMetrics  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
-    QApplication, QHeaderView, QTableWidget, QTableWidgetItem,
+    QApplication, QHeaderView, QSizePolicy, QTableWidget, QTableWidgetItem,
 )
 
 from ui.widgets.table_helpers import (  # noqa: E402
-    MODE_CONTENTS, MODE_FIXED, MODE_STRETCH, STORAGE_KEY_PROPERTY,
-    WidthsSaver, column_index, install_tooltip_on_table,
-    restore_column_widths, save_column_widths, setup_point_table,
-    stored_widths,
+    MODE_CONTENTS, MODE_FIXED, MODE_STRETCH, ROW_HEIGHT_TWO_LINES,
+    STORAGE_KEY_PROPERTY, WidthsSaver, column_index, install_tooltip_on_table,
+    make_table_expandable, restore_column_widths, save_column_widths,
+    setup_point_table, stored_widths,
 )
 
 #: Ключ тестового хранилища (боевые начинаются с «ui/»).
@@ -293,3 +297,65 @@ def test_width_change_is_saved_after_pause(table, qapp):
     table._widths_saver.flush()          # то же, что сделает таймер через 500 мс
 
     assert stored_widths(table, STORAGE_KEY)[2] == 140
+
+
+# ─────────────────────────────────────────────────────────────
+# Растяжение по вертикали (ШАГ «Высота таблиц точек»)
+# ─────────────────────────────────────────────────────────────
+
+def test_make_table_expandable_sets_vertical_policy(table):
+    """Таблица просит у layout всё свободное место по вертикали."""
+    make_table_expandable(table)
+
+    assert table.sizePolicy().verticalPolicy() == QSizePolicy.Expanding
+    assert table.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
+
+
+def test_make_table_expandable_enables_word_wrap(table):
+    """Длинный адрес переносится по словам, а не обрезается многоточием."""
+    make_table_expandable(table)
+
+    assert table.wordWrap() is True
+
+
+def test_make_table_expandable_sets_row_height(table):
+    """Высота строки — две строки текста: одной строки адресу мало."""
+    make_table_expandable(table)
+
+    assert table.verticalHeader().defaultSectionSize() == ROW_HEIGHT_TWO_LINES
+    assert table.verticalHeader().defaultSectionSize() >= 40
+
+
+def test_row_height_takes_two_lines_of_the_current_font(table):
+    """
+    Строка таблицы вмещает две строки ТЕКУЩЕГО шрифта.
+
+    Проверка не зависит от машины: высота строки таблицы сравнивается
+    с межстрочным интервалом её же шрифта. Прежние 40 пикселей при
+    системном шрифте крупнее 20 пунктов снова начали бы обрезать адрес.
+    """
+    make_table_expandable(table)
+
+    metrics = QFontMetrics(table.font())
+    assert table.verticalHeader().defaultSectionSize() >= 2 * metrics.lineSpacing()
+
+
+def test_setup_point_table_keeps_expansion(table):
+    """
+    Настройка колонок растяжение не сбивает.
+
+    Вкладки зовут make_table_expandable рядом с setup_point_table; порядок
+    вызовов не должен иметь значения — иначе высота строки вернулась бы
+    к прежней и вторая строка адреса снова обрезалась бы.
+    """
+    make_table_expandable(table)
+    setup_point_table(table, [
+        (0, MODE_CONTENTS, 0),
+        (1, MODE_STRETCH, 0),
+        (2, MODE_FIXED, 90),
+        (3, MODE_FIXED, 80),
+    ])
+
+    assert table.sizePolicy().verticalPolicy() == QSizePolicy.Expanding
+    assert table.wordWrap() is True
+    assert table.verticalHeader().defaultSectionSize() == ROW_HEIGHT_TWO_LINES

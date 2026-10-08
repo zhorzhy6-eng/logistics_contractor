@@ -12,7 +12,9 @@
     шапке), выбор сохраняется в QSettings и переживает пересоздание окна;
   * СКРЫТАЯ колонка не теряет данные: `get_data()` читает её значения;
   * ширины колонок заданы, все колонки Interactive (оператор тянет мышью),
-    подсказка показывает полный текст ячейки, раскладка сохраняется.
+    подсказка показывает полный текст ячейки, раскладка сохраняется;
+  * высота строки осталась прежней: таблица машин — эталон вида, настройка
+    таблиц точек (ШАГ «Высота таблиц точек») её не задевает.
 
 Данные синтетические, ПДн нет. QSettings перенаправлен фикстурой
 `isolated_qsettings` (tests/conftest.py), Qt — в offscreen-режиме.
@@ -27,7 +29,7 @@ import pytest  # noqa: E402
 pytest.importorskip("PyQt5")
 
 from PyQt5.QtWidgets import (  # noqa: E402
-    QApplication, QHeaderView, QTableWidgetItem,
+    QApplication, QHeaderView, QTableWidget, QTableWidgetItem,
 )
 
 from ui.tabs.vehicles_tab import (  # noqa: E402
@@ -215,6 +217,25 @@ def test_widths_persist(tab, qapp):
 
     restored = VehiclesTab()
     assert restored.table.horizontalHeader().sectionSize(restored.COL_BRAND) == 260
+
+
+def test_row_height_stays_qt_default(tab, qapp):
+    """
+    Высота строки таблицы машин — прежняя (ШАГ «Высота таблиц точек»).
+
+    Эта таблица — эталон вида: у неё высота берётся по свободному месту и
+    длинный текст в колонке «Выгрузка» виден целиком. Настройка таблиц
+    точек (make_table_expandable: строка в две строки текста) идёт через
+    setup_keyed_table → setup_point_table, поэтому проверка стоит здесь:
+    если помощник перенесут внутрь setup_point_table, строка этой таблицы
+    молча станет выше.
+    """
+    pristine = QTableWidget(0, 1)     # таблица, к которой помощник не применялся
+
+    assert (
+        tab.table.verticalHeader().defaultSectionSize()
+        == pristine.verticalHeader().defaultSectionSize()
+    )
 
 
 # ─────────────────────────────────────────────────────────────

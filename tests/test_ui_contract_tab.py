@@ -11,7 +11,9 @@
     адреса (поиск по адресу, LIKE/FTS);
   * ручной ввод наименования не затирается подстановкой;
   * кнопка «Из справочника» кладёт в строку И наименование, И адрес;
-  * собранные данные несут ключ `name` (его читает генератор договора).
+  * собранные данные несут ключ `name` (его читает генератор договора);
+  * таблицы точек растягиваются по вертикали, а строка вмещает две строки
+    текста — длинный адрес виден целиком (ШАГ «Высота таблиц точек»).
 
 База — временная (`isolated_db`), все данные синтетические, ПДн нет.
 """
@@ -25,14 +27,18 @@ import pytest
 
 pytest.importorskip("PyQt5")
 
-from PyQt5.QtWidgets import QApplication, QHeaderView  # noqa: E402
+from PyQt5.QtGui import QFontMetrics  # noqa: E402
+from PyQt5.QtWidgets import (  # noqa: E402
+    QApplication, QHeaderView, QSizePolicy,
+)
 
 from db.database import save_address  # noqa: E402
 from ui.tabs import contract_tab as tab_module  # noqa: E402
 from ui.tabs.contract_tab import (  # noqa: E402
-    COL_ADDRESS, COL_DATE, COL_NAME, COL_TIME,
+    COL_ADDRESS, COL_DATE, COL_NAME, COL_TIME, POINT_TABLE_MIN_HEIGHT,
     POINT_HEADERS, ContractTab,
 )
+from ui.widgets.table_helpers import ROW_HEIGHT_TWO_LINES  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -502,6 +508,54 @@ def test_tooltip_on_long_address(tab):
     table.itemEntered.emit(table.item(0, COL_ADDRESS))
 
     assert table.item(0, COL_ADDRESS).toolTip() == long_address
+
+
+# ─────────────────────────────────────────────────────────────
+# Высота таблиц точек — растяжение по вертикали (ШАГ «Высота таблиц точек»)
+# ─────────────────────────────────────────────────────────────
+
+def test_point_tables_expand_vertically(tab):
+    """
+    Обе таблицы точек растягиваются по вертикали.
+
+    Такое же поведение у таблицы «Перевозимые авто» (эталон): таблица
+    забирает свободное место, а не отдаёт его stretch-распорке ниже.
+    """
+    for table in (tab.loadings_table, tab.unloadings_table):
+        policy = table.sizePolicy()
+
+        assert policy.verticalPolicy() == QSizePolicy.Expanding
+        assert policy.horizontalPolicy() == QSizePolicy.Expanding
+
+
+def test_point_table_minimum_height_allows_two_rows(tab):
+    """
+    Минимум высоты — 120 пикселей, а не 80.
+
+    Восемьдесят пикселей — это шапка и полторы строки: адрес второй точки
+    оператор не видел. Сто двадцать — шапка и две полные строки по 40.
+    """
+    for table in (tab.loadings_table, tab.unloadings_table):
+        assert table.minimumHeight() == POINT_TABLE_MIN_HEIGHT
+        assert table.minimumHeight() >= 120
+        assert table.verticalHeader().defaultSectionSize() == ROW_HEIGHT_TWO_LINES
+        assert table.wordWrap() is True
+
+
+def test_point_table_row_takes_two_lines_of_the_current_font(tab):
+    """
+    Строка таблицы точек вмещает две строки текущего шрифта.
+
+    Длинный адрес переносится по словам; при прежней высоте строки
+    (31 пиксель по умолчанию) вторая строка адреса обрезалась.
+    """
+    for table in (tab.loadings_table, tab.unloadings_table):
+        metrics = QFontMetrics(table.font())
+
+        assert (
+            table.verticalHeader().defaultSectionSize()
+            >= 2 * metrics.lineSpacing()
+        )
 
 
 # ─────────────────────────────────────────────────────────────

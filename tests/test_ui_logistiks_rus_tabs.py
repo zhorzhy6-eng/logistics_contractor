@@ -25,10 +25,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
 from PyQt5.QtCore import QDate, QTime  # noqa: E402
+from PyQt5.QtGui import QFontMetrics  # noqa: E402
 from PyQt5.QtTest import QSignalSpy  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QApplication, QComboBox, QDoubleSpinBox, QFrame, QHeaderView, QLineEdit,
-    QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QWidget,
+    QMessageBox, QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem,
+    QWidget,
 )
 
 from core.contract_data import ContractData  # noqa: E402
@@ -37,7 +39,9 @@ from core.contracts.logistiks_rus.validator import (  # noqa: E402
 )
 from ui.tabs.base_tab import TabMixin  # noqa: E402
 from ui.widgets import RecognitionPanel  # noqa: E402
-from ui.widgets.table_helpers import stored_widths  # noqa: E402
+from ui.widgets.table_helpers import (  # noqa: E402
+    ROW_HEIGHT_TWO_LINES, stored_widths,
+)
 from ui.windows.logistiks_rus import data as data_module  # noqa: E402
 from ui.windows.logistiks_rus.data import build  # noqa: E402
 from ui.windows.logistiks_rus.tabs import (  # noqa: E402
@@ -956,6 +960,59 @@ def test_tooltip_on_long_consignee_address(qt_app):
     table.itemEntered.emit(table.item(0, route_tab_module.COL_ADDRESS))
 
     assert table.item(0, route_tab_module.COL_ADDRESS).toolTip() == long_address
+
+
+# ─────────────────────────────────────────────────────────────
+# Высота таблиц точек — растяжение по вертикали (ШАГ «Высота таблиц точек»)
+# ─────────────────────────────────────────────────────────────
+
+def test_point_tables_expand_vertically(qt_app):
+    """
+    Обе таблицы точек заявки растягиваются по вертикали.
+
+    Такое же поведение у таблицы «Перевозимые авто» Экспедиторства (эталон):
+    свободное место забирает таблица, а не stretch-распорка под ней.
+    """
+    tab = RouteTab()
+
+    for table in (tab.loading_addresses_table, tab.consignees_table):
+        assert table.sizePolicy().verticalPolicy() == QSizePolicy.Expanding
+        assert table.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
+
+
+def test_point_table_minimum_height_allows_two_rows(qt_app):
+    """
+    Минимум высоты — 120 пикселей, а не 80.
+
+    Шапка (около 21) и две полные строки по 40; было 80 — видно было
+    полторы строки, и вторая точка маршрута оставалась за краем.
+    """
+    tab = RouteTab()
+
+    for table in (tab.loading_addresses_table, tab.consignees_table):
+        assert table.minimumHeight() == route_tab_module.POINT_TABLE_MIN_HEIGHT
+        assert table.minimumHeight() >= 120
+        assert table.maximumHeight() == route_tab_module.POINT_TABLE_MAX_HEIGHT
+        assert table.verticalHeader().defaultSectionSize() == ROW_HEIGHT_TWO_LINES
+        assert table.wordWrap() is True
+
+
+def test_point_table_row_takes_two_lines_of_the_current_font(qt_app):
+    """
+    Строка таблицы точек вмещает две строки текущего шрифта.
+
+    Длинный адрес переносится по словам; при прежней высоте строки
+    (31 пиксель по умолчанию) вторая строка адреса обрезалась.
+    """
+    tab = RouteTab()
+
+    for table in (tab.loading_addresses_table, tab.consignees_table):
+        metrics = QFontMetrics(table.font())
+
+        assert (
+            table.verticalHeader().defaultSectionSize()
+            >= 2 * metrics.lineSpacing()
+        )
 
 
 def test_route_fill_over_limit_is_truncated(qt_app):
