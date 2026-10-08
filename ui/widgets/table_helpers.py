@@ -98,6 +98,22 @@ _TOOLTIPS_FLAG = "_table_tooltips_installed"
 _COLUMN_MENU_FLAG = "_table_column_menu_installed"
 
 
+def table_header(table: Any):
+    """
+    Горизонтальная шапка таблицы.
+
+    У `QTableWidget` она берётся через `horizontalHeader()`, у `QTreeWidget`
+    (дерево проверки импорта документов) — через `header()`. Всё остальное
+    у помощника общее: режимы колонок, ширины, минимумы, сохранение
+    раскладки в QSettings, поэтому шапка добывается одной функцией, а не
+    вторым набором помощников под дерево.
+    """
+    getter = getattr(table, "horizontalHeader", None)
+    if getter is not None:
+        return getter()
+    return table.header()
+
+
 def apply_minimum_widths(
     table: QTableWidget,
     minimums: Optional[Dict[Union[int, str], int]] = None,
@@ -359,7 +375,7 @@ def setup_point_table(
         колонки). Уже сохранённую ширину минимум не уменьшает, а слишком
         узкую — поднимает.
     """
-    header = table.horizontalHeader()
+    header = table_header(table)
 
     for column, mode, width in columns_config:
         index = column_index(table, column)
@@ -463,7 +479,7 @@ def save_column_widths(table: QTableWidget, storage_key: str) -> None:
     if not storage_key:
         return
 
-    header = table.horizontalHeader()
+    header = table_header(table)
     widths = [int(header.sectionSize(column)) for column in range(table.columnCount())]
     settings = _settings()
     settings.setValue(storage_key, widths)
@@ -491,7 +507,7 @@ def restore_column_widths(table: QTableWidget, storage_key: str) -> None:
     if not isinstance(stored, (list, tuple)):
         stored = [stored]
 
-    header = table.horizontalHeader()
+    header = table_header(table)
     restored = 0
     for column, value in enumerate(list(stored)[:table.columnCount()]):
         try:
@@ -578,7 +594,7 @@ def _apply_minimums(
     if not minimums:
         return
 
-    header = table.horizontalHeader()
+    header = table_header(table)
     floors: List[Tuple[int, int]] = []
     for column, min_width in minimums.items():
         index = column_index(table, column)
@@ -651,7 +667,7 @@ class WidthsSaver(QObject):
         self._timer.setInterval(AUTOSAVE_DELAY_MS)
         self._timer.timeout.connect(self.flush)
 
-        table.horizontalHeader().sectionResized.connect(self.schedule)
+        table_header(table).sectionResized.connect(self.schedule)
 
     def schedule(self, *_args: Any) -> None:
         """Откладывает запись: раскладку правят перетаскиванием."""
