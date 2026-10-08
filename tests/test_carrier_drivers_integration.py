@@ -239,11 +239,32 @@ def test_full_cycle_double_click_carrier_only(window, isolated_db, carrier_a):
     assert window.driver_tab.phone.text() == "+7 (000) 000-00-00"
 
 
-def test_full_cycle_unlinked_driver_shows_info(
-    window, isolated_db, info_recorder
+def test_full_cycle_unlinked_driver_opens_binding_dialog(
+    window, isolated_db, monkeypatch
 ):
-    """Водитель без привязки: в дереве его нет, а кнопка объясняет, что делать."""
+    """
+    Водитель без привязки: в дереве его нет, а кнопка открывает диалог.
+
+    ДОПОЛНЕНИЕ к шагу: «🚛 Перевозчик…» больше не показывает подсказку, а
+    открывает диалог «Перевозчик водителя» — привязать можно прямо там.
+    Диалог подменён: настоящий `exec_()` в offscreen ждал бы оператора.
+    """
+    import ui.db_manager_dialog as module
+
     _add_driver(isolated_db, GALUSHKIN_NAME)
+    seen = {}
+
+    class FakeDialog:
+        def __init__(self, driver, parent=None, on_load_carrier=None):
+            seen["driver"] = dict(driver)
+            seen["on_load_carrier"] = on_load_carrier
+            self.changed = False
+
+        def exec_(self):
+            seen["exec"] = True
+            return QDialog.Rejected
+
+    monkeypatch.setattr(module, "DriverCarrierDialog", FakeDialog)
 
     dialog = _manager(window)
     try:
@@ -253,8 +274,10 @@ def test_full_cycle_unlinked_driver_shows_info(
     finally:
         dialog.close()
 
-    assert len(info_recorder.texts) == 1
-    assert "не привязан" in info_recorder.texts[0]
+    assert seen["exec"] is True
+    assert seen["driver"]["full_name"] == GALUSHKIN_NAME
+    assert seen["driver"]["default_carrier_id"] is None
+    assert callable(seen["on_load_carrier"]), "форма получает обработчик загрузки"
 
 
 def test_full_cycle_soft_deleted_carrier_still_pulls(

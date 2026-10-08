@@ -63,7 +63,6 @@ from db.database import (
     get_all_organizations,
     delete_driver,
     delete_organization,
-    load_organization,
     restore_driver,
     restore_organization,
     save_driver,
@@ -81,6 +80,8 @@ from db.database import (
 )
 
 from ui import theme
+from ui.carrier_drivers_dialog import CarrierDriversDialog
+from ui.driver_carrier_dialog import DriverCarrierDialog
 from ui.tabs.driver_tab import CARRIER_NONE_TITLE
 from ui.widgets.table_helpers import (
     MODE_FIXED,
@@ -213,6 +214,12 @@ class EditCarrierDialog(QDialog):
         self.is_carrier = is_carrier
         # Режим создания: запись без id (пустой dict из _on_add_org)
         self.is_new = not org.get("id")
+        self.org_id = org.get("id")
+
+        #: Менялись ли привязки водителей (диалог «👤 Водители…»): по этому
+        #: признаку менеджер базы обновляет таблицы, даже если карточку
+        #: перевозчика оператор в итоге не сохранил.
+        self.drivers_changed = False
 
         if self.is_new:
             title = "➕ Новый перевозчик" if is_carrier else "➕ Новый заказчик"
@@ -298,6 +305,17 @@ class EditCarrierDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
+        # ── Водители перевозчика (ДОПОЛНЕНИЕ к шагу «Дерево перевозчиков») ──
+        # Кнопка есть только у СОХРАНЁННОГО перевозчика: у новой записи
+        # водителей ещё нет — привязывать не к кому.
+        self.btn_drivers = theme.secondary_button(
+            "👤 Водители…",
+            tooltip="Привязать водителей к перевозчику и отвязать лишних",
+        )
+        self.btn_drivers.clicked.connect(self._on_drivers)
+        self.btn_drivers.setVisible(bool(is_carrier) and not self.is_new)
+        btn_layout.addWidget(self.btn_drivers)
+
         btn_cancel = theme.secondary_button("Отмена")
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(btn_cancel)
@@ -310,6 +328,32 @@ class EditCarrierDialog(QDialog):
         btn_layout.addWidget(btn_save)
 
         layout.addLayout(btn_layout)
+
+    def _on_drivers(self) -> None:
+        """
+        «👤 Водители…»: привязка водителей к этому перевозчику.
+
+        Привязки пишутся в базу сразу (диалог их не откладывает), поэтому
+        после закрытия поднимаем флаг `drivers_changed` — менеджер базы по
+        нему перечитает таблицу водителей и дерево.
+        """
+        if not self.org_id:
+            QMessageBox.information(
+                self, "Водители", "Сначала сохраните перевозчика."
+            )
+            return
+
+        dialog = CarrierDriversDialog(
+            self.org_id,
+            parent=self,
+            carrier_name=self.full_name.text().strip(),
+        )
+        dialog.exec_()
+        if dialog.changed:
+            self.drivers_changed = True
+            logger.info(
+                f"Привязки водителей перевозчика изменены: ID={self.org_id}"
+            )
 
     def _on_save(self):
         if not self.full_name.text().strip():
@@ -2262,15 +2306,28 @@ class DbManagerDialog(QDialog):
         """Правка организации: диалог и сохранение (общий путь таблицы и дерева)."""
         org_id = org.get("id")
         dialog = EditCarrierDialog(org, is_carrier=is_carrier, parent=self)
+        accepted = dialog.exec_()
 
-        if dialog.exec_():
-            new_data = dialog.get_data()
-            ok = update_organization(org_id, new_data, is_carrier=is_carrier)
-            if ok:
-                self._load_organizations(is_carrier=is_carrier)
-                QMessageBox.information(self, "Готово", "Данные обновлены.")
+        # «👤 Водители…» пишет привязки в базу сразу: таблицы обновляем, даже
+        # если карточку перевозчика оператор в итоге не сохранил.
+        if getattr(dialog, "drivers_changed", False):
+            self._refresh_driver_views()
+
+        if not accepted:
+            return
+
+        new_data = dialog.get_data()
+        ok = update_organization(org_id, new_data, is_carrier=is_carrier)
+        if ok:
+            if is_carrier:
+                # Перевозчик — дерево, а у водителей в таблице колонка
+                # «Перевозчик»: обновляем оба представления.
+                self._refresh_driver_views()
             else:
-                QMessageBox.critical(self, "Ошибка", "Не удалось сохранить изменения.")
+                self._load_organizations(is_carrier=False)
+            QMessageBox.information(self, "Готово", "Данные обновлены.")
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось сохранить изменения.")
 
     def _on_edit_driver(self) -> None:
         table = self.drivers_table
@@ -2639,11 +2696,12 @@ class DbManagerDialog(QDialog):
 
     def _on_open_driver_carrier(self) -> None:
         """
-        «🚛 Перевозчик…»: карточка перевозчика выбранного водителя.
+        «🚛 Перевозчик…»: диалог привязки водителя к перевозчику.
 
-        Это тот же диалог организации, что и «✏ Редактировать» на вкладке
-        «Перевозчики»: правка идёт в справочник, а не в запись водителя.
-        У водителя без привязки открывать нечего — подсказываем, что делать.
+        Открывается список всех перевозчиков: текущий выделен и помечен «✓»,
+        там же можно привязать другого, отвязать (с подтверждением) и
+        загрузить перевозчика в форму. Вкладка «Водитель» диалогом не
+        трогается — он про привязку к справочнику.
         """
         self._log_ui_action("нажата кнопка «🚛 Перевозчик…»")
 
@@ -2652,27 +2710,13 @@ class DbManagerDialog(QDialog):
             QMessageBox.warning(self, "Перевозчик", "Выберите водителя из списка.")
             return
 
-        carrier_id = self._as_id(driver.get("default_carrier_id"))
-        if carrier_id is None:
-            QMessageBox.information(
-                self,
-                "Перевозчик",
-                "Водитель не привязан к перевозчику. Откройте "
-                "«✏ Редактировать» и выберите перевозчика.",
-            )
-            return
+        dialog = DriverCarrierDialog(
+            driver,
+            parent=self,
+            on_load_carrier=self.on_load_carrier,
+        )
+        dialog.exec_()
 
-        record = load_organization(carrier_id, is_carrier=True)
-        if not record:
-            logger.warning(
-                f"Перевозчик ID={carrier_id} из карточки водителя не найден"
-            )
-            QMessageBox.warning(
-                self,
-                "Перевозчик",
-                "Запись перевозчика не найдена в справочнике. "
-                "Выберите перевозчика в «✏ Редактировать».",
-            )
-            return
-
-        self._edit_org_record(record, True)
+        if dialog.changed:
+            # Привязка поменялась — обновляем таблицу водителей и дерево.
+            self._refresh_driver_views()
