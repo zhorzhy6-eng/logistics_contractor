@@ -12,7 +12,7 @@ from core.document_import_service import SCHEMA, Evidence, compare_fields
 from core.import_entities import (
     EMPTY_SOURCE, STATE_CONFLICT, STATE_OK, STATE_UNREADABLE,
     count_by_kind, detect_conflicts, entities_from_rows, entity_by_uid, field_from_row,
-    group_fields, parse_sources, progress_text, summary_text,
+    group_fields, parse_sources, progress_text, summary_text, unidentified_count,
 )
 
 # ── синтетические данные ──
@@ -312,6 +312,73 @@ def test_entity_by_uid_finds_entity():
     entities = group_fields([evidence("driver", {"full_name": FIO}, "passport_01.jpg")])
     assert entity_by_uid(entities, entities[0].uid) is entities[0]
     assert entity_by_uid(entities, "нет такой") is None
+
+
+# ─────────────────────────────────────────────────────────────
+# Опознание сущности и подсказки «проверить»
+# ─────────────────────────────────────────────────────────────
+
+def test_entity_without_name_is_marked_for_review():
+    """Опознать не удалось (только номер ВУ) — заглушка в ключе и пометка."""
+    entities = group_fields([
+        evidence("driver", {"license_number": "349327"}, "vu_01.jpg", method="OCR"),
+    ])
+    driver = entities[0]
+    assert driver.key == "unknown_1"
+    assert driver.needs_review
+    assert driver.display_name == f"{driver.heading} (опознать не удалось — проверьте вручную)"
+    assert driver.button_text == "Подтвердить водителя целиком"
+
+
+def test_note_when_identity_field_missing_in_one_source():
+    """Паспорт и ВУ связаны по ФИО, но даты рождения в ВУ нет — это подсказка."""
+    entities = group_fields([
+        evidence("driver", {"full_name": FIO, "birth_date": BIRTH,
+                            "passport_number": PASSPORT_NUMBER}, "passport_01.jpg"),
+        evidence("driver", {"full_name": FIO, "license_number": "349327"},
+                 "vu_01.jpg", method="OCR"),
+    ])
+    assert len(entities) == 1
+    driver = entities[0]
+    assert not driver.needs_review              # человек опознан по ФИО
+    assert len(driver.notes) == 1
+    note = driver.notes[0]
+    assert note.startswith("проверить:")
+    assert "Дата рождения" in note
+    assert "vu_01.jpg" in note
+    assert driver.review_text().startswith("⚠ проверить:")
+
+
+def test_no_review_notes_for_single_source():
+    """Один документ — предупреждать не о чем."""
+    entities = group_fields([
+        evidence("driver", {"full_name": FIO, "birth_date": BIRTH}, "passport_01.jpg"),
+    ])
+    assert entities[0].notes == []
+
+
+def test_no_review_notes_when_both_sources_have_the_field():
+    entities = group_fields([
+        evidence("driver", {"full_name": FIO, "birth_date": BIRTH}, "passport_01.jpg"),
+        evidence("driver", {"full_name": FIO, "birth_date": BIRTH}, "vu_01.jpg"),
+    ])
+    assert entities[0].notes == []
+
+
+def test_summary_mentions_unidentified_entities():
+    entities = group_fields([
+        evidence("driver", {"license_number": "349327"}, "vu_01.jpg", method="OCR"),
+        evidence("vehicles", {"vin": VIN}, "polupricep.docx"),
+    ])
+    assert unidentified_count(entities) == 1
+    text = summary_text(entities)
+    assert "Опознать не удалось — 1" in text
+
+
+def test_summary_has_no_extra_clause_when_everything_is_identified():
+    entities = group_fields([evidence("driver", {"full_name": FIO}, "passport_01.jpg")])
+    assert unidentified_count(entities) == 0
+    assert "Опознать не удалось" not in summary_text(entities)
 
 
 @pytest.mark.parametrize("section,heading", [

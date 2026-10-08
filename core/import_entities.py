@@ -82,6 +82,23 @@ SECTION_ACCUSATIVE = {
 # Порядок блоков в дереве: сначала люди, потом организации, потом техника.
 KIND_ORDER = {KIND_DRIVER: 0, KIND_ORGANIZATION: 1, KIND_VEHICLE: 2, KIND_CONTRACT: 3}
 
+#: Поля-опознаватели: по ним сущность связывается с человеком, организацией
+#: или машиной. Если такое поле есть не во всех источниках одной сущности,
+#: оператору нужна подсказка «проверить: …» — связали по тому, что совпало.
+IDENTITY_REVIEW_FIELDS = {
+    "driver": ("full_name", "birth_date"),
+    "carrier": ("inn", "full_name"),
+    "customer": ("inn", "full_name"),
+    "vehicles": ("vin", "plate_number"),
+    "tractor": ("plate_number",),
+    "trailer": ("plate_number",),
+    "contract": ("number",),
+}
+
+#: Слова, которыми помечается сущность без опознания (нет ни ФИО, ни VIN).
+UNKNOWN_KEY_PREFIX = "unknown_"
+UNIDENTIFIED_MARK = "опознать не удалось — проверьте вручную"
+
 KIND_COUNT_NAMES = OrderedDict((
     (KIND_DRIVER, "водителей"),
     (KIND_ORGANIZATION, "организаций"),
@@ -180,6 +197,8 @@ class Entity:
     section: str = ""
     identity: dict = field(default_factory=dict)
     group: int = 0
+    needs_review: bool = False
+    notes: List[str] = field(default_factory=list)
 
     # ── подписи ──
 
@@ -194,7 +213,9 @@ class Entity:
 
     @property
     def display_name(self) -> str:
-        return f"{self.heading}: {self.title}" if self.title else self.heading
+        if not self.title:
+            return f"{self.heading} ({UNIDENTIFIED_MARK})"
+        return f"{self.heading}: {self.title}"
 
     @property
     def button_text(self) -> str:
@@ -260,6 +281,32 @@ class Entity:
 
     def sources_text(self) -> str:
         return ", ".join(self.sources) if self.sources else "источники не определены"
+
+    def review_text(self) -> str:
+        """Подсказки «проверить» одной строкой (для подсказки узла дерева)."""
+        return " ".join("⚠ " + note for note in self.notes)
+
+
+def review_notes(section: str, values: Sequence[FieldValue]) -> List[str]:
+    """
+    «Проверить: …» — что мешает связать документы одной сущности.
+
+    Документы одного водителя связываются по ФИО (см. `same_entity`), поэтому
+    если дата рождения есть в паспорте, но её нет в ВУ, — это один человек,
+    но оператору нужно об этом сказать. Подсказка появляется только когда
+    поле РАЗОБРАНО хотя бы в одном источнике и отсутствует в другом: для
+    одного файла предупреждать не о чем, иначе дерево утонуло бы в «проверить».
+    """
+    notes = []
+    for name in IDENTITY_REVIEW_FIELDS.get(section, ()):
+        value = next((item for item in values if item.field == name), None)
+        if value is None or not value.value or len(value.variants) < 2:
+            continue
+        filled = {source for source, variant in value.variants if variant}
+        empty = {source for source, variant in value.variants if not variant}
+        if filled and empty:
+            notes.append(f"проверить: «{value.label}» не найден в {', '.join(sorted(empty))}")
+    return notes
 
 
 def kind_by_section(section: str) -> str:
@@ -377,9 +424,15 @@ def entities_from_rows(rows: Sequence) -> List[Entity]:
                     sources.append(source)
         title = _field_title(section, by_name)
         key = ", ".join(f"{name}={value}" for name, value in sorted(identity.items())) or title
+        needs_review = not title
+        if not key:
+            # Опознать не удалось (ни ФИО, ни ИНН, ни VIN) — ключ-заглушка,
+            # чтобы сущность всё равно была отдельной записью и её видел оператор.
+            key = f"{UNKNOWN_KEY_PREFIX}{group + 1}"
         entities.append(Entity(kind=kind_by_section(section), key=key, title=title,
                                fields=values, sources=sources, section=section,
-                               identity=identity, group=group))
+                               identity=identity, group=group, needs_review=needs_review,
+                               notes=review_notes(section, values)))
     return sorted(entities, key=lambda entity: (KIND_ORDER.get(entity.kind, 9), entity.group))
 
 
@@ -427,13 +480,22 @@ def conflict_count(entities: Sequence[Entity]) -> int:
     return sum(len(entity.conflict_fields()) for entity in entities)
 
 
+def unidentified_count(entities: Sequence[Entity]) -> int:
+    """Сколько сущностей не удалось опознать (нет ни ФИО, ни ИНН, ни VIN)."""
+    return sum(1 for entity in entities if entity.needs_review)
+
+
 def summary_text(entities: Sequence[Entity]) -> str:
     """«Найдено: водителей — 1, машин — 2, организаций — 1. Спорных полей — 1.»"""
     counts = count_by_kind(entities)
     parts = [f"{KIND_COUNT_NAMES[kind]} — {counts[kind]}"
              for kind in KIND_COUNT_NAMES if counts.get(kind)]
     found = ("Найдено: " + ", ".join(parts) + ".") if parts else "Сущности не найдены."
-    return f"{found} Спорных полей — {conflict_count(entities)}."
+    tail = f"Спорных полей — {conflict_count(entities)}."
+    unknown = unidentified_count(entities)
+    if unknown:
+        tail += f" Опознать не удалось — {unknown}."
+    return f"{found} {tail}"
 
 
 def progress_text(processed: int, total: int, entities: Optional[Sequence[Entity]] = None,
