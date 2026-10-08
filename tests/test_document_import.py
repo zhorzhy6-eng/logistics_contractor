@@ -6,7 +6,7 @@ from threading import Event
 from types import SimpleNamespace
 import pytest
 from core.document_import_service import (Evidence, compare_fields, extract_local_fields,
-    DocumentImportService, valid_value)
+    DocumentImportService, SCHEMA, valid_value)
 from core.document_reader import read_document, DocumentPage
 from core.import_cancel import ImportCancelled
 
@@ -616,34 +616,32 @@ def window(monkeypatch):
 
 
 def test_review_unchecked_and_manual_values_preserved(window):
-    from PyQt5.QtCore import Qt
     from ui.document_import_dialog import DocumentImportDialog
     window.driver_tab.phone.setText("manual phone")
     window.driver_tab.full_name.setText("manual name")
     dialog = DocumentImportDialog(window)
-    dialog.rows = compare_fields([Evidence("driver", {"full_name": "Test", "phone": "other"}, "a", "OCR")])
-    dialog.render()
-    assert all(dialog.table.item(i, 0).checkState() == Qt.Unchecked for i in range(len(dialog.rows)))
+    dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Test", "phone": "other"}, "a", "OCR")]))
+    driver = dialog.entities[0]
+    # Ничего не подтверждено заранее: сначала оператор проверяет по оригиналу.
+    assert not any(dialog.is_confirmed(driver.uid, value.field) for value in driver.fields)
     dialog.apply()
     assert window.driver_tab.full_name.text() == "manual name"
-    i = next(i for i, r in enumerate(dialog.rows) if r.key == "full_name")
-    dialog.table.item(i, 0).setCheckState(Qt.Checked)
+    dialog.set_field_confirmed(driver.uid, "full_name", True)
     dialog.apply()
     assert window.driver_tab.full_name.text() == "Test"
     assert window.driver_tab.phone.text() == "manual phone"
 
 
 def test_stale_form_requires_reconfirmation(window):
-    from PyQt5.QtCore import Qt
     from ui.document_import_dialog import DocumentImportDialog
     dialog = DocumentImportDialog(window)
-    dialog.rows = compare_fields([Evidence("driver", {"full_name": "Test"}, "a", "OCR")])
-    dialog.render()
-    dialog.table.item(0, 0).setCheckState(Qt.Checked)
+    dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Test"}, "a", "OCR")]))
+    driver = dialog.entities[0]
+    dialog.set_field_confirmed(driver.uid, "full_name", True)
     window.driver_tab.full_name.setText("new manual entry")
     dialog.apply()
     assert window.driver_tab.full_name.text() == "new manual entry"
-    assert dialog.table.item(0, 0).checkState() == Qt.Unchecked
+    assert not dialog.is_confirmed(driver.uid, "full_name")
 
 
 def test_new_vehicle_no_defaults_no_existing_row_loss(window):
@@ -702,33 +700,33 @@ def test_vision_error_does_not_stop_batch(monkeypatch):
 
 def test_unread_file_is_visible_and_cannot_be_applied(window):
     from ui.document_import_dialog import DocumentImportDialog
-    from PyQt5.QtCore import Qt
     dialog = DocumentImportDialog(window)
     dialog.task = SimpleNamespace(cancel=Event())
     dialog.receive("synthetic.png, стр. 1", [], "")
     dialog.finished()
-    assert dialog.table.rowCount() == 1
-    assert dialog.table.item(0, 7).text() == "не прочитано"
-    assert not dialog.table.item(0, 0).flags() & Qt.ItemIsUserCheckable
+    # Непрочитанный файл виден отдельным блоком, но подтверждать в нём нечего.
+    headings = [dialog.tree.topLevelItem(i).text(0)
+                for i in range(dialog.tree.topLevelItemCount())]
+    assert any("НЕ ПРОЧИТАННЫЕ ФАЙЛЫ" in text for text in headings)
+    assert dialog.entities == []
     before = window.driver_tab.get_data()
     dialog.apply()
     assert before == window.driver_tab.get_data()
     dialog.manual_section.setCurrentIndex(dialog.manual_section.findData("driver"))
     dialog.add_manual_group()
-    assert dialog.table.rowCount() > 1
+    assert [entity.section for entity in dialog.entities] == ["driver"]
+    assert len(dialog.entities[0].fields) == len(SCHEMA["driver"])
 
 
 def test_different_people_cannot_fill_one_driver(window):
     from ui.document_import_dialog import DocumentImportDialog
-    from PyQt5.QtCore import Qt
     dialog = DocumentImportDialog(window)
-    dialog.rows = compare_fields([
+    dialog.load_rows(compare_fields([
         Evidence("driver", {"full_name": "First Person"}, "a", "Текст"),
-        Evidence("driver", {"full_name": "Second Person", "phone": "123"}, "b", "Текст")])
-    dialog.render()
-    for i, row in enumerate(dialog.rows):
-        if row.group == 0 and row.key == "full_name" or row.group == 1 and row.key == "phone":
-            dialog.table.item(i, 0).setCheckState(Qt.Checked)
+        Evidence("driver", {"full_name": "Second Person", "phone": "123"}, "b", "Текст")]))
+    assert len(dialog.entities) == 2
+    for entity in dialog.entities:
+        dialog.set_entity_confirmed(entity.uid, True)
     before = window.driver_tab.get_data()
     dialog.apply()
     assert before == window.driver_tab.get_data()
@@ -736,21 +734,19 @@ def test_different_people_cannot_fill_one_driver(window):
 
 def test_repeated_confirmation_of_same_value_is_not_conflict(window, monkeypatch):
     from ui.document_import_dialog import DocumentImportDialog
-    from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QMessageBox
     asked = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: asked.append(args[1:3]))
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
     dialog = DocumentImportDialog(window)
-    dialog.rows = compare_fields([
+    dialog.load_rows(compare_fields([
         Evidence("carrier", {"director_name": "Тестов Тест"}, "a", "GigaChat Vision"),
-        Evidence("carrier", {"director_name": "Тестов Тест"}, "b", "Текст")])
-    dialog.render()
+        Evidence("carrier", {"director_name": "Тестов Тест"}, "b", "Текст")]))
+    assert len(dialog.entities) == 2
     checked = 0
-    for i, row in enumerate(dialog.rows):
-        if row.key == "director_name" and row.value:
-            dialog.table.item(i, 0).setCheckState(Qt.Checked)
-            checked += 1
+    for entity in dialog.entities:
+        dialog.set_entity_confirmed(entity.uid, True)
+        checked += 1 if dialog.is_confirmed(entity.uid, "director_name") else 0
     assert checked == 2  # одно и то же поле подтверждено дважды, значение совпадает
     dialog.apply()
     assert asked == []  # повторная галочка — не конфликт
@@ -759,20 +755,17 @@ def test_repeated_confirmation_of_same_value_is_not_conflict(window, monkeypatch
 
 def test_field_conflict_does_not_block_other_fields(window, monkeypatch):
     from ui.document_import_dialog import DocumentImportDialog
-    from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QMessageBox
     asked = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: asked.append(args[1:3]))
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
     dialog = DocumentImportDialog(window)
-    dialog.rows = compare_fields([
+    dialog.load_rows(compare_fields([
         Evidence("carrier", {"director_name": "Тестов Тест"}, "a", "GigaChat Vision"),
         Evidence("carrier", {"director_name": "Другой Человек", "phone": "+7 900 000-00-00"},
-                 "b", "Текст")])
-    dialog.render()
-    for i, row in enumerate(dialog.rows):
-        if row.key in {"director_name", "phone"} and row.value:
-            dialog.table.item(i, 0).setCheckState(Qt.Checked)
+                 "b", "Текст")]))
+    for entity in dialog.entities:
+        dialog.set_entity_confirmed(entity.uid, True)
     dialog.apply()
     # Конфликтное поле не перенесено, остальные поля — перенесены, диалог открыт.
     assert [title for title, _ in asked] == ["Конфликт значений"]
@@ -783,14 +776,14 @@ def test_field_conflict_does_not_block_other_fields(window, monkeypatch):
 
 
 def test_edit_resets_confirmation(window):
-    from ui.document_import_dialog import DocumentImportDialog
-    from PyQt5.QtCore import Qt
+    from ui.document_import_dialog import COL_VALUE, DocumentImportDialog
     dialog = DocumentImportDialog(window)
-    dialog.rows = compare_fields([Evidence("driver", {"full_name": "Test"}, "a", "OCR")])
-    dialog.render()
-    dialog.table.item(0, 0).setCheckState(Qt.Checked)
-    dialog.table.item(0, 4).setText("Edited")
-    assert dialog.table.item(0, 0).checkState() == Qt.Unchecked
+    dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Test"}, "a", "OCR")]))
+    driver = dialog.entities[0]
+    dialog.set_field_confirmed(driver.uid, "full_name", True)
+    dialog.field_item(driver.uid, "full_name").setText(COL_VALUE, "Edited")
+    assert not dialog.is_confirmed(driver.uid, "full_name")
+    assert driver.field_value("full_name").value == "Edited"
 
 
 def test_settings_import_is_opt_in(work_file):
@@ -809,7 +802,6 @@ def test_settings_import_is_opt_in(work_file):
 @pytest.mark.parametrize("confirm", [False, True])
 def test_unidentified_pages_require_explicit_link_confirmation(window, monkeypatch, confirm):
     from ui.document_import_dialog import DocumentImportDialog
-    from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QMessageBox
     asked = []
     def question(*args):
@@ -817,13 +809,11 @@ def test_unidentified_pages_require_explicit_link_confirmation(window, monkeypat
         return QMessageBox.Yes if confirm else QMessageBox.No
     monkeypatch.setattr(QMessageBox, "question", question)
     dialog = DocumentImportDialog(window)
-    dialog.rows = compare_fields([
+    dialog.load_rows(compare_fields([
         Evidence("driver", {"full_name": "Примеров Тест Тестович"}, "passport", "OCR"),
-        Evidence("driver", {"license_number": "123456"}, "license", "OCR")])
-    dialog.render()
-    for i, row in enumerate(dialog.rows):
-        if row.value:
-            dialog.table.item(i, 0).setCheckState(Qt.Checked)
+        Evidence("driver", {"license_number": "123456"}, "license", "OCR")]))
+    for entity in dialog.entities:
+        dialog.set_entity_confirmed(entity.uid, True)
     before = window.driver_tab.get_data()
     dialog.apply()
     assert asked
@@ -836,33 +826,37 @@ def test_unidentified_pages_require_explicit_link_confirmation(window, monkeypat
 
 def test_manual_group_button_keeps_target_and_does_not_crash(window):
     from ui.document_import_dialog import DocumentImportDialog
-    from PyQt5.QtCore import Qt
     dialog = DocumentImportDialog(window)
-    dialog.rows = compare_fields([Evidence("driver", {"full_name": "Тестовый Человек",
-                                                    "birth_date": "01.02.1990"}, "synthetic", "OCR")])
-    dialog.render()
-    original = next(i for i, r in enumerate(dialog.rows) if r.key == "full_name")
-    dialog.table.item(original, 0).setCheckState(Qt.Checked)
+    dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Тестовый Человек",
+                                                        "birth_date": "01.02.1990"}, "synthetic", "OCR")]))
+    driver = dialog.entities[0]
+    dialog.set_field_confirmed(driver.uid, "full_name", True)
     for _ in range(3):
         dialog.manual_button.click()
-        assert dialog.table.cellWidget(original, 2).currentData() == ("driver", None)
-        assert dialog.table.item(original, 0).checkState() == Qt.Checked
-    assert dialog.table.rowCount() > len(dialog.rows[:1])
+        assert dialog.destination(driver) == ("driver", None)
+        assert dialog.is_confirmed(driver.uid, "full_name")
+    assert len(dialog.entities) == 4          # водитель и три пустые группы
 
 
 def test_unread_or_invalid_date_cannot_be_confirmed_until_corrected(window):
-    from ui.document_import_dialog import DocumentImportDialog
-    from PyQt5.QtCore import Qt
+    from ui.document_import_dialog import COL_VALUE, DocumentImportDialog
     dialog = DocumentImportDialog(window)
-    dialog.rows = compare_fields([Evidence("driver", {"full_name": "Тестовый Человек"}, "synthetic", "OCR")])
-    dialog.render()
-    index = next(i for i, row in enumerate(dialog.rows) if row.key == "birth_date")
-    assert not dialog.table.item(index, 0).flags() & Qt.ItemIsUserCheckable
-    dialog.table.item(index, 4).setText("01.02.19?0")
-    assert not dialog.table.item(index, 0).flags() & Qt.ItemIsUserCheckable
-    dialog.table.item(index, 4).setText("01.02.1990 г.")
-    assert dialog.table.item(index, 0).flags() & Qt.ItemIsUserCheckable
-    dialog.table.item(index, 0).setCheckState(Qt.Checked)
+    dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Тестовый Человек"},
+                                              "synthetic", "OCR")]))
+    driver = dialog.entities[0]
+    assert not driver.field_value("birth_date").confirmable
+    dialog.set_field_confirmed(driver.uid, "birth_date", True)
+    assert not dialog.is_confirmed(driver.uid, "birth_date")
+
+    item = dialog.field_item(driver.uid, "birth_date")
+    item.setText(COL_VALUE, "01.02.19?0")
+    assert not driver.field_value("birth_date").confirmable
+    dialog.set_field_confirmed(driver.uid, "birth_date", True)
+    assert not dialog.is_confirmed(driver.uid, "birth_date")
+
+    item.setText(COL_VALUE, "01.02.1990 г.")
+    assert driver.field_value("birth_date").confirmable
+    dialog.set_field_confirmed(driver.uid, "birth_date", True)
     dialog.apply()
     assert window.driver_tab.get_data()["birth_date"] == "1990-02-01"
 

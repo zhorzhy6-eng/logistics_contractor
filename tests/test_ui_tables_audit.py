@@ -219,14 +219,15 @@ def test_db_manager_widths_persist(qapp, isolated_db):
 
 def test_document_import_table_has_widths(qapp, isolated_db, monkeypatch):
     """
-    Таблица проверки импорта: ширины заданы, последняя колонка не тянется.
+    Дерево проверки импорта: ширины заданы, последняя колонка не тянется.
 
     Диалогу нужно настоящее окно Экспедиторства: он снимает слепок формы
-    (`form_snapshot`), а не работает с заглушкой.
+    (`form_snapshot`), а не работает с заглушкой. Ширины дереву задаёт тот же
+    помощник, что и таблицам (`table_header` умеет и `QTreeWidget`).
     """
     from PyQt5.QtWidgets import QMessageBox
 
-    from ui.document_import_dialog import DocumentImportDialog
+    from ui.document_import_dialog import COL_WHAT, DocumentImportDialog, TREE_HEADERS
     from ui.main_window import MainWindow
 
     monkeypatch.setattr(MainWindow, "_init_gigachat_client", lambda *a, **k: False)
@@ -235,11 +236,13 @@ def test_document_import_table_has_widths(qapp, isolated_db, monkeypatch):
     window = MainWindow()
     dialog = DocumentImportDialog(window)
     try:
-        header = dialog.table.horizontalHeader()
+        header = dialog.tree.header()
 
-        assert dialog.table.columnCount() == 8
+        assert dialog.tree.columnCount() == len(TREE_HEADERS)
+        # У QTreeWidget шапка — один элемент, текст колонки берётся по номеру.
+        assert dialog.tree.headerItem().text(COL_WHAT) == TREE_HEADERS[COL_WHAT]
         assert header.stretchLastSection() is False
-        for column in range(dialog.table.columnCount()):
+        for column in range(dialog.tree.columnCount()):
             assert header.sectionResizeMode(column) == QHeaderView.Interactive
             assert header.sectionSize(column) > 0
     finally:
