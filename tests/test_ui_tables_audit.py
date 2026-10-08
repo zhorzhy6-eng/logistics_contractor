@@ -163,22 +163,29 @@ def test_address_book_table_is_interactive_and_stored(qapp, isolated_db):
 # ─────────────────────────────────────────────────────────────
 
 def test_db_manager_tables_have_widths_and_storage(qapp, isolated_db):
-    """Организации и водители: ширины, минимумы, подсказки, сохранение."""
+    """Справочники: ширины, минимумы, подсказки, сохранение.
+
+    Перевозчики — дерево (ШАГ «Дерево перевозчиков»), заказчики и водители —
+    таблицы; настраивает их один помощник, поэтому шапка берётся через
+    `table_header` (он умеет и QTreeWidget).
+    """
     from ui.db_manager_dialog import (
+        CARRIER_TREE_COLUMNS_CONFIG, CARRIER_TREE_WIDTHS_KEY, DbManagerDialog,
         DRIVERS_COLUMNS_CONFIG, DRIVERS_WIDTHS_KEY,
-        ORGANIZATIONS_COLUMNS_CONFIG, ORGANIZATIONS_WIDTHS_KEY, DbManagerDialog,
+        ORGANIZATIONS_COLUMNS_CONFIG, ORGANIZATIONS_WIDTHS_KEY,
     )
+    from ui.widgets.table_helpers import table_header
 
     dialog = DbManagerDialog()
     try:
         for table, config, key in (
-            (dialog.carriers_table, ORGANIZATIONS_COLUMNS_CONFIG,
-             ORGANIZATIONS_WIDTHS_KEY),
+            (dialog.carriers_tree, CARRIER_TREE_COLUMNS_CONFIG,
+             CARRIER_TREE_WIDTHS_KEY),
             (dialog.customers_table, ORGANIZATIONS_COLUMNS_CONFIG,
              ORGANIZATIONS_WIDTHS_KEY),
             (dialog.drivers_table, DRIVERS_COLUMNS_CONFIG, DRIVERS_WIDTHS_KEY),
         ):
-            header = table.horizontalHeader()
+            header = table_header(table)
 
             assert table.property(STORAGE_KEY_PROPERTY) == key
             assert getattr(table, "_table_tooltips_installed", False) is True

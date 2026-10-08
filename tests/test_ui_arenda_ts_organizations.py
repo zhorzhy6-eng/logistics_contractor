@@ -448,8 +448,9 @@ def test_picker_dialog_asks_for_the_right_table(qt_app, isolated_db):
     """
     Арендатор выбирает из customers, Арендодатель — из carriers.
 
-    Даже при одинаковых данных роли не смешиваются: таблицы разные, и запись
-    из одной не попадает в другую.
+    Даже при одинаковых данных роли не смешиваются: источники разные
+    (у заказчиков таблица, у перевозчиков дерево), и запись из одного
+    не попадает в другой.
     """
     contacts_module.save_organization_record(LESSEE, contacts_module.ROLE_LESSEE)
     contacts_module.save_organization_record(LESSOR, contacts_module.ROLE_LESSOR)
@@ -460,7 +461,11 @@ def test_picker_dialog_asks_for_the_right_table(qt_app, isolated_db):
     lessee_dialog._on_load_org(False)
 
     lessor_dialog = _open_dialog(OPEN_TAB_CARRIERS, picked.append)
-    lessor_dialog.carriers_table.setCurrentCell(0, 0)
+    # Перевозчики — дерево (ШАГ «Дерево перевозчиков»): выбираем верхний
+    # уровень, то есть самого перевозчика.
+    lessor_dialog.carriers_tree.setCurrentItem(
+        lessor_dialog.carriers_tree.topLevelItem(0)
+    )
     lessor_dialog._on_load_org(True)
 
     assert [record["full_name"] for record in picked] == [

@@ -1790,6 +1790,25 @@ def load_organization(
         conn.close()
 
 
+def load_organization_by_id(
+    org_id: int,
+    is_carrier: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Организация по ID — включая мягко удалённую.
+
+    Нужна, когда нужно подтянуть перевозчика по `default_carrier_id` из
+    карточки водителя. Скрытие удалённых делает не эта функция, а
+    списки/поиск.
+
+    Реализация — тонкая обёртка над `load_organization`: тело запроса уже
+    живёт там, второй копии SQL в модуле не нужно. Имя оставлено явным
+    («by_id»), потому что рядом есть `find_organization_id` — поиск по
+    РЕКВИЗИТАМ, а не по номеру записи.
+    """
+    return load_organization(org_id, is_carrier=is_carrier)
+
+
 def find_organization_id(
     org_data: Dict[str, Any],
     is_carrier: bool = False,
