@@ -42,9 +42,9 @@ from PyQt5.QtWidgets import (
     QWidget, QTableWidget, QTableWidgetItem, QHeaderView,
     QPushButton, QMessageBox, QLabel, QAbstractItemView,
     QLineEdit, QFormLayout, QScrollArea, QGroupBox, QTextEdit,
-    QCheckBox,
+    QCheckBox, QComboBox, QDateEdit,
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QDate
 
 from core import audit
 
@@ -63,9 +63,14 @@ from db.database import (
     update_organization,
     save_driver_vehicle,
     load_driver_vehicle,
+    get_driver_carriers,
+    link_driver_to_carrier,
+    unlink_driver_from_carrier,
+    set_default_carrier,
 )
 
 from ui import theme
+from ui.tabs.driver_tab import CARRIER_NONE_TITLE
 from ui.widgets.table_helpers import (
     MODE_FIXED,
     install_tooltip_on_table, setup_point_table,
@@ -103,20 +108,38 @@ ORGANIZATIONS_COLUMNS_CONFIG = (
 
 DRIVERS_COLUMNS_CONFIG = (
     (0, MODE_FIXED, 60),    # ID
-    (1, MODE_FIXED, 320),   # ФИО
-    (2, MODE_FIXED, 140),   # Дата рождения
-    (3, MODE_FIXED, 180),   # Паспорт
-    (4, MODE_FIXED, 200),   # Телефон
-    (5, MODE_FIXED, 90),    # Статус
+    (1, MODE_FIXED, 260),   # ФИО
+    (2, MODE_FIXED, 220),   # Перевозчик (ШАГ «Привязка водителей…»)
+    (3, MODE_FIXED, 110),   # Дата рождения
+    (4, MODE_FIXED, 140),   # Паспорт
+    (5, MODE_FIXED, 140),   # Телефон
+    (6, MODE_FIXED, 90),    # Статус
 )
 
 #: Нижние границы ширин: ниже них колонка не сжимается.
 ORGANIZATIONS_COLUMN_MINIMUMS = {0: 50, 1: 160, 2: 100, 3: 90, 4: 140, 5: 80}
-DRIVERS_COLUMN_MINIMUMS = {0: 50, 1: 160, 2: 110, 3: 140, 4: 140, 5: 80}
+DRIVERS_COLUMN_MINIMUMS = {0: 50, 1: 160, 2: 160, 3: 110, 4: 140, 5: 140, 6: 80}
+
+#: Номера колонок таблицы водителей: читаются по имени, чтобы добавление
+#: колонки «Перевозчик» не сдвинуло молча остальные (ШАГ «Привязка
+#: водителей к перевозчикам»).
+DRIVER_COL_ID = 0
+DRIVER_COL_NAME = 1
+DRIVER_COL_CARRIER = 2
+DRIVER_COL_BIRTH_DATE = 3
+DRIVER_COL_PASSPORT = 4
+DRIVER_COL_PHONE = 5
+DRIVER_COL_STATUS = 6
+
+#: Пункт фильтра «Все перевозчики» и «без перевозчика» в списке водителей.
+CARRIER_FILTER_ALL = -1
+CARRIER_FILTER_NONE = 0
 
 #: Ключи QSettings для раскладки таблиц справочника.
 ORGANIZATIONS_WIDTHS_KEY = "ui/db_manager/organizations"
 DRIVERS_WIDTHS_KEY = "ui/db_manager/drivers"
+#: Раскладка таблицы истории работы водителя у перевозчиков.
+DRIVER_CARRIERS_WIDTHS_KEY = "ui/db_manager/driver_carriers"
 
 
 # ═════════════════════════════════════════════════════════════
@@ -325,6 +348,36 @@ class EditDriverDialog(QDialog):
         f2.addRow("Телефон:", self.phone)
         content_layout.addWidget(g2)
 
+        # ── Перевозчик (ШАГ «Привязка водителей к перевозчикам») ──
+        # Основной перевозчик водителя: тот же справочник carriers, что
+        # и вкладка «Водитель» Экспедиторства. История работы (у каких
+        # перевозчиков и с каких дат) — отдельным диалогом.
+        g_carrier = QGroupBox("Перевозчик")
+        f_carrier = QFormLayout(g_carrier)
+
+        self.carrier_combo = QComboBox()
+        self.carrier_combo.setToolTip(
+            "Основной перевозчик водителя. Подставляется в договор,\n"
+            "если в нём перевозчик не выбран."
+        )
+        self._fill_carriers()
+        self._select_carrier(driver.get("default_carrier_id"))
+        f_carrier.addRow("Перевозчик:", self.carrier_combo)
+
+        self.btn_carrier_history = theme.secondary_button(
+            "📅 История работы у перевозчиков…",
+            tooltip="У каких перевозчиков водитель работал и с каких дат",
+        )
+        self.btn_carrier_history.clicked.connect(self._on_carrier_history)
+        if self.is_new:
+            # Историю несут записи driver_carriers, а у новой записи id ещё нет.
+            self.btn_carrier_history.setEnabled(False)
+            self.btn_carrier_history.setToolTip(
+                "История появится после сохранения водителя"
+            )
+        f_carrier.addRow("", self.btn_carrier_history)
+        content_layout.addWidget(g_carrier)
+
         # ── Тягач ──
         g3 = QGroupBox("Тягач")
         f3 = QFormLayout(g3)
@@ -375,6 +428,68 @@ class EditDriverDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+    def _fill_carriers(self) -> int:
+        """
+        Заполняет список перевозчиков диалога.
+
+        Первый пункт — «— не указан —» (itemData = None). Справочник может
+        быть недоступен (нет базы) — тогда список остаётся с одним пунктом,
+        диалог этим не ломается.
+
+        :return: сколько перевозчиков в списке (без пункта «не указан»).
+        """
+        carriers: List[Dict[str, Any]] = []
+        try:
+            carriers = get_all_organizations(is_carrier=True)
+        except Exception as e:  # noqa: BLE001 — без справочника диалог живёт
+            logger.warning(f"Справочник перевозчиков недоступен: {e}")
+
+        self.carrier_combo.clear()
+        self.carrier_combo.addItem(CARRIER_NONE_TITLE, None)
+        for org in carriers:
+            name = str(org.get("full_name") or org.get("short_name") or "").strip()
+            if not name:
+                continue
+            self.carrier_combo.addItem(name, org.get("id"))
+
+        return self.carrier_combo.count() - 1
+
+    def _select_carrier(self, carrier_id: Any) -> bool:
+        """Выбирает перевозчика по id; нет такого — «— не указан —»."""
+        if carrier_id is None or carrier_id == "":
+            self.carrier_combo.setCurrentIndex(0)
+            return False
+
+        try:
+            wanted = int(carrier_id)
+        except (TypeError, ValueError):
+            self.carrier_combo.setCurrentIndex(0)
+            return False
+
+        for index in range(self.carrier_combo.count()):
+            if self.carrier_combo.itemData(index) == wanted:
+                self.carrier_combo.setCurrentIndex(index)
+                return True
+
+        logger.debug(
+            f"Водитель ID={self.driver_id}: перевозчик ID={wanted} "
+            f"в справочнике не найден — оставлено «{CARRIER_NONE_TITLE}»"
+        )
+        self.carrier_combo.setCurrentIndex(0)
+        return False
+
+    def _on_carrier_history(self):
+        """Кнопка «История работы у перевозчиков…»."""
+        if not self.driver_id:
+            QMessageBox.information(
+                self, "История работы",
+                "Сначала сохраните водителя — история привязана к записи.",
+            )
+            return
+
+        dialog = DriverCarrierHistoryDialog(self.driver_id, parent=self)
+        dialog.exec_()
+
     def _load_driver_vehicle(self):
         """Подгружает тягач/прицеп из БД."""
         if not self.driver_id:
@@ -416,6 +531,8 @@ class EditDriverDialog(QDialog):
             "license_expiry_date": self.license_expiry_date.text().strip(),
             "license_categories": self.license_categories.text().strip(),
             "phone": self.phone.text().strip(),
+            # Основной перевозчик: None — «— не указан —».
+            "default_carrier_id": self.carrier_combo.currentData(),
         }
 
     def get_vehicle_data(self) -> Dict[str, Any]:
@@ -429,6 +546,224 @@ class EditDriverDialog(QDialog):
             "trailer_color": self.trailer_color.text().strip(),
             "trailer_year": self.trailer_year.text().strip(),
         }
+
+
+class DriverCarrierHistoryDialog(QDialog):
+    """
+    История работы водителя у перевозчиков (ШАГ «Привязка водителей
+    к перевозчикам»).
+
+    Таблица — записи driver_carriers: перевозчик, дата начала, дата
+    окончания. Пустая дата окончания значит «работает сейчас».
+    «Добавить» открывает связь с выбранным перевозчиком (и закрывает
+    прежнюю активную), «Закрыть связь» ставит дату окончания у выбранной
+    строки. Записи не удаляются: это история.
+    """
+
+    #: Колонки таблицы истории.
+    COLUMNS = ("Перевозчик", "Начало", "Окончание")
+
+    def __init__(self, driver_id: int, parent=None):
+        super().__init__(parent)
+
+        self.driver_id = driver_id
+        self.setWindowTitle("📅 История работы у перевозчиков")
+        self.setMinimumSize(640, 460)
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(theme.page_title(
+            "История работы у перевозчиков",
+            "💡 Пустое «Окончание» — водитель работает у этого перевозчика сейчас\n"
+            "💡 «Добавить» открывает новую связь и закрывает прежнюю активную\n"
+            "💡 «Закрыть связь» ставит дату окончания — запись остаётся историей",
+        ))
+
+        # ── Добавление связи ──
+        add_layout = QHBoxLayout()
+        add_layout.addWidget(QLabel("Перевозчик:"))
+
+        self.carrier_combo = QComboBox()
+        self.carrier_combo.setMinimumWidth(240)
+        add_layout.addWidget(self.carrier_combo, 1)
+
+        add_layout.addWidget(QLabel("Начало:"))
+        self.started_edit = QDateEdit()
+        self.started_edit.setDisplayFormat("dd.MM.yyyy")
+        self.started_edit.setCalendarPopup(True)
+        self.started_edit.setDate(QDate.currentDate())
+        add_layout.addWidget(self.started_edit)
+
+        self.btn_add = theme.primary_button(
+            "➕ Добавить", tooltip="Открыть связь с выбранным перевозчиком",
+        )
+        self.btn_add.clicked.connect(self._on_add)
+        add_layout.addWidget(self.btn_add)
+
+        layout.addLayout(add_layout)
+
+        # ── Таблица истории ──
+        self.table = QTableWidget()
+        self.table.setColumnCount(len(self.COLUMNS))
+        self.table.setHorizontalHeaderLabels(list(self.COLUMNS))
+        self.table.setSortingEnabled(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setWordWrap(False)
+        setup_point_table(
+            self.table,
+            (
+                (0, MODE_FIXED, 300),   # Перевозчик
+                (1, MODE_FIXED, 120),   # Начало
+                (2, MODE_FIXED, 120),   # Окончание
+            ),
+            storage_key=DRIVER_CARRIERS_WIDTHS_KEY,
+            minimums={0: 160, 1: 100, 2: 100},
+        )
+        install_tooltip_on_table(self.table)
+        layout.addWidget(self.table)
+
+        # ── Кнопки ──
+        buttons = QHBoxLayout()
+
+        self.btn_close_link = theme.danger_button(
+            "🔗 Закрыть связь",
+            tooltip="Поставить дату окончания у выбранной записи",
+        )
+        self.btn_close_link.clicked.connect(self._on_close_link)
+        buttons.addWidget(self.btn_close_link)
+
+        buttons.addStretch()
+
+        self.btn_close = theme.secondary_button("Закрыть")
+        self.btn_close.clicked.connect(self.accept)
+        buttons.addWidget(self.btn_close)
+
+        layout.addLayout(buttons)
+
+        self._load_carriers()
+        self.reload()
+
+    # ─────────────────────────────────────────────────────────
+    # Данные
+    # ─────────────────────────────────────────────────────────
+
+    def _load_carriers(self) -> None:
+        """Список перевозчиков для добавления связи."""
+        try:
+            carriers = get_all_organizations(is_carrier=True)
+        except Exception as e:  # noqa: BLE001 — без справочника список пуст
+            logger.warning(f"Справочник перевозчиков недоступен: {e}")
+            carriers = []
+
+        self.carrier_combo.clear()
+        for org in carriers:
+            name = str(org.get("full_name") or org.get("short_name") or "").strip()
+            if not name:
+                continue
+            self.carrier_combo.addItem(name, org.get("id"))
+
+    def reload(self) -> None:
+        """Перечитывает историю работы водителя из базы."""
+        try:
+            links = get_driver_carriers(self.driver_id)
+        except Exception as e:  # noqa: BLE001 — пустая история лучше падения
+            logger.error(f"Ошибка чтения истории работы водителя: {e}")
+            links = []
+
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+
+        for link in links:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+
+            item_carrier = QTableWidgetItem(
+                str(link.get("carrier_name") or link.get("carrier_short_name") or "")
+            )
+            item_carrier.setData(Qt.UserRole, link)
+            self.table.setItem(row, 0, item_carrier)
+
+            started = str(link.get("started_at") or "")
+            finished = str(link.get("ended_at") or "")
+            self.table.setItem(row, 1, QTableWidgetItem(started))
+            # Пустое окончание — активная связь: пишем словами, чтобы
+            # пустая ячейка не читалась как «данных нет».
+            item_finish = QTableWidgetItem(finished or "работает")
+            if not finished:
+                item_finish.setForeground(theme.deleted_row_color())
+            self.table.setItem(row, 2, item_finish)
+
+        self.table.setSortingEnabled(True)
+        logger.debug(
+            f"История работы водителя ID={self.driver_id}: записей {len(links)}"
+        )
+
+    def _current_link(self) -> Optional[Dict[str, Any]]:
+        """Выбранная запись истории (None — строка не выбрана)."""
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        item = self.table.item(row, 0)
+        return item.data(Qt.UserRole) if item else None
+
+    # ─────────────────────────────────────────────────────────
+    # Действия
+    # ─────────────────────────────────────────────────────────
+
+    def _on_add(self):
+        """Открывает связь с выбранным перевозчиком."""
+        carrier_id = self.carrier_combo.currentData()
+        if not carrier_id:
+            QMessageBox.warning(
+                self, "Добавление связи",
+                "Выберите перевозчика в списке. Если справочник пуст — "
+                "заведите перевозчика на вкладке «🚛 Перевозчики».",
+            )
+            return
+
+        started = self.started_edit.date().toString("yyyy-MM-dd")
+        link_id = link_driver_to_carrier(
+            self.driver_id, int(carrier_id), started_at=started
+        )
+        if not link_id:
+            QMessageBox.critical(self, "Ошибка", "Не удалось добавить связь.")
+            return
+
+        self.reload()
+        logger.info(
+            f"Связь водителя ID={self.driver_id} с перевозчиком "
+            f"ID={carrier_id} добавлена"
+        )
+
+    def _on_close_link(self):
+        """Ставит дату окончания у выбранной связи."""
+        link = self._current_link()
+        if not link:
+            QMessageBox.warning(self, "Закрытие связи", "Выберите запись в списке.")
+            return
+
+        if str(link.get("ended_at") or ""):
+            QMessageBox.information(
+                self, "Закрытие связи", "У этой записи уже стоит дата окончания."
+            )
+            return
+
+        carrier_id = link.get("carrier_id")
+        if carrier_id in (None, ""):
+            QMessageBox.warning(
+                self, "Закрытие связи", "В записи нет перевозчика."
+            )
+            return
+        if not unlink_driver_from_carrier(self.driver_id, int(carrier_id)):
+            QMessageBox.critical(self, "Ошибка", "Не удалось закрыть связь.")
+            return
+
+        self.reload()
+        logger.info(
+            f"Связь водителя ID={self.driver_id} с перевозчиком "
+            f"ID={carrier_id} закрыта"
+        )
 
 
 # ═════════════════════════════════════════════════════════════
@@ -680,10 +1015,32 @@ class DbManagerDialog(QDialog):
         search_layout.addWidget(btn_reset)
         layout.addLayout(search_layout)
 
+        # ── Фильтр по перевозчику (ШАГ «Привязка водителей
+        # к перевозчикам») ──
+        # Показывает водителей, закреплённых за одним перевозчиком, либо
+        # тех, у кого привязки нет вовсе.
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Перевозчик:"))
+        self.carrier_filter = QComboBox()
+        self.carrier_filter.setMinimumWidth(280)
+        self.carrier_filter.setToolTip(
+            "Показать водителей, закреплённых за перевозчиком.\n"
+            "«— без перевозчика —» — те, у кого привязки нет."
+        )
+        filter_layout.addWidget(self.carrier_filter, 1)
+        filter_layout.addStretch()
+        layout.addLayout(filter_layout)
+
+        self._fill_carrier_filter()
+        self.carrier_filter.currentIndexChanged.connect(
+            self._on_carrier_filter_changed
+        )
+
         table = QTableWidget()
-        table.setColumnCount(6)
+        table.setColumnCount(len(DRIVERS_COLUMNS_CONFIG))
         table.setHorizontalHeaderLabels(
-            ["ID", "ФИО", "Дата рождения", "Паспорт", "Телефон", "Статус"]
+            ["ID", "ФИО", "Перевозчик", "Дата рождения",
+             "Паспорт", "Телефон", "Статус"]
         )
 
         # ── СОРТИРОВКА ──
@@ -840,7 +1197,12 @@ class DbManagerDialog(QDialog):
 
     def _load_drivers(self) -> None:
         try:
-            drivers = get_all_drivers(include_deleted=self._show_deleted())
+            # with_carrier_name=True: в колонке «Перевозчик» показывается
+            # основной перевозчик водителя (drivers.default_carrier_id).
+            drivers = get_all_drivers(
+                include_deleted=self._show_deleted(),
+                with_carrier_name=True,
+            )
         except Exception as e:
             logger.error(f"Ошибка загрузки водителей: {e}")
             drivers = []
@@ -854,30 +1216,168 @@ class DbManagerDialog(QDialog):
         table.setSortingEnabled(False)
         table.setRowCount(0)
 
+        shown = 0
         for driver in drivers:
+            if not self._driver_matches_carrier_filter(driver):
+                continue
+
             row = table.rowCount()
             table.insertRow(row)
+            shown += 1
 
             item_id = QTableWidgetItem(str(driver.get("id", "")))
             item_id.setData(Qt.UserRole, driver)
-            table.setItem(row, 0, item_id)
+            table.setItem(row, DRIVER_COL_ID, item_id)
 
-            table.setItem(row, 1, QTableWidgetItem(driver.get("full_name", "")))
-            table.setItem(row, 2, QTableWidgetItem(driver.get("birth_date", "")))
+            table.setItem(
+                row, DRIVER_COL_NAME, QTableWidgetItem(driver.get("full_name", ""))
+            )
+
+            # ── Перевозчик ──
+            # В колонке — основной перевозчик; если у водителя есть ещё
+            # история работы, об этом говорит подсказка «+N».
+            item_carrier = QTableWidgetItem(str(driver.get("carrier_name") or ""))
+            tooltip = self._carrier_tooltip(driver)
+            if tooltip:
+                item_carrier.setToolTip(tooltip)
+            table.setItem(row, DRIVER_COL_CARRIER, item_carrier)
+
+            table.setItem(
+                row, DRIVER_COL_BIRTH_DATE,
+                QTableWidgetItem(driver.get("birth_date", "")),
+            )
 
             passport = f"{driver.get('passport_series', '')} {driver.get('passport_number', '')}".strip()
-            table.setItem(row, 3, QTableWidgetItem(passport))
-            table.setItem(row, 4, QTableWidgetItem(driver.get("phone", "")))
+            table.setItem(row, DRIVER_COL_PASSPORT, QTableWidgetItem(passport))
+            table.setItem(
+                row, DRIVER_COL_PHONE, QTableWidgetItem(driver.get("phone", ""))
+            )
 
             status = "удалён" if driver.get("is_deleted") else ""
             item_status = QTableWidgetItem(status)
             if status:
                 item_status.setForeground(theme.deleted_row_color())
-            table.setItem(row, 5, item_status)
+            table.setItem(row, DRIVER_COL_STATUS, item_status)
 
         # Включаем сортировку и сортируем по «ФИО» (колонка 1)
         table.setSortingEnabled(True)
-        table.sortByColumn(1, Qt.AscendingOrder)
+        table.sortByColumn(DRIVER_COL_NAME, Qt.AscendingOrder)
+
+        if shown != len(drivers):
+            logger.debug(
+                f"Фильтр по перевозчику: показано {shown} из {len(drivers)}"
+            )
+
+    def _carrier_tooltip(self, driver: Dict[str, Any]) -> str:
+        """
+        Подсказка колонки «Перевозчик».
+
+        Если у водителя есть ещё перевозчики в истории работы, к названию
+        основного добавляется «+N» (сколько ещё) — иначе о них не узнать.
+        """
+        name = str(driver.get("carrier_name") or "").strip()
+        extra = self._extra_carriers(driver)
+
+        if not extra:
+            return name
+        return (
+            f"{name or 'Основной не указан'}\n"
+            f"Ещё перевозчиков в истории: +{len(extra)} "
+            f"({', '.join(extra)})"
+        )
+
+    def _extra_carriers(self, driver: Dict[str, Any]) -> List[str]:
+        """Названия перевозчиков из истории водителя, кроме основного."""
+        driver_id = driver.get("id")
+        if not driver_id:
+            return []
+
+        try:
+            links = get_driver_carriers(driver_id)
+        except Exception as e:  # noqa: BLE001 — подсказка не должна ломать список
+            logger.warning(f"История работы водителя недоступна: {e}")
+            return []
+
+        main_id = driver.get("default_carrier_id")
+        names: List[str] = []
+        for link in links:
+            if main_id and link.get("carrier_id") == main_id:
+                continue
+            name = str(
+                link.get("carrier_name") or link.get("carrier_short_name") or ""
+            ).strip()
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    # ─────────────────────────────────────────────────────────
+    # Фильтр водителей по перевозчику
+    # ─────────────────────────────────────────────────────────
+
+    def _fill_carrier_filter(self) -> int:
+        """
+        Заполняет фильтр «Перевозчик:» списком справочника.
+
+        Пункты: «Все» (по умолчанию), «— без перевозчика —» и каждый
+        перевозчик. itemData: ALL / NONE / id перевозчика.
+
+        :return: сколько перевозчиков в фильтре.
+        """
+        try:
+            carriers = get_all_organizations(is_carrier=True)
+        except Exception as e:  # noqa: BLE001 — без справочника фильтр пуст
+            logger.warning(f"Справочник перевозчиков недоступен: {e}")
+            carriers = []
+
+        self.carrier_filter.blockSignals(True)
+        self.carrier_filter.clear()
+        self.carrier_filter.addItem("Все", CARRIER_FILTER_ALL)
+        self.carrier_filter.addItem("— без перевозчика —", CARRIER_FILTER_NONE)
+
+        for org in carriers:
+            name = str(org.get("full_name") or org.get("short_name") or "").strip()
+            if not name:
+                continue
+            self.carrier_filter.addItem(name, org.get("id"))
+
+        self.carrier_filter.blockSignals(False)
+        return self.carrier_filter.count() - 2
+
+    def _carrier_filter_value(self) -> int:
+        """Выбранное значение фильтра (ALL по умолчанию)."""
+        try:
+            value = self.carrier_filter.currentData()
+        except AttributeError:  # фильтр ещё не создан (не должно случаться)
+            return CARRIER_FILTER_ALL
+        return CARRIER_FILTER_ALL if value is None else int(value)
+
+    def _driver_matches_carrier_filter(self, driver: Dict[str, Any]) -> bool:
+        """Проходит ли водитель через фильтр «Перевозчик:»."""
+        value = self._carrier_filter_value()
+        if value == CARRIER_FILTER_ALL:
+            return True
+
+        carrier_id = driver.get("default_carrier_id")
+        if value == CARRIER_FILTER_NONE:
+            return carrier_id in (None, "", 0)
+
+        try:
+            return int(carrier_id) == value
+        except (TypeError, ValueError):
+            return False
+
+    def _on_carrier_filter_changed(self):
+        """Смена фильтра: перечитываем список водителей."""
+        value = self._carrier_filter_value()
+        self._log_ui_action("фильтр водителей по перевозчику", carrier_id=value)
+
+        # Список перевозчиков мог пополниться — обновляем фильтр, сохранив
+        # выбор (он уже выбран пользователем).
+        if self._driver_search_text.strip():
+            self._apply_driver_filter()
+        else:
+            self._load_drivers()
+
 
     # ─────────────────────────────────────────────────────────
     # Фильтрация
@@ -940,6 +1440,7 @@ class DbManagerDialog(QDialog):
                 text,
                 limit=self.SEARCH_LIMIT,
                 include_deleted=self._show_deleted(),
+                with_carrier_name=True,
             )
         except Exception as e:
             logger.error(f"Ошибка поиска водителей: {e}")
@@ -1125,6 +1626,12 @@ class DbManagerDialog(QDialog):
             driver_data = dialog.get_driver_data()
             ok1 = update_driver(driver_id, driver_data)
 
+            # Привязка к перевозчику: значение записано update_driver,
+            # а запись истории (driver_carriers) заводит set_default_carrier —
+            # если активной связи с этим перевозчиком ещё нет.
+            if driver_data.get("default_carrier_id"):
+                set_default_carrier(driver_id, driver_data.get("default_carrier_id"))
+
             vehicle_data = dialog.get_vehicle_data()
             ok2 = save_driver_vehicle(driver_id, vehicle_data)
 
@@ -1183,7 +1690,13 @@ class DbManagerDialog(QDialog):
                 logger.info("Создание водителя отменено пользователем")
                 return
 
-            driver_id = save_driver(dialog.get_driver_data())
+            driver_data = dialog.get_driver_data()
+            driver_id = save_driver(driver_data)
+
+            # Основной перевозчик выбран — заводим и запись истории
+            # (driver_carriers); само значение уже записано save_driver.
+            if driver_data.get("default_carrier_id"):
+                set_default_carrier(driver_id, driver_data.get("default_carrier_id"))
 
             vehicle_data = dialog.get_vehicle_data()
             if any(str(value or "").strip() for value in vehicle_data.values()):
