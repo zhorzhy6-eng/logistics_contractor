@@ -95,7 +95,13 @@ TRAILER = {"brand_model": "YANGMINDA", "plate_number": "71ABF18",
 
 
 def base_payload(carrier_type: str, vat_rate: str, vat_rate_num) -> dict:
-    carrier = dict(ORGANIZATION, entity_type="ООО")
+    # Сторона должна быть непротиворечивой: вид перевозчика из вкладки
+    # («ИП с НДС») и его `entity_type` из справочника говорят об одном и том
+    # же. Иначе генератор выбирает ветвь п. 1.2 не по бланку, а по факту —
+    # и в сценариях ИП печаталось бы «Индивидуальный предприниматель
+    # ООО «Ромашка»» (см. `_resolve_carrier_type` в генераторе перевозки).
+    entity_type = "ИП" if carrier_type.startswith("ИП") else "ООО"
+    carrier = dict(ORGANIZATION, entity_type=entity_type)
     customer = dict(ORGANIZATION)
     customer["full_name"] = "ООО «Заказчик»"
     customer["short_name"] = "ООО «Заказчик»"

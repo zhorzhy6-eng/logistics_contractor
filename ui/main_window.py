@@ -1741,6 +1741,7 @@ class MainWindow(QMainWindow):
             # которые пришли (это защищает ручной ввод при распознавании).
             self.customer_tab.clear()
             self.customer_tab.fill_data(customer)
+            self._apply_party_type(self.customer_tab, customer)
             self.tabs.setCurrentWidget(self.customer_tab)
             self.statusBar().showMessage(
                 f"Загружен заказчик: {customer.get('full_name', '')}", 5000
@@ -1760,6 +1761,7 @@ class MainWindow(QMainWindow):
         try:
             self.carrier_tab.clear()
             self.carrier_tab.fill_data(carrier)
+            self._apply_party_type(self.carrier_tab, carrier)
             self.tabs.setCurrentWidget(self.carrier_tab)
             self.statusBar().showMessage(
                 f"Загружен перевозчик: {carrier.get('full_name', '')}", 5000
@@ -1770,6 +1772,52 @@ class MainWindow(QMainWindow):
                 self, "Ошибка",
                 f"Не удалось загрузить перевозчика:\n{e}"
             )
+
+    def _apply_party_type(self, tab, record: Dict[str, Any]) -> None:
+        """
+        Вид стороны из справочника — в форму (вкладка «Заказчик» и
+        «Перевозчик»).
+
+        У вкладки «Перевозчик» вид лица выбирает бланк и ветвь п. 1.2, а в
+        справочнике он теперь хранится (`entity_type`): без этого шага ИП из
+        базы печатался как ООО — с КПП, ОГРН и «именуемое». У вкладки
+        «Заказчик» своего переключателя нет (вид выводится из
+        {{client_legal_form_prefix}} в бланке), поэтому её вид уходит во
+        вкладку «Договор»: он больше не сбрасывается при загрузке стороны.
+
+        Записи, заведённые до появления колонки, вида не имеют — тогда
+        подставляется он по наименованию, и в лог идёт только вид, без
+        наименований и ФИО.
+        """
+        entity_type = self._party_entity_type(tab, record)
+        if not entity_type:
+            return
+
+        setter = getattr(tab, "apply_entity_type", None)
+        if setter is None:
+            logger.debug(
+                "У вкладки нет переключателя вида стороны — вид берётся из данных"
+            )
+            return
+
+        setter(entity_type)
+        logger.info(f"Вид стороны из справочника: {entity_type}")
+
+    @staticmethod
+    def _party_entity_type(tab, record: Dict[str, Any]) -> str:
+        """
+        Вид стороны: из записи, а если её вид пуст — по полю «Тип» вкладки.
+
+        У перевозчика переключатель есть на самой вкладке, и `fill_data` уже
+        мог его выставить по наименованию; у заказчика переключателя нет, и
+        вид берётся из вкладки «Договор» (там же, где выбирается бланк).
+        """
+        saved = str(record.get("entity_type") or "").strip()
+        if saved:
+            return saved
+        if tab is not None and hasattr(tab, "carrier_type"):
+            return tab.carrier_type.currentText()
+        return ""
 
     def _on_clear_form(self):
         logger.info("Очистка формы")

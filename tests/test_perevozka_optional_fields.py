@@ -127,6 +127,17 @@ def _document_text(doc) -> str:
     return "\n".join(parts)
 
 
+def _clause_1_2(doc) -> str:
+    """Текст п. 1.2: абзац сразу за строкой-меткой «1.2. Перевозчик:»."""
+    texts = [p.text for p in doc.paragraphs]
+    for index, text in enumerate(texts):
+        if text.strip().startswith("1.2. Перевозчик:"):
+            for following in texts[index + 1:]:
+                if following.strip():
+                    return _flatten(following)
+    raise AssertionError("абзац «1.2. Перевозчик:» не найден")
+
+
 def _cell_lines(doc, first_line: str):
     """Непустые строки ячейки, которая начинается с заданной строки."""
     for table in doc.tables:
@@ -263,13 +274,19 @@ def test_carrier_email_absent_not_printed(generator, work_file):
 
 
 def test_carrier_kpp_absent_not_printed(generator, work_file):
-    """Пустой КПП перевозчика — нет ни строки «КПП», ни «КПП ,»."""
+    """
+    Пустой КПП ПЕРЕВОЗЧИКА — в его ветви нет ни «КПП», ни «КПП ,».
+
+    Проверяется п. 1.2, а не весь документ: у ЗАКАЗЧИКА КПП заполнен, и в
+    п. 1.1 он печатается законно (ШАГ «Полные стороны + склонение с учётом
+    рода» добавил реквизиты и в п. 1.1).
+    """
     carrier = dict(OOO_CARRIER, kpp="")
     doc = _render(generator, work_file("opt_carrier_kpp.docx"), carrier=carrier)
 
-    text = _document_text(doc)
-    assert "КПП" not in text
-    assert "КПП ," not in text
+    clause = _clause_1_2(doc)
+    assert "КПП" not in clause
+    assert "КПП ," not in _document_text(doc)
 
 
 def test_carrier_actual_address_absent_not_printed(generator, work_file):

@@ -176,6 +176,16 @@ def _needs_migration(cursor: sqlite3.Cursor) -> bool:
         # Экспедиторство — остальные типы пишут 0 по умолчанию.
         ("contracts", "prepayment_amount"),
         ("contracts", "prepayment_percent"),
+        # Вид лица и основание полномочий стороны (ШАГ «Полные стороны +
+        # склонение с учётом рода»). В форме редактирования заказчика и
+        # перевозчика поля были, а в базе их не было: после сохранения вид
+        # («ООО» / «ИП с НДС» / «ИП без НДС») и основание («Устава» /
+        # «свидетельства о государственной регистрации») терялись, и в
+        # договоре сторона печаталась с чужой формулировкой.
+        ("carriers", "entity_type"),
+        ("carriers", "basis"),
+        ("customers", "entity_type"),
+        ("customers", "basis"),
     )
     for table, column in required_columns:
         if not _column_exists(cursor, table, column):
@@ -420,6 +430,8 @@ def init_database() -> None:
             director_position TEXT,
             phone TEXT,
             email TEXT,
+            entity_type TEXT,
+            basis TEXT,
             is_deleted INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -446,6 +458,8 @@ def init_database() -> None:
             email TEXT,
             license_number TEXT,
             license_date TEXT,
+            entity_type TEXT,
+            basis TEXT,
             is_deleted INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -683,6 +697,25 @@ def init_database() -> None:
                 logger.info(f"Добавлена колонка contracts.{column}")
             except Exception as e:
                 logger.warning(f"Не удалось добавить contracts.{column}: {e}")
+
+    # ── Миграция: организации — вид лица и основание (ШАГ «Полные стороны
+    # + склонение с учётом рода») ──
+    # В форме редактирования заказчика и перевозчика поля «Тип» и
+    # «Основание» были, а в базе — нет: после сохранения они терялись, и
+    # при загрузке записи в форму вид стороны сбрасывался, а в договоре
+    # ИП печатался как ООО. ALTER TABLE ADD COLUMN добавляет колонки к
+    # существующей таблице и НЕ трогает строки: у уже заведённых сторон
+    # entity_type = NULL, и вид стороны выводится из ИНН и наименования.
+    for table in ("customers", "carriers"):
+        for column, sql_type in (("entity_type", "TEXT"), ("basis", "TEXT")):
+            if not _column_exists(cursor, table, column):
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"
+                    )
+                    logger.info(f"Добавлена колонка {table}.{column}")
+                except Exception as e:
+                    logger.warning(f"Не удалось добавить {table}.{column}: {e}")
 
     # ── Миграция: address_book — справочник салонов (ШАГ FIX-2.2) ──
     # Справочник адресов стал справочником МЕСТ ВЫГРУЗКИ: у записи появились
@@ -1538,8 +1571,8 @@ def save_organization(org_data: Dict[str, Any], is_carrier: bool = False) -> int
                 legal_address, actual_address, bank_account,
                 bik, correspondent_account, bank_name,
                 director_name, director_position, phone, email,
-                license_number, license_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                license_number, license_date, entity_type, basis
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             org_data.get("full_name", ""),
             org_data.get("short_name", ""),
@@ -1558,6 +1591,8 @@ def save_organization(org_data: Dict[str, Any], is_carrier: bool = False) -> int
             org_data.get("email", ""),
             org_data.get("license_number", ""),
             org_data.get("license_date", ""),
+            org_data.get("entity_type", ""),
+            org_data.get("basis", ""),
         ))
     else:
         cursor.execute("""
@@ -1565,8 +1600,9 @@ def save_organization(org_data: Dict[str, Any], is_carrier: bool = False) -> int
                 full_name, short_name, inn, kpp, ogrn,
                 legal_address, actual_address, bank_account,
                 bik, correspondent_account, bank_name,
-                director_name, director_position, phone, email
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                director_name, director_position, phone, email,
+                entity_type, basis
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             org_data.get("full_name", ""),
             org_data.get("short_name", ""),
@@ -1583,6 +1619,8 @@ def save_organization(org_data: Dict[str, Any], is_carrier: bool = False) -> int
             org_data.get("director_position", ""),
             org_data.get("phone", ""),
             org_data.get("email", ""),
+            org_data.get("entity_type", ""),
+            org_data.get("basis", ""),
         ))
 
     org_id = cursor.lastrowid
@@ -1625,7 +1663,8 @@ def update_organization(org_id: int, org_data: Dict[str, Any], is_carrier: bool 
                     legal_address = ?, actual_address = ?, bank_account = ?,
                     bik = ?, correspondent_account = ?, bank_name = ?,
                     director_name = ?, director_position = ?, phone = ?, email = ?,
-                    license_number = ?, license_date = ?
+                    license_number = ?, license_date = ?,
+                    entity_type = ?, basis = ?
                 WHERE id = ?
             """, (
                 org_data.get("full_name", ""), org_data.get("short_name", ""),
@@ -1636,7 +1675,9 @@ def update_organization(org_id: int, org_data: Dict[str, Any], is_carrier: bool 
                 org_data.get("bank_name", ""), org_data.get("director_name", ""),
                 org_data.get("director_position", ""), org_data.get("phone", ""),
                 org_data.get("email", ""), org_data.get("license_number", ""),
-                org_data.get("license_date", ""), org_id,
+                org_data.get("license_date", ""),
+                org_data.get("entity_type", ""), org_data.get("basis", ""),
+                org_id,
             ))
         else:
             cursor.execute("""
@@ -1644,7 +1685,8 @@ def update_organization(org_id: int, org_data: Dict[str, Any], is_carrier: bool 
                     full_name = ?, short_name = ?, inn = ?, kpp = ?, ogrn = ?,
                     legal_address = ?, actual_address = ?, bank_account = ?,
                     bik = ?, correspondent_account = ?, bank_name = ?,
-                    director_name = ?, director_position = ?, phone = ?, email = ?
+                    director_name = ?, director_position = ?, phone = ?, email = ?,
+                    entity_type = ?, basis = ?
                 WHERE id = ?
             """, (
                 org_data.get("full_name", ""), org_data.get("short_name", ""),
@@ -1654,7 +1696,9 @@ def update_organization(org_id: int, org_data: Dict[str, Any], is_carrier: bool 
                 org_data.get("bik", ""), org_data.get("correspondent_account", ""),
                 org_data.get("bank_name", ""), org_data.get("director_name", ""),
                 org_data.get("director_position", ""), org_data.get("phone", ""),
-                org_data.get("email", ""), org_id,
+                org_data.get("email", ""),
+                org_data.get("entity_type", ""), org_data.get("basis", ""),
+                org_id,
             ))
         if old:
             fts.replace_row(

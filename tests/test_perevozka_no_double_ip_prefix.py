@@ -193,7 +193,7 @@ def test_ip_client_full_name_cleaned(generator, work_file):
     assert DOUBLE not in text
     clause = _clause_text(doc, "1.1. Заказчик:")
     assert clause.startswith(
-        "Индивидуальный предприниматель Смирнова Елена Владимировна, именуемая"
+        "Индивидуальный предприниматель Смирнова Елена Владимировна, ИНН"
     )
 
 
@@ -210,6 +210,6 @@ def test_ooo_full_name_not_touched(generator, work_file):
     clause = _clause_text(doc, "1.1. Заказчик:")
     assert clause.startswith(
         "Общество с ограниченной ответственностью «Ромашка» (ООО «Ромашка»), "
-        "именуемое"
+        "ИНН 7707654321"
     )
     assert "Индивидуальный предприниматель" not in clause

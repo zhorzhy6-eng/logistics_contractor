@@ -36,9 +36,23 @@ from core.contracts.perevozka.postprocess import (
     RouteTablesStep,
 )
 from core.contracts.perevozka.validator import PerevozkaValidator
+from core.contracts.ru_morphology import (
+    acting_by_gender,
+    detect_gender,
+    genitive_fio,
+    genitive_position,
+    pronoun_by_gender,
+)
 from core.num_to_words import amount_to_words
 
 logger = logging.getLogger("core.contract_generator")
+
+#: Вид лица и его сокращение: по сокращению узнаётся, что наименование уже
+#: содержит приставку («ООО «Ромашка»»), и второй раз её печатать не надо.
+LEGAL_FORM_SHORT = {
+    "общество с ограниченной ответственностью": "ООО",
+    "индивидуальный предприниматель": "ИП",
+}
 
 
 class PerevozkaGenerator(BaseContractGenerator):
@@ -759,8 +773,10 @@ class PerevozkaGenerator(BaseContractGenerator):
     #: предпринимателя («Индивидуальный предприниматель Добросоцкий А.Н.»).
     #: В бланке приставку печатает сам шаблон ({{*_legal_form}}), поэтому из
     #: ФИО её надо убрать — иначе выходит «Индивидуальный предприниматель
-    #: Индивидуальный предприниматель Добросоцкий…».
-    IP_NAME_PREFIXES = ("Индивидуальный предприниматель ", "ИП ")
+    #: Индивидуальный предприниматель Добросоцкий…». «ООО » стоит здесь же:
+    #: запись могла остаться от прежнего вида стороны, а в ветви ИП это
+    #: чужое сокращение («Индивидуальный предприниматель ООО «Ромашка»»).
+    IP_NAME_PREFIXES = ("Индивидуальный предприниматель ", "ИП ", "ООО ")
 
     #: Окончания женских отчеств — по ним определяется род ФИО.
     FEMALE_PATRONYMIC_ENDINGS = ("овна", "евна", "ична", "инична")
@@ -768,8 +784,7 @@ class PerevozkaGenerator(BaseContractGenerator):
     @classmethod
     def _clean_ip_name(cls, full_name: Any) -> str:
         """
-        ФИО индивидуального предпринимателя без приставки «ИП»/«Индивидуальный
-        предприниматель».
+        ФИО индивидуального предпринимателя без приставки вида лица.
 
         Приставка не часть имени, а вид лица: её печатает шаблон отдельным
         плейсхолдером ({{carrier_legal_form}} / {{client_legal_form}}).
@@ -787,16 +802,71 @@ class PerevozkaGenerator(BaseContractGenerator):
         """
         Род («male» / «female») по отчеству ФИО.
 
-        Отчество — слово с окончанием «-овна/-евна/-ична/-инична»; прове-
-        ряются все слова, кроме первого (фамилии): у ИП в full_name могла
-        остаться приставка, и по номеру слова род тогда не угадывается.
-        Отчества нет — мужской род, как в бланке по умолчанию.
+        Тонкая обёртка над `core.contracts.ru_morphology.detect_gender`:
+        правила живут в одном месте (там же склонение ФИО и должности),
+        а имя метода оставлено прежним — на него ссылаются тесты и
+        внешний код.
         """
-        parts = str(full_name or "").split()
-        for part in parts[1:]:
-            if part.lower().endswith(cls.FEMALE_PATRONYMIC_ENDINGS):
-                return "female"
-        return "male"
+        return detect_gender(full_name)
+
+    @staticmethod
+    def _legal_form_prefix(legal_form: Any, full_name: Any) -> str:
+        """
+        «Общество с ограниченной ответственностью » к наименованию стороны.
+
+        Приставка нужна, потому что в справочнике наименование ООО часто
+        лежит коротким («ООО «Ромашка»»). Но если полное наименование УЖЕ
+        начинается с этой приставки — целиком или сокращённо («ООО»), —
+        второй раз она не печатается: «Общество с ограниченной
+        ответственностью ООО «Ромашка»» читается как ошибка.
+
+        У ИП приставка не добавляется никогда: приставку вида лица снимает
+        `_clean_ip_name` (иначе в договоре выходило «Индивидуальный
+        предприниматель Индивидуальный предприниматель Добросоцкий…»), а
+        саму приставку печатает ветка ИП своим ключом `{{*_legal_form}}`.
+        """
+        form = str(legal_form or "").strip()
+        if form.lower() == "индивидуальный предприниматель":
+            return ""
+
+        name = str(full_name or "").strip()
+        if not form or not name:
+            return form + " " if form else ""
+
+        if name.lower().startswith(form.lower()):
+            return ""
+
+        # Сокращение вида лица: «ООО». Составлять его из первых букв слов
+        # нельзя — «Общество с ограниченной ответственностью» дало бы «О»
+        # (со строчных слов буквы не берутся), поэтому пара задана явно.
+        # Сокращение сверяется и с пробелом, и с кавычкой: в справочнике
+        # встречается «ООО «Ромашка»».
+        short_form = LEGAL_FORM_SHORT.get(form.lower(), "")
+        if short_form and name.upper().startswith(short_form.upper()):
+            return ""
+
+        return form + " "
+
+    @staticmethod
+    def _resolve_carrier_type(carrier_type: Any, is_carrier_ip_hint: bool) -> str:
+        """
+        Вид перевозчика: «ООО (с НДС)» / «ИП с НДС» / «ИП без НДС».
+
+        Тип приходит из вкладки «Договор» и выбирает бланк, но он может
+        разойтись с данными стороны: в справочнике ИП записан как
+        «Индивидуальный предприниматель Пестряев А.Н.», а тип в форме
+        остался прежним «ООО (с НДС)». Тогда ветвь бланка выбирается по
+        ФАКТУ (приставка «ИП» или entity_type из справочника), а не по
+        устаревшему переключателю: иначе ИП печатался как ООО — с ОГРН,
+        КПП и «именуемое».
+
+        Ставка НДС при этом сохраняется: «ООО (с НДС)» + ИП → «ИП с НДС»,
+        «ООО (без НДС)» + ИП → «ИП без НДС».
+        """
+        text = str(carrier_type or "").strip()
+        if not is_carrier_ip_hint:
+            return text or "ООО (с НДС)"
+        return "ИП без НДС" if "без НДС" in text else "ИП с НДС"
 
     @staticmethod
     def _paren_suffix(full_name: Any, short_name: Any) -> str:
@@ -853,7 +923,27 @@ class PerevozkaGenerator(BaseContractGenerator):
         # ── Перевозчик ──
         carrier = contract_data.carrier
 
-        carrier_type_ui = contract.get("carrier_type") or carrier.get("carrier_type", "ООО (с НДС)")
+        # Вид перевозчика. Главный признак — тип из вкладки «Договор» (он же
+        # выбирает бланк), но есть и запасные: `entity_type` из справочника,
+        # распознавания или DaData и приставка «ИП» в наименовании.
+        # Это не украшение: в справочнике ИП записан как «Индивидуальный
+        # предприниматель Пестряев А.Н.», а тип в форме мог остаться
+        # прежним «ООО (с НДС)» — тогда ИП печатался как ООО (в договоре
+        # выходило «ОГРН», «КПП» и «именуемое»).
+        carrier_full_raw = str(carrier.get("full_name", "") or "").strip()
+        carrier_full_lower = carrier_full_raw.lower()
+        is_carrier_ip_hint = (
+            str(carrier.get("entity_type") or "").strip().upper().startswith("ИП")
+            or carrier_full_lower.startswith("индивидуальный предприниматель")
+            or carrier_full_lower.startswith("ип ")
+        )
+
+        carrier_type_ui = self._resolve_carrier_type(
+            contract.get("carrier_type")
+            or carrier.get("carrier_type")
+            or ("ИП с НДС" if is_carrier_ip_hint else "ООО (с НДС)"),
+            is_carrier_ip_hint,
+        )
 
         vat_rate_num = contract.get("vat_rate_num")
         if vat_rate_num is None:
@@ -863,24 +953,55 @@ class PerevozkaGenerator(BaseContractGenerator):
             except (ValueError, TypeError):
                 vat_rate_num = 22.0
 
-        is_ooo = "ООО" in carrier_type_ui
-        is_ip_with_vat = "ИП с НДС" in carrier_type_ui
-        is_ip_without_vat = "ИП без НДС" in carrier_type_ui
+        is_ip_type = "ИП" in carrier_type_ui
+        # Вид ООО/ИП считается по ФАКТУ (приставка в наименовании или
+        # entity_type из справочника), а не только по переключателю в форме:
+        # они могут разойтись, если оператор загрузил ИП в форму, где тип
+        # остался прежним. Раньше в этом случае в договоре печатались ОГРН,
+        # КПП и «именуемое» — ИП выглядел как ООО.
+        is_carrier_ip = is_carrier_ip_hint or is_ip_type
+        is_ooo = not is_carrier_ip
+        is_ip_with_vat = is_carrier_ip and "без НДС" not in carrier_type_ui
+        is_ip_without_vat = is_carrier_ip and "без НДС" in carrier_type_ui
+
+        carrier_gender = detect_gender(carrier_full_raw)
+        # Приставку «Индивидуальный предприниматель» печатает сам бланк
+        # ({{carrier_legal_form}}) — в ФИО она не нужна, иначе в договоре
+        # выходит «Индивидуальный предприниматель Индивидуальный
+        # предприниматель Добросоцкий…».
+        carrier_full = (
+            self._clean_ip_name(carrier_full_raw) if is_carrier_ip
+            else carrier_full_raw
+        )
+        carrier_director_name = str(carrier.get("director_name", "") or "").strip()
+        # Пол подписанта: у ООО это директор, у ИП — он сам (у ИП в
+        # `director_name` справочника пусто, род берётся из ФИО).
+        carrier_signer_gender = detect_gender(
+            carrier_director_name or carrier_full_raw
+        )
+        # Подписант ООО: должность и ФИО из данных. Пустая должность —
+        # «Директор» (так печатал прежний бланк константой).
+        carrier_position = (
+            str(carrier.get("director_position", "") or "").strip() or "Директор"
+        )
+        carrier_basis = (
+            str(carrier.get("basis", "") or "").strip()
+            or ("Устава" if not is_carrier_ip
+                else "свидетельства о государственной регистрации")
+        )
 
         if is_ooo:
             legal_form = "Общество с ограниченной ответственностью"
-            basis = "Устава"
             pronoun = "именуемое"
-            director_position_full = carrier.get("director_position", "директора") or "директора"
-            director_position_short = "Директор"
+            director_position_full = genitive_position(carrier_position)
+            director_position_short = carrier_position
             kpp = self._digits_only(carrier.get("kpp"))
             ogrn_label = "ОГРН"
             nds_status_text = ("Перевозчик подтверждает, что применяет общую систему "
                                "налогообложения и является плательщиком НДС.")
         else:
             legal_form = "Индивидуальный предприниматель"
-            basis = "свидетельства о государственной регистрации"
-            pronoun = "именуемый"
+            pronoun = pronoun_by_gender(carrier_gender)
             director_position_full = "Индивидуального предпринимателя"
             director_position_short = "Индивидуальный предприниматель"
             kpp = ""
@@ -899,48 +1020,34 @@ class PerevozkaGenerator(BaseContractGenerator):
             f"ИП_с_НДС={is_ip_with_vat}, ИП_без_НДС={is_ip_without_vat}"
         )
 
-        # ── Тип перевозчика: ИП или ООО (условные ветви бланка) ──
-        # Главный признак — тип из вкладки «Договор» (он же выбирает бланк);
-        # запасные — entity_type из распознавания/DaData и приставка в
-        # наименовании: в справочнике ИП записан как «Индивидуальный
-        # предприниматель <ФИО>».
-        carrier_full_raw = str(carrier.get("full_name", "") or "").strip()
-        carrier_full_lower = carrier_full_raw.lower()
-        is_carrier_ip = (
-            not is_ooo
-            or str(carrier.get("entity_type") or "").strip().upper().startswith("ИП")
-            or carrier_full_lower.startswith("индивидуальный предприниматель")
-            or carrier_full_lower.startswith("ип ")
-        )
-        # Приставку «Индивидуальный предприниматель» печатает сам бланк
-        # ({{carrier_legal_form}}) — в ФИО она не нужна, иначе в договоре
-        # выходит «Индивидуальный предприниматель Индивидуальный
-        # предприниматель Добросоцкий…».
-        carrier_full = (
-            self._clean_ip_name(carrier_full_raw) if is_carrier_ip else carrier_full_raw
-        )
-        carrier_gender = self._gender_from_name(carrier_full)
-
         replacements["is_carrier_ip"] = is_carrier_ip
         replacements["carrier_legal_form"] = legal_form
+        # «Общество с ограниченной ответственностью » — отдельным ключом:
+        # повтор приставки в наименовании бланк не должен печатать дважды.
+        replacements["carrier_legal_form_prefix"] = self._legal_form_prefix(
+            legal_form, carrier_full
+        )
         # Род причастия: у ИП «действующий» («действующая» — женщина),
         # у ООО «действующего» — «в лице директора …, действующего…».
         replacements["carrier_acting"] = (
-            "действующего" if not is_carrier_ip
-            else ("действующая" if carrier_gender == "female" else "действующий")
+            "действующего" if is_ooo else acting_by_gender(carrier_gender)
         )
-        replacements["carrier_pronoun"] = (
-            pronoun if not is_carrier_ip
-            else ("именуемая" if carrier_gender == "female" else "именуемый")
+        # Род причастия в п. 1.2 — по полу ПОДПИСАНТА (директора у ООО,
+        # самого ИП у ИП): у директора-женщины «действующей».
+        replacements["carrier_acting_genitive"] = (
+            "действующей" if carrier_signer_gender == "female" else "действующего"
         )
-        replacements["carrier_basis"] = basis
+        replacements["carrier_pronoun"] = pronoun
+        replacements["carrier_basis"] = carrier_basis
         replacements["carrier_full_name"] = carrier_full
         replacements["carrier_name"] = carrier.get("short_name", "") or carrier.get("full_name", "")
         # Скобки с сокращённым наименованием — только если оно ОТЛИЧАЕТСЯ от
         # полного: в рабочей базе short_name часто его повторяет, и в договоре
         # печаталось «ООО «Ромашка» (ООО «Ромашка»)».
         replacements["carrier_name_in_parens"] = self._paren_suffix(
-            carrier.get("full_name", ""), carrier.get("short_name", "")
+            carrier.get("full_name", ""),
+            self._clean_ip_name(carrier.get("short_name", "")) if is_carrier_ip
+            else carrier.get("short_name", ""),
         )
         # Реквизиты печатаются ТОЛЬКО цифрами. В поля ИНН / КПП / ОГРН / БИК /
         # корр. счёт могло попасть словосочетание из исходного документа
@@ -959,7 +1066,7 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["carrier_corr_account"] = self._digits_only(
             carrier.get("correspondent_account")
         )
-        replacements["carrier_director"] = carrier.get("director_name", "")
+        replacements["carrier_director"] = carrier_director_name
         # ИП подписывает договор сам, а «директора» у него нет: в п. 9 бланка
         # стоит «{{carrier_director_position_short}} ________
         # /{{carrier_director}}/», и с пустым director_name справочника
@@ -968,6 +1075,17 @@ class PerevozkaGenerator(BaseContractGenerator):
             replacements["carrier_director"] = carrier_full
         replacements["carrier_director_position"] = director_position_full
         replacements["carrier_director_position_short"] = director_position_short
+        # Падежи п. 1.2: «в лице директора Иванова Ивана Ивановича,
+        # действующего на основании Устава» — именительный в справочнике
+        # и вкладке, родительный в бланке.
+        replacements["carrier_director_position_genitive"] = (
+            director_position_full if is_ooo
+            else "Индивидуального предпринимателя"
+        )
+        replacements["carrier_director_genitive"] = (
+            genitive_fio(carrier_director_name, carrier_signer_gender)
+            if not is_carrier_ip else carrier_full
+        )
         replacements["carrier_phone"] = carrier.get("phone", "")
         replacements["carrier_email"] = carrier.get("email", "")
 
@@ -1011,14 +1129,34 @@ class PerevozkaGenerator(BaseContractGenerator):
         customer_full = (
             self._clean_ip_name(customer_full_raw) if is_client_ip else customer_full_raw
         )
-        client_gender = self._gender_from_name(customer_full)
         client_director = str(customer.get("director_name", "") or "").strip()
+        # Род — по ФИО ПОДПИСАНТА: у ООО это директор, у ИП — он сам
+        # (у ИП в director_name справочника пусто, и род берётся из ФИО).
+        client_gender = detect_gender(client_director or customer_full_raw)
+        # Должность подписанта: у ООО это «Генеральный директор» (или своё
+        # значение из справочника), пустое поле печатало бы «в лице  Иванов».
+        client_position = (
+            str(customer.get("director_position", "") or "").strip()
+            or "Генеральный директор"
+        )
+        client_basis = (
+            str(customer.get("basis", "") or "").strip()
+            or ("свидетельства о государственной регистрации" if is_client_ip
+                else "Устава")
+        )
 
         replacements["is_client_ip"] = is_client_ip
+        replacements["client_legal_form_prefix"] = self._legal_form_prefix(
+            "Индивидуальный предприниматель" if is_client_ip
+            else "Общество с ограниченной ответственностью",
+            customer_full,
+        )
         replacements["client_full_name"] = customer_full
         replacements["client_name"] = customer.get("short_name", "") or customer.get("full_name", "")
         replacements["client_name_in_parens"] = self._paren_suffix(
-            customer.get("full_name", ""), customer.get("short_name", "")
+            customer.get("full_name", ""),
+            self._clean_ip_name(customer.get("short_name", "")) if is_client_ip
+            else customer.get("short_name", ""),
         )
         # У ИП вместо ОГРН — ОГРНИП (15 цифр), метка зависит от вида заказчика.
         replacements["client_ogrn_label"] = "ОГРНИП" if is_client_ip else "ОГРН"
@@ -1028,35 +1166,48 @@ class PerevozkaGenerator(BaseContractGenerator):
             # директора у него не бывает: основание — свидетельство
             # о государственной регистрации.
             replacements["client_legal_form"] = "Индивидуальный предприниматель"
-            replacements["client_pronoun"] = (
-                "именуемая" if client_gender == "female" else "именуемый"
-            )
-            replacements["client_acting"] = (
-                "действующая" if client_gender == "female" else "действующий"
-            )
+            replacements["client_pronoun"] = pronoun_by_gender(client_gender)
+            replacements["client_acting"] = acting_by_gender(client_gender)
             replacements["client_director_position_short"] = "Индивидуальный предприниматель"
             replacements["client_director"] = customer_full
             replacements["client_director_short"] = customer_full
-            replacements["client_basis"] = "свидетельства о государственной регистрации"
         else:
             replacements["client_legal_form"] = (
                 "Общество с ограниченной ответственностью"
             )
             replacements["client_pronoun"] = "именуемое"
             replacements["client_acting"] = "действующее"
-            # Должность подписанта: у ООО это «Генеральный директор» (или своё
-            # значение из справочника), пустое поле печатало бы «в лице  Иванов».
-            replacements["client_director_position_short"] = (
-                str(customer.get("director_position", "") or "").strip()
-                or "Генеральный директор"
+            replacements["client_acting_genitive"] = (
+                "действующей" if client_gender == "female" else "действующего"
             )
+            replacements["client_director_position_short"] = client_position
             replacements["client_director"] = client_director
             replacements["client_director_short"] = self._short_fio(client_director)
-            replacements["client_basis"] = "Устава"
 
-        replacements["client_inn"] = customer.get("inn", "")
-        replacements["client_kpp"] = customer.get("kpp", "")
-        replacements["client_ogrn"] = customer.get("ogrn", "")
+        replacements["client_basis"] = client_basis
+        # Падежи п. 1.1: «в лице директора Ахмедова Тимура Артуровича,
+        # действующего на основании Устава» — в справочнике и на вкладке
+        # именительный, в бланке родительный.
+        replacements["client_director_position_genitive"] = (
+            genitive_position(client_position) if not is_client_ip
+            else "Индивидуального предпринимателя"
+        )
+        replacements["client_director_genitive"] = (
+            genitive_fio(client_director, client_gender) if not is_client_ip
+            else customer_full
+        )
+        # Род причастия — по полу ДИРЕКТОРА (ООО) или самого ИП.
+        replacements["client_acting_genitive"] = (
+            "действующей" if client_gender == "female" else "действующего"
+        )
+
+        replacements["client_inn"] = self._digits_only(customer.get("inn"))
+        replacements["client_kpp"] = self._digits_only(customer.get("kpp"))
+        replacements["client_kpp_line"] = (
+            f"КПП {self._digits_only(customer.get('kpp'))}"
+            if self._filled(self._digits_only(customer.get("kpp"))) else ""
+        )
+        replacements["client_ogrn"] = self._digits_only(customer.get("ogrn"))
         replacements["client_address"] = customer.get("legal_address", "")
         replacements["client_account"] = self._digits_only(customer.get("bank_account"))
         replacements["client_bik"] = self._digits_only(customer.get("bik"))
@@ -1072,6 +1223,9 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["client_email"] = customer.get("email", "")
 
         # ── Необязательные поля заказчика: пустые не печатаются ──
+        replacements["has_client_kpp"] = self._filled(
+            replacements["client_kpp"]
+        )
         replacements["has_client_actual_address"] = self._filled(
             customer.get("actual_address")
         )
