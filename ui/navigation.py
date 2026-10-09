@@ -24,6 +24,10 @@ from PyQt5.QtWidgets import (
 
 logger = logging.getLogger("ui.navigation")
 
+#: Свойство кнопки пункта: его номер. Слот берёт номер у отправителя сигнала,
+#: поэтому в connect не нужна lambda (цикл ссылок Python ↔ Qt, грабли 2B.7).
+NAV_INDEX_PROPERTY = "nav_index"
+
 
 class SideNav(QFrame):
     """Список разделов слева: иконка, подпись, активный пункт выделен."""
@@ -80,13 +84,31 @@ class SideNav(QFrame):
             button.setToolTip(text)
 
         index = len(self._buttons)
-        button.clicked.connect(lambda _checked=False, i=index: self.navigate.emit(i))
+        # Номер пункта лежит свойством на самой кнопке, а слот — метод SideNav:
+        # lambda, захватывающая self, создаёт цикл ссылок Python ↔ Qt, который
+        # роняет процесс при выходе (грабли 2B.7).
+        button.setProperty(NAV_INDEX_PROPERTY, index)
+        button.clicked.connect(self._on_item_clicked)
 
         self._items_layout.addWidget(button)
         self._buttons.append(button)
         return button
 
     # ── Состояние ──
+    def _on_item_clicked(self, _checked: bool = False) -> None:
+        """
+        Пункт навигации нажат: сообщаем его номер сигналом navigate.
+
+        Номер берётся у отправителя сигнала (свойство NAV_INDEX_PROPERTY) —
+        так слот остаётся обычным методом, без lambda в connect.
+        """
+        button = self.sender()
+        index = button.property(NAV_INDEX_PROPERTY) if button is not None else None
+        if not isinstance(index, int):
+            logger.warning("SideNav: у нажатой кнопки нет номера пункта — пропуск")
+            return
+        self.navigate.emit(index)
+
     def count(self) -> int:
         """Сколько пунктов в навигации."""
         return len(self._buttons)

@@ -1,5 +1,6 @@
 import logging
 import os
+import weakref
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -53,6 +54,7 @@ from ui.tabs.contract_tab import ContractTab
 from ui.db_manager_dialog import DbManagerDialog
 from ui.settings_dialog import SettingsDialog
 from ui.navigation import SideNav
+from ui.qt_shutdown import cancel_running_tasks, wait_for_thread_pools
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +95,20 @@ class RecognitionSignals(QObject):
     cancelled = pyqtSignal()
     progress = pyqtSignal(int, str)   # процент, текст статуса
 
+    def __init__(self, task=None):
+        super().__init__()
+        # Ссылка на задачу-владельца СЛАБАЯ. Сильная дала бы цикл
+        # «задача → сигналы → задача», а связать слот с конкретной задачей
+        # через lambda или functools.partial нельзя: и то и другое держит
+        # сильную ссылку на окно, а связь живёт в C++ объекте сигналов —
+        # получается цикл Python ↔ Qt, который роняет процесс при выходе
+        # (грабли 2B.7). Слот берёт задачу у отправителя: self.sender().owner().
+        self._task_ref = weakref.ref(task) if task is not None else None
+
+    def owner(self):
+        """Задача-владелец сигналов (None, если её уже собрал сборщик мусора)."""
+        return self._task_ref() if self._task_ref is not None else None
+
 
 class RecognitionTask(QRunnable):
     """
@@ -110,7 +126,7 @@ class RecognitionTask(QRunnable):
         super().__init__()
         self.client = client
         self.text = text
-        self.signals = RecognitionSignals()
+        self.signals = RecognitionSignals(self)
         self._cancelled = False
 
     # ── Отмена ──
@@ -803,20 +819,16 @@ class MainWindow(QMainWindow):
         task = RecognitionTask(self.gigachat, text)
         self.recognition_task = task
 
-        # Сигналы привязываем к конкретной задаче: результат «старой»
-        # (отменённой) задачи не должен влиять на новую.
-        task.signals.finished.connect(
-            lambda data, t=task: self._on_recognition_finished(data, t)
-        )
-        task.signals.error.connect(
-            lambda message, t=task: self._on_recognition_error(message, t)
-        )
-        task.signals.cancelled.connect(
-            lambda t=task: self._on_recognition_cancelled(t)
-        )
-        task.signals.progress.connect(
-            lambda percent, message, t=task: self._on_recognition_progress(percent, message, t)
-        )
+        # Сигналы привязываем к КОНКРЕТНОЙ задаче: результат «старой»
+        # (отменённой) задачи не должен влиять на новую. Связь — метод-слот
+        # без lambda и без partial: и замыкание, и partial держат сильную
+        # ссылку на окно, а связь живёт в C++ объекте сигналов — это цикл
+        # Python ↔ Qt, роняющий процесс при выходе (грабли 2B.7). Задачу слот
+        # находит у отправителя сигнала: RecognitionSignals.owner().
+        task.signals.finished.connect(self._on_recognition_finished)
+        task.signals.error.connect(self._on_recognition_error)
+        task.signals.cancelled.connect(self._on_recognition_cancelled)
+        task.signals.progress.connect(self._on_recognition_progress)
 
         self.thread_pool.start(task)
         logger.info(
@@ -854,7 +866,32 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Распознавание отменено", 5000)
         logger.info("Распознавание отменено пользователем")
 
+    def _task_of_sender(self):
+        """
+        Задача распознавания, чьи сигналы пришли в слот.
+
+        Задача берётся у отправителя сигнала: Qt отдаёт в sender() объект
+        RecognitionSignals, а он помнит своего владельца слабой ссылкой
+        (см. RecognitionSignals.owner). Так слот знает КОНКРЕТНУЮ задачу и
+        отличается от «старой»: связать задачу через lambda или partial
+        нельзя — это цикл Python ↔ Qt (грабли 2B.7).
+        """
+        signals = self.sender()
+        task = signals.owner() if isinstance(signals, RecognitionSignals) else None
+        if task is not None:
+            return task
+
+        current = self.recognition_task
+        if current is not None and getattr(current, "signals", None) is signals:
+            return current
+        return None
+
+    def _task_from(self, task):
+        """Задача из аргумента слота; без него — по отправителю сигнала."""
+        return task if task is not None else self._task_of_sender()
+
     def _on_recognition_progress(self, percent: int, message: str, task=None):
+        task = self._task_from(task)
         if not self._is_current_task(task):
             return
         self.progress_bar.setValue(max(0, min(100, int(percent))))
@@ -863,6 +900,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(message)
 
     def _on_recognition_cancelled(self, task=None):
+        task = self._task_from(task)
         logger.info("Задача распознавания завершилась с отменой")
         if not self._is_current_task(task):
             return
@@ -916,6 +954,7 @@ class MainWindow(QMainWindow):
         logger.debug(f"Распознавание: все ключи ответа: {sorted(data.keys())}")
 
     def _on_recognition_finished(self, data: Dict[str, Any], task=None):
+        task = self._task_from(task)
         if not self._is_current_task(task):
             logger.info("Результат устаревшей задачи распознавания проигнорирован")
             return
@@ -1019,6 +1058,7 @@ class MainWindow(QMainWindow):
             self._finish_recognition_ui(task)
 
     def _on_recognition_error(self, error_msg: str, task=None):
+        task = self._task_from(task)
         if not self._is_current_task(task):
             logger.info("Ошибка устаревшей задачи распознавания проигнорирована")
             return
@@ -1890,6 +1930,13 @@ class MainWindow(QMainWindow):
 
     def force_close(self) -> None:
         """Закрывает окно по-настоящему: выход из приложения, не скрытие."""
+        # Сначала свои рабочие потоки: пул распознавания — Qt-ребёнок окна, и
+        # его разрушение с работающей задачей (GigaChat) роняет процесс
+        # (access violation при выходе). Отменяем текущее распознавание, чтобы
+        # ожидание было коротким и результат уже не применялся.
+        cancel_running_tasks(self, "recognition_task")
+        wait_for_thread_pools(self)
+
         self._force_close = True
         self.close()
 

@@ -25,6 +25,12 @@ from config.logging_config import setup_logging
 # настройки логирования (иначе писать будет некуда).
 from core.crash_handler import install_crash_handler
 
+# ── Диагностика падений НИЖЕ уровня Python (faulthandler + сообщения Qt) ──
+# Падение при выходе (0xC0000005/0xC0000409 в Qt5Core.dll) идёт мимо
+# sys.excepthook, поэтому нужны инструменты уровнем ниже. Импорт также без
+# побочных действий: всё включается вызовом после setup_logging().
+from core.qt_crash_handler import install_crash_diagnostics
+
 
 def _parse_args(argv=None):
     """Разбор аргументов командной строки (Шаг 4 задания по безопасности)."""
@@ -49,6 +55,13 @@ setup_logging(debug=_ARGS.debug)
 # db.database: падение на старте тоже должно попасть в журнал. У pythonw.exe
 # stderr нет, поэтому без этого хука traceback исчезал бесследно.
 install_crash_handler()
+
+# ── Диагностика аварий: faulthandler, сообщения Qt, маркер выхода ──
+# faulthandler и обработчик сообщений Qt включаются только в режиме --debug
+# (обычная работа не должна замедляться). Строка «Диагностика аварий: pid=…»
+# и запись «Приложение завершается нормально» пишутся всегда: именно они
+# отличают штатный выход от аварийного, когда падение случится без --debug.
+install_crash_diagnostics(debug=_ARGS.debug)
 
 logger = logging.getLogger("main")
 
