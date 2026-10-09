@@ -11,8 +11,11 @@
 Здесь проверяется САМ БЛАНК, а не договор:
 
   * п. 1.1 и 1.2 печатают полные реквизиты и падеж (ключи на месте);
+  * банковские строки п. 9 условные: пустые реквизиты в договор не попадают
+    (ШАГ «Три блока хвостов», правка `BANK_LINE_FLAGS`);
   * вложенные теги `{%p if … %}` НЕ удваиваются — повторный прогон
-    инструмента обязан быть идемпотентным (требование шага F.5);
+    инструмента обязан быть идемпотентным (требование шага F.5), и он же не
+    даёт ложных «ОШИБКА: абзац не найден»;
   * состав пакета не изменился: 24 записи, три из них — встроенные шрифты;
   * плейсхолдеров, которых генератор не заполняет, в бланке не осталось.
 """
@@ -251,6 +254,79 @@ def test_second_run_changes_nothing(template_name, work_dir):
         assert xml_copy.count(tag) == xml_shipped.count(tag), tag
     assert xml_copy == xml_shipped, "прогон по правленому бланку его изменил"
     assert before != b""  # файл на месте
+
+
+def test_second_run_has_no_false_errors(template_name, work_dir):
+    """
+    Двойной прогон инструмента не даёт НИ ОДНОЙ строки «ОШИБКА».
+
+    Регресс на ложные срабатывания диагностики: на УЖЕ ПРАВЛЕНОМ бланке
+    «итог по каждой правке» объявлял ошибкой правку п. 1.1, которой в бланке
+    давно нет, — `edit_client_clause` (166 символов). Причина: тексты ветвей
+    этой правки переписывает доводка, и по ним «правка сделана» не докажешь;
+    доказательство у неё теперь своё (`Edit.evidence` — тег
+    `{%p if is_client_ip %}`).
+
+    Проверяются оба входа: `check_template` (только чтение) и
+    `edit_template` (с записью) — по два прогона каждый.
+    """
+    import sys
+
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from tools.fix_perevozka_dynamic_parties import check_template, edit_template
+
+    shipped = PROJECT_ROOT / "templates" / template_name
+
+    reports = [check_template(shipped), check_template(shipped)]
+    assert all(reports), "отчёт пуст — инструмент не увидел бланк"
+
+    # Имя файла — часть входа: по нему инструмент выбирает набор правок
+    # (у ООО-бланка и бланков ИП он разный). Поэтому копия кладётся в свою
+    # папку и сохраняет имя.
+    target_dir = work_dir / f"no_false_errors_{template_name.removesuffix('.docx')}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    copy = target_dir / template_name
+    shutil.copy2(shipped, copy)
+    reports += [edit_template(copy, apply=True), edit_template(copy, apply=True)]
+
+    for report in reports:
+        errors = [line for line in report if line.startswith("ОШИБКА")]
+        assert errors == [], f"ложные ошибки в отчёте: {errors}"
+        assert not any("не найден" in line for line in report), report
+
+
+#: Банковские строки п. 9 — каждая под своим флагом (ШАГ «Три блока хвостов»).
+BANK_LINE_FLAGS = (
+    "has_client_account",
+    "has_client_bik",
+    "has_client_corr_account",
+    "has_carrier_account",
+    "has_carrier_bank",
+    "has_carrier_bik",
+    "has_carrier_corr_account",
+)
+
+
+def test_bank_lines_are_conditional(template_name):
+    """
+    Банковские строки п. 9 условные: пустое значение — строки нет.
+
+    У строки счёта заказчика две части («р/с … в …»), поэтому банк стоит
+    вложенным ИНЛАЙНОВЫМ условием: счёт без банка печатается, хвост «в » —
+    нет. Тег-абзац для вложенной части не годится: он вырезал бы строку
+    целиком (docxtpl удаляет абзац с `{%p … %}` вместе с текстом).
+    """
+    xml = _document_xml(template_name)
+    texts = _paragraph_texts(xml)
+
+    for flag in BANK_LINE_FLAGS:
+        assert f"{{%p if {flag} %}}" in texts, f"нет условного абзаца {flag}"
+        assert xml.count(f"{{%p if {flag} %}}") == 1, f"тег {flag} задвоен"
+
+    assert any("{% if has_client_bank %}" in text for text in texts), \
+        "нет вложенного условия для банка заказчика"
+    assert "р/с {{client_account}}" in " ".join(texts)
+    assert "Корр. счёт: {{carrier_corr_account}}" in texts
 
 
 def test_edited_template_keeps_package(template_name, work_dir):

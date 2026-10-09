@@ -1105,6 +1105,21 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["has_carrier_license_date"] = self._filled(
             carrier.get("license_date")
         )
+        # Банковские реквизиты перевозчика (ШАГ «Банковские строки без
+        # значения в п. 9»): пустое поле печатало строку-«дырку» — «р/с »,
+        # «Банк: », «БИК », «Корр. счёт: ». Флаг считается по НАПЕЧАТАННОМУ
+        # значению (счета и БИК печатаются только цифрами, `_digits_only`):
+        # у «мусорного» поля значения в договоре нет, и строки быть не должно.
+        replacements["has_carrier_account"] = self._filled(
+            replacements["carrier_account"]
+        )
+        replacements["has_carrier_bik"] = self._filled(
+            replacements["carrier_bik"]
+        )
+        replacements["has_carrier_corr_account"] = self._filled(
+            replacements["carrier_corr_account"]
+        )
+        replacements["has_carrier_bank"] = self._filled(carrier.get("bank_name"))
 
         # ── Заказчик ──
         # ВАЖНО (Шаг 2): здесь больше нет выдуманных значений по умолчанию
@@ -1231,6 +1246,22 @@ class PerevozkaGenerator(BaseContractGenerator):
         )
         replacements["has_client_phone"] = self._filled(customer.get("phone"))
         replacements["has_client_email"] = self._filled(customer.get("email"))
+
+        # ── Банковские реквизиты заказчика: пустые строки не печатаются ──
+        # Правило то же, что у перевозчика (см. выше): флаг — по напечатанному
+        # значению. У заказчика строк две части: счёт и банк в одной строке
+        # («р/с … в …»), поэтому банк проверяется отдельным ключом
+        # `has_client_bank` — счёт без банка печатается, «в » без названия нет.
+        replacements["has_client_account"] = self._filled(
+            replacements["client_account"]
+        )
+        replacements["has_client_bik"] = self._filled(
+            replacements["client_bik"]
+        )
+        replacements["has_client_corr_account"] = self._filled(
+            replacements["client_corr_account"]
+        )
+        replacements["has_client_bank"] = self._filled(customer.get("bank_name"))
 
         # ── Водитель ──
         driver = contract_data.driver

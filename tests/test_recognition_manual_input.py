@@ -249,8 +249,20 @@ def test_load_customer_from_db_replaces_form(window):
     assert tab.kpp.text() == ""            # в записи КПП пуст — поле очищено
 
 
-def test_manual_customer_is_saved_to_db(window, isolated_db):
-    """Введённый вручную заказчик сохраняется в справочник."""
+def test_manual_customer_is_not_auto_saved_to_db(window, isolated_db):
+    """
+    Заказчик НЕ создаётся автоматически при сохранении договора.
+
+    Он ищется по ИНН/наименованию; если не найден — договор сохраняется без
+    ссылки. Раньше здесь проверялось обратное («введённый вручную заказчик
+    сохраняется в справочник») — это отменённое правило: автосоздание плодило
+    дубли (ШАГ «Заказчик без дублей»). Заводит заказчика оператор — вручную,
+    через «База данных».
+    """
+    before = isolated_db.get_all_organizations(
+        is_carrier=False, include_deleted=True
+    )
+
     window.customer_tab.full_name.setText("ООО «Ручной Заказчик»")
     window.customer_tab.inn.setText("7712345678")
     window.customer_tab.bank_account.setText("40702810900000012345")
@@ -262,11 +274,25 @@ def test_manual_customer_is_saved_to_db(window, isolated_db):
 
     window._on_save_to_db()
 
-    customers = isolated_db.get_all_organizations(is_carrier=False)
-    assert [c["full_name"] for c in customers] == ["ООО «Ручной Заказчик»"]
-    assert customers[0]["inn"] == "7712345678"
-    assert customers[0]["bank_account"] == "40702810900000012345"
-    assert customers[0]["bik"] == "044525999"
+    # Ни одной новой записи: заказчика в справочнике не было, и он не создан.
+    after = isolated_db.get_all_organizations(
+        is_carrier=False, include_deleted=True
+    )
+    assert after == before, "заказчик автосохранился в справочник"
+    assert isolated_db.get_all_organizations(is_carrier=False) == []
+
+    # Договор при этом сохранён — без ссылки на заказчика.
+    conn = isolated_db.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, customer_id FROM contracts WHERE contract_number = ?",
+            ("23092026-99",),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None, "договор не сохранён"
+    assert row[1] is None, "договор ссылается на несуществующего заказчика"
 
 
 def test_saving_contract_keeps_route_points(window, isolated_db, monkeypatch):
