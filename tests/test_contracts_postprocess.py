@@ -161,6 +161,7 @@ def test_perevozka_steps_with_data(generator):
     steps = generator.postprocess_steps(ContractData())
     assert [step.name for step in steps] == [
         "convert_newlines", "route_tables", "remove_empty_vehicle_rows",
+        "normalize_spaces",
     ]
 
 
@@ -168,7 +169,7 @@ def test_perevozka_steps_without_data_keeps_old_behaviour(generator):
     """Без данных таблицы маршрута не строятся — как в старом коде."""
     steps = generator.postprocess_steps(None)
     assert [step.name for step in steps] == [
-        "convert_newlines", "remove_empty_vehicle_rows",
+        "convert_newlines", "remove_empty_vehicle_rows", "normalize_spaces",
     ]
 
 

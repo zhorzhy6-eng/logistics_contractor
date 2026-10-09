@@ -1,0 +1,84 @@
+{
+ "documents": 1000,
+ "overall": {
+  "documents": 1000,
+  "expected": 7301,
+  "found": 4616,
+  "true_positive": 3070,
+  "recall": 0.4205,
+  "precision": 0.6651,
+  "f1": 0.5152,
+  "empty_results": 235,
+  "errors": 79
+ },
+ "by_kind": {
+  "application": {
+   "recall": 0.462,
+   "precision": 0.3702,
+   "f1": 0.411,
+   "documents": 100
+  },
+  "bank": {
+   "recall": 0.3313,
+   "precision": 0.7171,
+   "f1": 0.4532,
+   "documents": 200
+  },
+  "inn": {
+   "recall": 0.2814,
+   "precision": 0.7296,
+   "f1": 0.4062,
+   "documents": 100
+  },
+  "license": {
+   "recall": 0.235,
+   "precision": 0.9536,
+   "f1": 0.3771,
+   "documents": 200
+  },
+  "passport": {
+   "recall": 0.5863,
+   "precision": 0.8157,
+   "f1": 0.6822,
+   "documents": 300
+  },
+  "sts": {
+   "recall": 0.488,
+   "precision": 0.5714,
+   "f1": 0.5264,
+   "documents": 100
+  }
+ },
+ "by_quality": {
+  "good": {
+   "recall": 0.656,
+   "precision": 0.6839,
+   "f1": 0.6697,
+   "documents": 200
+  },
+  "ideal": {
+   "recall": 0.6465,
+   "precision": 0.7701,
+   "f1": 0.7029,
+   "documents": 100
+  },
+  "medium": {
+   "recall": 0.4904,
+   "precision": 0.6503,
+   "f1": 0.5591,
+   "documents": 300
+  },
+  "poor": {
+   "recall": 0.2454,
+   "precision": 0.59,
+   "f1": 0.3466,
+   "documents": 250
+  },
+  "very_poor": {
+   "recall": 0.1124,
+   "precision": 0.6263,
+   "f1": 0.1906,
+   "documents": 150
+  }
+ }
+}

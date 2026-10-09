@@ -28,6 +28,7 @@ from core.contract_data import ContractData
 from core.contracts.base_generator import (
     BaseContractGenerator,
     ConvertNewlinesStep,
+    NormalizeSpacesStep,
     PostprocessStep,
 )
 from core.contracts.contract_types import ContractType
@@ -43,6 +44,7 @@ from core.contracts.ru_morphology import (
     genitive_position,
     pronoun_by_gender,
 )
+from core.dates import to_iso
 from core.num_to_words import amount_to_words
 
 logger = logging.getLogger("core.contract_generator")
@@ -143,11 +145,17 @@ class PerevozkaGenerator(BaseContractGenerator):
         переносы строк → таблицы маршрута (только с данными) → удаление
         пустых строк таблицы ТС. Без данных (data=None) таблицы маршрута
         не строятся — историческое поведение сохранено.
+
+        Последним идёт шаг косметики пробелов (NormalizeSpacesStep): он
+        должен видеть документ уже собранным, вместе с таблицами маршрута —
+        двойные пробелы и «при условии , что» есть и в бланке, и в
+        заголовках этих таблиц.
         """
         steps: List[PostprocessStep] = [ConvertNewlinesStep(self)]
         if data is not None:
             steps.append(RouteTablesStep(self))
         steps.append(RemoveEmptyVehicleRowsStep(self))
+        steps.append(NormalizeSpacesStep(self))
         return steps
 
     # ─────────────────────────────────────────────────────────
@@ -899,12 +907,44 @@ class PerevozkaGenerator(BaseContractGenerator):
     # КАРТА ЗАМЕН
     # ─────────────────────────────────────────────────────────
 
+    #: Ключи дат в условиях договора. Значения приходят из UI (ISO), из
+    #: распознавания и из справочников — в любом из форматов core.dates.
+    DATE_KEYS = ("date", "loading_plan_date", "unloading_plan_date")
+
+    @staticmethod
+    def _normalize_contract_dates(contract: Dict[str, Any]) -> None:
+        """
+        Даты договора — в ISO, как их ждёт бланк.
+
+        Бланк печатает дату как «{{loading_plan_date}} г.», то есть
+        ПОДСТАВЛЯЕТ значение как есть. Пока в это поле попадала только дата
+        из QDateEdit (ISO), вопросов не было; но распознанный документ и
+        справочники отдают дату в любом из семи форматов core/dates
+        («24.09.2026», «2026.09.24», «24/09/2026», «20260924»…), и в договоре
+        печаталось «2026.09.24 г.» — документ с датой не в российском виде.
+
+        Приводим к ISO ЗДЕСЬ, а не в каждом бланке: правило одно для всех
+        ключей дат, а разбор уже есть — core.dates.to_iso.
+
+        Что НЕ трогаем: значение, которое разобрать не удалось. Оно остаётся
+        как есть — пусть мусор виден в договоре и ловится валидатором. Это
+        лучше, чем молча напечатать пустое место вместо даты.
+        """
+        for key in PerevozkaGenerator.DATE_KEYS:
+            value = contract.get(key)
+            if not value:
+                continue
+            iso = to_iso(value)
+            if iso:
+                contract[key] = iso
+
     def _build_replacements_map(self, data: Dict[str, Any]) -> Dict[str, str]:
         contract_data = ContractData.coerce(data)
         replacements: Dict[str, str] = {}
 
         # ── Данные договора ──
         contract = contract_data.contract
+        self._normalize_contract_dates(contract)
         replacements["contract_number"] = contract.get("number", "")
 
         date_iso = contract.get("date", "")
