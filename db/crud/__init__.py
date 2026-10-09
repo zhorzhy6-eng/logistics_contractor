@@ -10,12 +10,16 @@
   addresses.py       — справочник адресов (места загрузки и выгрузки)
   counterparties.py  — справочник контрагентов (по типу договора и роли)
   drivers.py         — водители и история работы у перевозчиков (driver_carriers)
-  organizations.py   — заказчики и перевозчики: общая реализация (is_carrier)
-  customers.py       — заказчики — имена из db/crud/organizations.py
-  carriers.py        — перевозчики — имена из db/crud/organizations.py
+  organizations.py   — заказчики и перевозчики: общая реализация (флаг is_carrier)
+  customers.py       — заказчики: те же имена из organizations.py
+  carriers.py        — перевозчики: те же имена из organizations.py
   vehicles.py        — ТС: машины договора и тягач/прицеп водителя
   contracts.py       — договоры и точки маршрута
   search.py          — общий слой поиска (синхронизация и подсчёт FTS)
+
+Имена сторон договора берутся ЗДЕСЬ из organizations.py: у заказчика и
+перевозчика реализация одна (таблицу выбирает is_carrier), а модули
+customers.py и carriers.py дают каждой таблице своё имя и точку входа.
 """
 
 from db.crud.addresses import (
@@ -26,7 +30,12 @@ from db.crud.addresses import (
     save_address,
     update_address,
 )
-
+from db.crud.contracts import (
+    load_contract_points,
+    save_contract,
+    save_contract_points,
+    save_contract_with_details,
+)
 from db.crud.counterparties import (
     COUNTERPARTY_FIELDS,
     delete_counterparty,
@@ -37,7 +46,6 @@ from db.crud.counterparties import (
     search_counterparties,
     update_counterparty,
 )
-
 from db.crud.drivers import (
     ACTIVE_LINK_SQL,
     delete_driver,
@@ -53,7 +61,6 @@ from db.crud.drivers import (
     unlink_driver_from_carrier,
     update_driver,
 )
-
 from db.crud.organizations import (
     delete_organization,
     find_organization_id,
@@ -65,59 +72,20 @@ from db.crud.organizations import (
     search_organizations,
     update_organization,
 )
-
-from db.crud.customers import (
-    delete_organization,
-    find_organization_id,
-    get_all_organizations,
-    load_organization,
-    load_organization_by_id,
-    restore_organization,
-    save_organization,
-    search_organizations,
-    update_organization,
-)
-
-from db.crud.carriers import (
-    delete_organization,
-    find_organization_id,
-    get_all_organizations,
-    load_organization,
-    load_organization_by_id,
-    restore_organization,
-    save_organization,
-    search_organizations,
-    update_organization,
-)
-
 from db.crud.vehicles import (
     load_driver_vehicle,
     save_driver_vehicle,
     save_vehicles,
 )
 
-from db.crud.contracts import (
-    load_contract_points,
-    save_contract,
-    save_contract_points,
-    save_contract_with_details,
-)
-
-from db.crud.search import (
-    addresses_fts_count,
-    ensure_fts_fresh,
-)
-
 __all__ = [
     "ACTIVE_LINK_SQL",
     "COUNTERPARTY_FIELDS",
-    "addresses_fts_count",
     "count_addresses",
     "delete_address",
     "delete_counterparty",
     "delete_driver",
     "delete_organization",
-    "ensure_fts_fresh",
     "find_organization_id",
     "get_addresses",
     "get_all_counterparties",
