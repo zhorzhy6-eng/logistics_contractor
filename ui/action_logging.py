@@ -52,6 +52,12 @@ class ActionLogger(QObject):
 
     def __init__(self, app: QApplication):
         super().__init__(app)
+        # Ссылка на приложение СИЛЬНАЯ и оставлена осознанно: она держит
+        # QApplication живым, пока жив журнал (так же ведёт себя пара
+        # «приложение ↔ его Qt-ребёнок»). Слабую ссылку пробовали — тогда
+        # после возврата из main() приложение уничтожалось раньше времени
+        # (тест tests/test_main_dispatch.py: автозакрытие проверяется у ЖИВОГО
+        # приложения). К падению при выходе эта пара отношения не имеет.
         self.app = app
         app.installEventFilter(self)
         for widget in app.allWidgets():
@@ -70,7 +76,19 @@ class ActionLogger(QObject):
         if widget.property("_action_logging_connected"):
             return
         widget.setProperty("_action_logging_connected", True)
-        widget.clicked.connect(lambda _checked=False, button=widget: self._clicked(button))
+        # Слот — метод самого ActionLogger, кнопка берётся у отправителя
+        # сигнала. lambda, захватывающая кнопку и логгер, создаёт цикл ссылок
+        # Python ↔ Qt (кнопка → связь в C++ → lambda → кнопка), а такой цикл
+        # роняет процесс при выходе (грабли 2B.7).
+        widget.clicked.connect(self._on_button_clicked)
+
+    def _on_button_clicked(self, _checked: bool = False) -> None:
+        """Нажатие кнопки: запись в журнал (кнопка — отправитель сигнала)."""
+        button = self.sender()
+        if not isinstance(button, QAbstractButton):
+            logger.warning("Журнал кнопок: отправитель сигнала не кнопка — пропуск")
+            return
+        self._clicked(button)
 
     @staticmethod
     def _clicked(button: QAbstractButton) -> None:

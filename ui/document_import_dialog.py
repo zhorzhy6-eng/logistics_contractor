@@ -15,7 +15,6 @@
 """
 import logging
 from collections import OrderedDict
-from functools import partial
 from pathlib import Path
 from threading import Event
 
@@ -39,6 +38,12 @@ logger = logging.getLogger(__name__)
 
 # Колонки дерева проверки.
 COL_WHAT, COL_VALUE, COL_TARGET, COL_CHECK, COL_ACTION = range(5)
+
+#: Свойства виджетов дерева: какому (сущность, поле) они служат. Слоты берут
+#: их у отправителя сигнала, поэтому в connect нет ни lambda, ни partial
+#: (цикл ссылок Python ↔ Qt роняет процесс при выходе, грабли 2B.7).
+ENTITY_UID_PROPERTY = "import_entity_uid"
+FIELD_PROPERTY = "import_field"
 TREE_HEADERS = ("Что нашли в документах", "Значение", "Куда попадёт в форме (сейчас там)",
                 "Подтвердить", "Действие")
 # Раскладка колонок — общий помощник таблиц (ширины, режимы, подсказки).
@@ -557,7 +562,12 @@ class DocumentImportDialog(QDialog):
             top.setText(COL_TARGET, TITLES.get(entity.section, ""))
         button = QPushButton(entity.button_text)
         button.setToolTip("Подтверждает все прочитанные поля этой сущности одной кнопкой.")
-        button.clicked.connect(partial(self.set_entity_confirmed, entity.uid, True))
+        # Сущность и поле лежат свойствами на самих виджетах, а слоты — методы
+        # диалога: partial, как и lambda, держит сильную ссылку на диалог, а
+        # связь живёт в C++ объекте виджета — это цикл Python ↔ Qt, который
+        # роняет процесс при выходе (грабли 2B.7).
+        button.setProperty(ENTITY_UID_PROPERTY, entity.uid)
+        button.clicked.connect(self._on_confirm_entity_pressed)
         self.tree.setItemWidget(top, COL_ACTION, button)
         self._items[entity.uid] = top
 
@@ -592,7 +602,9 @@ class DocumentImportDialog(QDialog):
             self._unreadable_items.append(item)
         button = QPushButton(FIELD_ACTION_EDIT)
         button.setToolTip("Изменить значение: правка идёт только в форму, оригинал не меняется.")
-        button.clicked.connect(partial(self.edit_field, entity.uid, value.field))
+        button.setProperty(ENTITY_UID_PROPERTY, entity.uid)
+        button.setProperty(FIELD_PROPERTY, value.field)
+        button.clicked.connect(self._on_edit_field_pressed)
         self.tree.setItemWidget(item, COL_ACTION, button)
         self._add_conflict_variants(item, entity, value)
         self._refresh_field_item(entity, value)
@@ -662,7 +674,8 @@ class DocumentImportDialog(QDialog):
             self.targets[entity.uid] = combo.currentData()
         else:
             self.targets[entity.uid] = combo.currentData()
-        combo.currentIndexChanged.connect(partial(self._on_target_changed, entity.uid, combo))
+        combo.setProperty(ENTITY_UID_PROPERTY, entity.uid)
+        combo.currentIndexChanged.connect(self._on_target_changed_pressed)
         return combo
 
     @staticmethod
@@ -678,6 +691,38 @@ class DocumentImportDialog(QDialog):
         """Смена цели — это другой объект формы: подтверждения группы снимаются."""
         self.targets[uid] = combo.currentData()
         self.set_entity_confirmed(uid, False)
+
+    # ── Слоты виджетов дерева ──
+    # Виджет помнит своё (сущность, поле) свойством, а слот берёт его у
+    # отправителя сигнала: partial и lambda в connect держат сильную ссылку
+    # на диалог, а связь живёт в C++ объекте виджета — цикл Python ↔ Qt,
+    # который роняет процесс при выходе (грабли 2B.7).
+    def _sender_property(self, name: str):
+        """Свойство виджета-отправителя сигнала (None, если его нет)."""
+        widget = self.sender()
+        return widget.property(name) if widget is not None else None
+
+    def _on_confirm_entity_pressed(self, _checked: bool = False):
+        uid = self._sender_property(ENTITY_UID_PROPERTY)
+        if not isinstance(uid, str):
+            logger.warning("Импорт документов: у кнопки нет сущности — пропуск")
+            return
+        self.set_entity_confirmed(uid, True)
+
+    def _on_edit_field_pressed(self, _checked: bool = False):
+        uid = self._sender_property(ENTITY_UID_PROPERTY)
+        field = self._sender_property(FIELD_PROPERTY)
+        if not isinstance(uid, str) or not isinstance(field, str):
+            logger.warning("Импорт документов: у кнопки нет поля — пропуск")
+            return
+        self.edit_field(uid, field)
+
+    def _on_target_changed_pressed(self, _index: int = 0):
+        uid = self._sender_property(ENTITY_UID_PROPERTY)
+        if not isinstance(uid, str):
+            logger.warning("Импорт документов: у списка целей нет сущности — пропуск")
+            return
+        self._on_target_changed(uid, self.sender())
 
     def _apply_unreadable_filter(self):
         for item in self._unreadable_items:

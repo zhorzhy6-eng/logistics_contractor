@@ -54,7 +54,10 @@ SMALL_MAX_BYTES = 2 * 1024 * 1024
 SMALL_BACKUPS = 3
 
 # ── Логгеры приложения (им, кроме прочего, добавляется debug.log) ──
-APP_LOGGERS = ("core", "ui", "db", "config", "main")
+# «qt» — сообщения самого Qt (qt.messages, см. core/qt_crash_handler.py):
+# критические сообщения Qt идут перед qFatal(), и без них падение
+# на уровне C++ не оставляет следов в журнале.
+APP_LOGGERS = ("core", "ui", "db", "config", "main", "qt")
 
 
 class StackInfoFilter(logging.Filter):

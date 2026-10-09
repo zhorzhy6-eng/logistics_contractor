@@ -194,7 +194,7 @@ class ContractTab(TabMixin, QWidget):
         load_btns.addWidget(self.btn_remove_loading)
 
         self.btn_book_loading = theme.secondary_button("Из справочника")
-        self.btn_book_loading.clicked.connect(lambda: self._on_open_book("loading"))
+        self.btn_book_loading.clicked.connect(self._on_open_loading_book)
         load_btns.addWidget(self.btn_book_loading)
 
         load_btns.addStretch()
@@ -219,7 +219,7 @@ class ContractTab(TabMixin, QWidget):
         unload_btns.addWidget(self.btn_remove_unloading)
 
         self.btn_book_unloading = theme.secondary_button("Из справочника")
-        self.btn_book_unloading.clicked.connect(lambda: self._on_open_book("unloading"))
+        self.btn_book_unloading.clicked.connect(self._on_open_unloading_book)
         unload_btns.addWidget(self.btn_book_unloading)
 
         unload_btns.addStretch()
@@ -675,6 +675,20 @@ class ContractTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
     # Справочник адресов
     # ─────────────────────────────────────────────────────────
+
+    def _on_open_loading_book(self) -> None:
+        """
+        Кнопка «Из справочника» у мест погрузки.
+
+        Отдельный слот, а не lambda с аргументом: lambda в connect,
+        захватывающая вкладку, создаёт цикл ссылок Python ↔ Qt и роняет
+        процесс при выходе (грабли 2B.7).
+        """
+        self._on_open_book("loading")
+
+    def _on_open_unloading_book(self) -> None:
+        """Кнопка «Из справочника» у мест выгрузки (см. _on_open_loading_book)."""
+        self._on_open_book("unloading")
 
     def _on_open_book(self, point_type: str) -> None:
         """

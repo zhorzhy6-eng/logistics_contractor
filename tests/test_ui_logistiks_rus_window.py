@@ -433,13 +433,15 @@ def test_window_connect_does_not_use_lambda():
         assert ".connect(lambda" not in source.replace(" ", ""), source.splitlines()[0]
 
 
-def test_window_connects_only_bound_methods_and_partial():
+def test_window_connects_only_bound_methods():
     """
-    Все connect окна ведут на связанные методы окна или на partial.
+    Все connect окна ведут на связанные методы окна — и только на них.
 
-    Иначе говоря, среди связей нет замыканий на вкладку: вкладка живёт
-    дольше сигнала, и цикл Python ↔ Qt не даёт сборщику мусора освободить
-    ни окно, ни вкладки при выходе из программы.
+    Ни lambda, ни functools.partial: оба держат СИЛЬНУЮ ссылку на окно, а
+    связь живёт в C++ объекте сигналов — это цикл Python ↔ Qt, из-за
+    которого ни окно, ни вкладки не освобождаются при выходе из программы
+    (и процесс падает по access violation). Конкретную задачу слот находит
+    у отправителя сигнала, поэтому привязка к задаче не потеряна.
     """
     source = inspect.getsource(logistiks_window_module)
     targets = re.findall(r"\.connect\(([^)]*)", source)
@@ -447,20 +449,34 @@ def test_window_connects_only_bound_methods_and_partial():
     assert targets, "в модуле окна не нашлось ни одной связи сигналов"
     for target in targets:
         text = target.strip()
-        assert text.startswith(("self._", "partial(")), text
+        assert "lambda" not in text, text
+        assert "partial(" not in text, text
+        assert text.startswith("self._"), text
 
 
-def test_recognition_signals_are_bound_to_task_through_partial():
+def test_recognition_signals_are_bound_to_exact_task():
     """
-    Сигналы задачи привязываются к самой задаче (partial), а не к lambda.
+    Сигналы задачи привязываются к КОНКРЕТНОЙ задаче — и без partial.
 
-    Именованный аргумент task виден в подписи слота и отличает результат
-    «своей» задачи от результата отменённой.
+    Связь — метод-слот, а задачу слот находит у отправителя сигнала
+    (RecognitionSignals.owner()), поэтому результат «своей» задачи по-прежнему
+    отличается от результата отменённой. partial здесь не годится: он, как и
+    lambda, держит сильную ссылку на окно и замыкает цикл Python ↔ Qt.
     """
     source = inspect.getsource(LogistiksRusWindow._start_recognition)
+    # Комментарии отбрасываем: в них слова lambda и partial как раз и
+    # объясняются — проверяем сам КОД связей.
+    code = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith("#")
+    )
 
-    assert source.count("partial(") == 3
-    assert source.count("task=task") == 3
+    assert "partial(" not in code
+    assert "lambda" not in code
+    for signal in ("finished", "error", "cancelled", "progress"):
+        assert f"task.signals.{signal}.connect(self._on_recognition_{signal})" in code
+
+    # Задача действительно находится у отправителя сигнала, а не «примерно».
+    assert "_task_of_sender" in inspect.getsource(LogistiksRusWindow)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -887,7 +903,8 @@ def test_recognize_request_starts_task_with_logistiks_prompt(
     assert client.calls[0]["text"] == "текст заявки"
     assert client.calls[0]["prompt"] == prompt
 
-    # Связь сигналов с partial(task=...) действительно сработала.
+    # Связь сигналов с задачей действительно сработала
+    # (задача найдена у отправителя сигнала, без partial и lambda).
     assert window.recognition_task is None
 
 

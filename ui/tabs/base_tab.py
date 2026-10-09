@@ -31,6 +31,7 @@
 
 import logging
 import re
+import weakref
 from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import QDate, QObject, QRunnable, QSize, Qt, QThreadPool, pyqtSignal
@@ -174,6 +175,11 @@ class TabMixin:
 # ─────────────────────────────────────────────────────────────
 # DaData: каналы запросов
 # ─────────────────────────────────────────────────────────────
+#: Свойство кнопки «🔎»: какой канал она запускает. Нужно, чтобы слот кнопки
+#: был обычным методом вкладки: lambda в connect, захватывающая вкладку, даёт
+#: цикл ссылок Python ↔ Qt (грабли 2B.7).
+DADATA_CHANNEL_PROPERTY = "dadata_channel"
+
 #: Описание каналов: что искать, из какого поля, как это называть в UI.
 #: Значения не содержат персональных данных — только подписи и тексты.
 DADATA_CHANNELS: Dict[str, Dict[str, str]] = {
@@ -233,6 +239,17 @@ class DadataSignals(QObject):
     #: текст ошибки и признак «проблема с ключом DaData»
     error = pyqtSignal(str, bool)
 
+    def __init__(self, task=None):
+        super().__init__()
+        # Ссылка на задачу-владельца СЛАБАЯ: сильная дала бы цикл
+        # «задача → сигналы → задача», а связь слота живёт в C++ объекте
+        # сигналов. Слот берёт задачу у отправителя: self.sender().owner().
+        self._task_ref = weakref.ref(task) if task is not None else None
+
+    def owner(self):
+        """Задача-владелец сигналов (None, если её уже собрал сборщик мусора)."""
+        return self._task_ref() if self._task_ref is not None else None
+
 
 class DadataLookupTask(QRunnable):
     """
@@ -249,7 +266,7 @@ class DadataLookupTask(QRunnable):
         self.query = query
         self.method_name = method_name
         self.channel = channel
-        self.signals = DadataSignals()
+        self.signals = DadataSignals(self)
         self._client_factory = client_factory or DadataClient
 
     def run(self) -> None:
@@ -414,9 +431,11 @@ class _DadataChannelMixin(TabMixin):
         # Оформление — как у кнопок 📋/🧠 у полей (ui/theme.py, ghost).
         button = theme.ghost_button("🔎", tooltip=spec["tooltip"])
         setattr(self, spec["button_attr"], button)
-        button.clicked.connect(
-            lambda _checked=False, ch=channel: self._on_dadata_button_clicked(ch)
-        )
+        # Канал лежит свойством на самой кнопке, а слот — метод вкладки:
+        # lambda, захватывающая вкладку, создаёт цикл Python ↔ Qt, который
+        # роняет процесс при выходе (грабли 2B.7).
+        button.setProperty(DADATA_CHANNEL_PROPERTY, channel)
+        button.clicked.connect(self._on_dadata_button_pressed)
 
         container = QWidget(self)
         row = QHBoxLayout(container)
@@ -429,6 +448,23 @@ class _DadataChannelMixin(TabMixin):
     # ---------------------------------------------------------
     # Нажатие кнопки
     # ---------------------------------------------------------
+    def _on_dadata_button_pressed(self, _checked: bool = False) -> None:
+        """
+        Нажата кнопка «🔎»: канал берётся у отправителя сигнала.
+
+        Кнопка помнит свой канал свойством (DADATA_CHANNEL_PROPERTY), поэтому
+        в connect не нужны ни lambda, ни замыкание на вкладку.
+        """
+        button = self.sender()
+        channel = button.property(DADATA_CHANNEL_PROPERTY) if button is not None else None
+        if not isinstance(channel, str) or channel not in DADATA_CHANNELS:
+            logger.warning(
+                "DaData: у нажатой кнопки не определён канал (%r) — запрос пропущен",
+                channel,
+            )
+            return
+        self._on_dadata_button_clicked(channel)
+
     def _on_dadata_button_clicked(self, channel: str) -> None:
         """Проверяет значение поля и запускает запрос (без автозапуска)."""
         spec = DADATA_CHANNELS[channel]
@@ -475,16 +511,12 @@ class _DadataChannelMixin(TabMixin):
 
         task = DadataLookupTask(query, spec["method"], channel)
         self._dadata_tasks[channel] = task
-        task.signals.finished.connect(
-            lambda data, t=task: self._on_dadata_finished(data, t)
-        )
-        task.signals.not_found.connect(
-            lambda t=task: self._on_dadata_not_found(t)
-        )
-        task.signals.error.connect(
-            lambda message, key_problem, t=task:
-                self._on_dadata_error(message, key_problem, t)
-        )
+        # Задачу слот находит у отправителя сигнала (DadataSignals.owner): ни
+        # lambda, ни functools.partial — оба держат сильную ссылку на вкладку,
+        # а связь живёт в C++ объекте сигналов (цикл Python ↔ Qt, грабли 2B.7).
+        task.signals.finished.connect(self._on_dadata_finished)
+        task.signals.not_found.connect(self._on_dadata_not_found)
+        task.signals.error.connect(self._on_dadata_error)
         self._dadata_pool.start(task)
 
     # ---------------------------------------------------------
@@ -520,6 +552,31 @@ class _DadataChannelMixin(TabMixin):
         """Канал задачи (или канал по умолчанию, если задачи нет)."""
         return getattr(task, "channel", None) or self.DADATA_CHANNEL
 
+    def _dadata_task_of_sender(self):
+        """
+        Задача DaData, чьи сигналы пришли в слот.
+
+        Задача берётся у отправителя сигнала: Qt отдаёт в sender() объект
+        DadataSignals, а он помнит своего владельца слабой ссылкой
+        (см. DadataSignals.owner). Так слот знает КОНКРЕТНУЮ задачу — связать
+        её через lambda или partial нельзя (цикл Python ↔ Qt, грабли 2B.7).
+        """
+        signals = self.sender()
+        owner = getattr(signals, "owner", None)
+        task = owner() if callable(owner) else None
+        if task is not None:
+            return task
+
+        self._ensure_dadata_state()
+        for candidate in self._dadata_tasks.values():
+            if candidate is not None and candidate.signals is signals:
+                return candidate
+        return None
+
+    def _dadata_task_from(self, task):
+        """Задача из аргумента слота; без него — по отправителю сигнала."""
+        return task if task is not None else self._dadata_task_of_sender()
+
     def _is_current_dadata_task(self, task) -> bool:
         if task is None:
             return True
@@ -537,6 +594,7 @@ class _DadataChannelMixin(TabMixin):
     # Результаты запроса
     # ---------------------------------------------------------
     def _on_dadata_finished(self, data: Any, task=None) -> None:
+        task = self._dadata_task_from(task)
         if not self._is_current_dadata_task(task):
             return
         channel = self._dadata_channel_for(task)
@@ -544,6 +602,7 @@ class _DadataChannelMixin(TabMixin):
         self._apply_dadata_result(channel, data)
 
     def _on_dadata_not_found(self, task=None) -> None:
+        task = self._dadata_task_from(task)
         if not self._is_current_dadata_task(task):
             return
         channel = self._dadata_channel_for(task)
@@ -557,6 +616,7 @@ class _DadataChannelMixin(TabMixin):
 
     def _on_dadata_error(self, message: str, key_problem: bool,
                          task=None) -> None:
+        task = self._dadata_task_from(task)
         if not self._is_current_dadata_task(task):
             return
         self._finish_dadata_lookup(task)

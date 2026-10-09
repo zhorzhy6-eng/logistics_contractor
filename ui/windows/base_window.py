@@ -53,6 +53,7 @@ from ui import theme
 from ui.controls.contract_type_selector import ContractTypeSelector
 from ui.icons import action_icon, tab_icon
 from ui.navigation import SideNav
+from ui.qt_shutdown import cancel_running_tasks, wait_for_thread_pools
 
 logger = logging.getLogger("ui.windows.base_window")
 
@@ -749,6 +750,13 @@ class BaseContractWindow(QMainWindow):
 
     def force_close(self) -> None:
         """Реальное закрытие (используется WindowManager.close_all())."""
+        # Сначала свои рабочие потоки: пул распознавания — Qt-ребёнок окна, и
+        # его разрушение с работающей задачей (GigaChat) роняет процесс
+        # (access violation при выходе). Отменяем текущее распознавание, чтобы
+        # ожидание было коротким и результат уже не применялся.
+        cancel_running_tasks(self, "recognition_task")
+        wait_for_thread_pools(self)
+
         self._force_close = True
         self.blockSignals(True)
         self.close()

@@ -55,7 +55,7 @@
 
 import logging
 import os
-from functools import partial
+import weakref
 from typing import Any, Dict, List, Mapping, Optional
 
 from PyQt5.QtCore import QObject, QRunnable, QSize, QThreadPool, pyqtSignal
@@ -91,6 +91,17 @@ class RecognitionSignals(QObject):
     cancelled = pyqtSignal()
     progress = pyqtSignal(int, str)   # процент, текст статуса
 
+    def __init__(self, task=None):
+        super().__init__()
+        # Ссылка на задачу-владельца СЛАБАЯ: сильная дала бы цикл
+        # «задача → сигналы → задача», а связь слота живёт в C++ объекте
+        # сигналов. Слот берёт задачу у отправителя: self.sender().owner().
+        self._task_ref = weakref.ref(task) if task is not None else None
+
+    def owner(self):
+        """Задача-владелец сигналов (None, если её уже собрал сборщик мусора)."""
+        return self._task_ref() if self._task_ref is not None else None
+
 
 class RecognitionTask(QRunnable):
     """
@@ -108,7 +119,7 @@ class RecognitionTask(QRunnable):
         self.client = client
         self.text = text
         self.prompt = prompt
-        self.signals = RecognitionSignals()
+        self.signals = RecognitionSignals(self)
         self._cancelled = False
 
     # ── Отмена ──
@@ -612,14 +623,15 @@ class HavalyWindow(BaseContractWindow):
         task = RecognitionTask(client, text, prompt=prompt)
         self.recognition_task = task
 
-        # Сигналы привязываем к конкретной задаче через functools.partial:
-        # результат «старой» (отменённой) задачи не должен влиять на новую.
-        # lambda здесь не годится — замыкание на окно даёт цикл ссылок
-        # Python ↔ Qt и роняет процесс при завершении; partial же держит
-        # только саму задачу, а она живёт до конца распознавания.
-        task.signals.finished.connect(partial(self._on_recognition_finished, task=task))
-        task.signals.error.connect(partial(self._on_recognition_error, task=task))
-        task.signals.cancelled.connect(partial(self._on_recognition_cancelled, task=task))
+        # Сигналы привязываем к КОНКРЕТНОЙ задаче: результат «старой»
+        # (отменённой) задачи не должен влиять на новую. Связь — метод-слот:
+        # ни lambda, ни functools.partial, потому что оба держат СИЛЬНУЮ
+        # ссылку на окно, а связь живёт в C++ объекте сигналов — это цикл
+        # Python ↔ Qt, роняющий процесс при выходе (грабли 2B.7). Задачу
+        # слот находит у отправителя сигнала: RecognitionSignals.owner().
+        task.signals.finished.connect(self._on_recognition_finished)
+        task.signals.error.connect(self._on_recognition_error)
+        task.signals.cancelled.connect(self._on_recognition_cancelled)
         task.signals.progress.connect(self._on_recognition_progress)
 
         self.thread_pool.start(task)
@@ -641,6 +653,10 @@ class HavalyWindow(BaseContractWindow):
         signals = self.sender()
         if signals is None:
             return None
+        owner = getattr(signals, "owner", None)
+        task = owner() if callable(owner) else None
+        if task is not None:
+            return task
         return next(
             (task for task in self._recognition_tasks() if task.signals is signals),
             None,
