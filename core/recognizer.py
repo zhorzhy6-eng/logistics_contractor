@@ -745,6 +745,30 @@ class DataMapper:
     # Полная обработка
     # ─────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _section(value: Any) -> Dict[str, Any]:
+        """
+        Раздел ответа модели к словарю.
+
+        Модель (и GigaChat Vision, и текстовые промпты) отдаёт ФИО, реквизиты
+        и ТС СПИСКОМ: «carrier»: [{...}], «driver»: [{...}] — так удобнее
+        описывать несколько людей и машин в одном документе. Маппер же ждёт
+        словарь. Раньше на списке вызов падал с
+        «AttributeError: 'list' object has no attribute 'get'» посреди
+        разбора: результат терялся целиком, а запрос к модели уже был
+        потрачен. Здесь форма приводится к ожидаемой: список из одного
+        элемента разворачивается, список из нескольких — первый элемент
+        (вызывающий код разбирает остальные сам), пустой список и мусор —
+        пустой словарь.
+        """
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, dict):
+                    return item
+        return {}
+
     @classmethod
     @trace
     def process_full_response(
@@ -756,6 +780,13 @@ class DataMapper:
         Обрабатывает полный ответ от Ollama.
         source_text — исходный текст (для fallback по VIN).
         """
+        if isinstance(data, (list, tuple)):
+            # Ответ целиком списком: у Ollama такое бывает при нескольких
+            # документах в одном запросе.
+            data = cls._section(data)
+        if not isinstance(data, dict):
+            data = {}
+
         vehicles = cls.map_vehicles_data(data.get("vehicles", []))
 
         # ── Fallback: если Ollama потеряла VIN, добираем регексом ──
@@ -763,13 +794,15 @@ class DataMapper:
             vehicles = cls._recover_missing_vins(vehicles, source_text)
 
         result = {
-            "driver": cls.map_driver_data(data.get("driver", {})),
-            "customer": cls.map_organization_data(data.get("customer", {}), is_carrier=False),
-            "carrier": cls.map_organization_data(data.get("carrier", {}), is_carrier=True),
+            "driver": cls.map_driver_data(cls._section(data.get("driver"))),
+            "customer": cls.map_organization_data(
+                cls._section(data.get("customer")), is_carrier=False),
+            "carrier": cls.map_organization_data(
+                cls._section(data.get("carrier")), is_carrier=True),
             "vehicles": vehicles,
-            "tractor": cls.map_tractor_data(data.get("tractor", {})),
-            "trailer": cls.map_trailer_data(data.get("trailer", {})),
-            "contract": cls.map_contract_data(data.get("contract", {})),
+            "tractor": cls.map_tractor_data(cls._section(data.get("tractor"))),
+            "trailer": cls.map_trailer_data(cls._section(data.get("trailer"))),
+            "contract": cls.map_contract_data(cls._section(data.get("contract"))),
         }
 
         logger.info(

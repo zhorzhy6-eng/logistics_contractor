@@ -60,8 +60,25 @@ def _bank(lines, text):
     }
     for key, pattern in patterns.items():
         fields[key] = _one(pattern, text, re.I | re.M)
+    # Разбор `_bank` вызывается напрямую (не через `_driver_card`), поэтому
+    # телефон и ИНН/КПП получателя берутся отдельно: в карточке реквизитов
+    # они есть, а в прежнем разборе терялись.
+    fields["phone"] = _one(r"(?m)^\s*(?:телефон|тел\.?)\s*[:|]?\s*"
+                           r"(\+?[0-9][0-9\s\-()]{9,})", text, re.I)
+    inn_kpp = _one(r"(?m)^\s*ИНН\s*[/\\]?\s*КПП\s*[:|]?\s*"
+                   r"([0-9]{10}\s+[0-9]{9})\b", text, re.I)
+    if inn_kpp:
+        parts = re.findall(r"[0-9]+", inn_kpp)
+        if len(parts) == 2:
+            fields["inn"], fields["kpp"] = parts[0], parts[1]
+    if not fields.get("full_name"):
+        # «Получатель ИП Фамилия Имя Отчество» — та же строка с меткой.
+        fields["full_name"] = _one(
+            r"(?m)^\s*получатель\s*[:|]?\s*"
+            r"((?:ИП|ООО|АО|ПАО)\s+[^\n|]{4,80})$", text, re.I)
     # Employer/recipient are different roles. Only an explicit business name is a carrier candidate.
-    fields["full_name"] = _one(r"^\s*(ИП\s+[А-ЯЁ][а-яёА-ЯЁ-]+\s+[А-ЯЁ][а-яёА-ЯЁ-]+\s+[А-ЯЁ][а-яёА-ЯЁ-]+)\s*$", text, re.M)
+    if not fields.get("full_name"):
+        fields["full_name"] = _one(r"^\s*(ИП\s+[А-ЯЁ][а-яёА-ЯЁ-]+\s+[А-ЯЁ][а-яёА-ЯЁ-]+\s+[А-ЯЁ][а-яёА-ЯЁ-]+)\s*$", text, re.M)
     # Deliberately do not extract "ИНН банка получателя" as the carrier's INN.
     fields["_note"] = "Банковские реквизиты: проверьте получателя и назначение счёта; ИНН банка не является ИНН перевозчика."
     return _record("carrier", "bank", fields)
@@ -117,20 +134,73 @@ def _passport(lines, text):
     return _record("driver", "passport", fields)
 
 
+_PATRONYMIC_END = r"(?:ОВИЧ|ЕВИЧ|ОВНА|ЕВНА|ИЧНА|ИНИЧНА)$"
+
+
+def _stems_of_surnames(words):
+    """
+    Слова, которые могут быть фамилией: отчества из списка исключаются.
+
+    Отчество оканчивается на «-ович» и потому само подходит под шаблон
+    фамилии на «-ов»: в списке кандидатов оно стояло рядом с настоящей
+    фамилией, и разбор «одна фамилия в строке» терял и фамилию, и имя.
+    """
+    stems = []
+    for word in words:
+        if re.search(_PATRONYMIC_END, word, re.I):
+            continue
+        stems.append(word)
+    return stems
+
+
 def _license(lines, text):
     fields = {}
     last = _one(r"(?m)^\s*1[.,]?\s+([А-ЯЁ][А-ЯЁа-яё-]{2,})\b", text)
-    first = _one(r"(?m)^\s*2[.,]?\s+([А-ЯЁ][А-ЯЁа-яё-]+\s+[А-ЯЁ][А-ЯЁа-яё-]+)\b", text)
+    # Метка «2.» может повториться в одной строке: OCR широкого бланка
+    # разрывает строку и подписывает обе половины («2. Дмитрий 2. Денисович»).
+    # Поэтому имени и отчеству разрешено стоять и под одной меткой, и под
+    # двумя. Ищем последовательно, от «как напечатано в бланке» к «как прочитал
+    # OCR»: первая подошедшая пара и есть ФИО.
+    first = _one(r"(?m)^\s*2[.,]?\s+([А-ЯЁ][А-ЯЁа-яё-]+\s+[А-ЯЁ][А-ЯЁа-яё-]+)\b",
+                 text)
+    if not first:
+        # Имя и отчество — каждое под своей меткой «2.». Так их читает OCR,
+        # когда строки бланка разъехались, и между ними появляется пустая
+        # строка. Регулярка на две строки здесь не работает: `^` в режиме
+        # MULTILINE не совпадает через перевод строки. Поэтому строки сначала
+        # склеиваются в один текст по правилу «метка и её значение», а пары
+        # «имя + отчество» берутся из получившегося списка.
+        labels = [re.sub(r"^\s*2[.,]?\s*", "", line).strip()
+                  for line in lines
+                  if re.match(r"^\s*2[.,]?\s+\S", line)]
+        for name, patronymic in zip(labels, labels[1:]):
+            if _patronymic(patronymic) and not _patronymic(name):
+                first = f"{name.split()[0]} {patronymic.split()[0]}"
+                break
     if last and first:
         fields["full_name"] = last + " " + first
     if not fields.get("full_name"):
-        # A numbered given-name row plus a single printed Cyrillic surname above it.
+        # Строка с именем и отчеством плюс фамилия на этой же строке или
+        # строкой выше (в бланке ВУ фамилия идёт пунктом 1, имя — пунктом 2).
         for i, line in enumerate(lines):
-            name = re.search(r"^\s*2[.,]?\s+([А-ЯЁ]{3,}\s+[А-ЯЁ]+(?:ОВИЧ|ЕВИЧ|ОВНА|ЕВНА))\b", line)
-            if name:
-                surnames = re.findall(r"\b[А-ЯЁ]{2,}(?:ОВ|ЕВ|ИН|ОВА|ЕВА|ИНА|КО|ЯН)\b", " ".join(lines[max(0,i-4):i]))
-                if len(set(surnames)) == 1:
-                    fields["full_name"] = surnames[0] + " " + name.group(1)
+            name = re.search(r"^\s*2[.,]?\s+([А-ЯЁ]{2,}\s+[А-ЯЁ]+(?:ОВИЧ|ЕВИЧ|ОВНА|ЕВНА))\b",
+                             line)
+            if not name:
+                continue
+            region = " ".join(lines[max(0, i - 4):i + 1])
+            surnames = _stems_of_surnames(
+                re.findall(r"\b[А-ЯЁ]{2,}(?:ОВ|ЕВ|ИН|ОВА|ЕВА|ИНА|КО|ЯН)\b", region))
+            if len(set(surnames)) == 1:
+                fields["full_name"] = surnames[0] + " " + name.group(1)
+                break
+            # Фамилия не подходит под «русские» окончания (Ким, Пак, Тен):
+            # берём слово, которое стоит перед именем — в бланке это пункт 1
+            # либо начало той же строки.
+            before = re.findall(r"\b([А-ЯЁ]{3,})\b", lines[i - 1]) if i else []
+            before = _stems_of_surnames(before)
+            if len(before) == 1:
+                fields["full_name"] = before[0] + " " + name.group(1)
+                break
     fields["birth_date"] = _label_date(lines, r"^\s*3[.,]?\s*")
     fields["license_issue_date"] = _label_date(lines, r"4[аa][).:]?\s*")
     fields["license_expiry_date"] = _label_date(lines, r"4[бb][).:]?\s*")
@@ -259,6 +329,34 @@ def _unique_digit_run(text, length):
     return runs.pop() if len(runs) == 1 else ""
 
 
+def _inn_kpp_from_text(text):
+    """
+    ИНН и КПП из документа организации.
+
+    Три вида записи, все встречаются в сканах ФНС:
+
+      * «7701234567 770101001» — через разделитель (первым ищется 19 цифр
+        подряд, потому что `_packed` уже склеил пробелы);
+      * «770123456770101001» — 19 цифр слитно, метка может быть склеена
+        («иННкпП»): делим 10 + 9;
+      * «ИНН 7701234567» и «КПП 770101001» — раздельными метками.
+
+    Возвращает (inn, kpp); любая часть может быть пустой.
+    """
+    packed = _packed(text)
+    run = re.search(r"(?<!\d)(\d{19})(?!\d)", packed)
+    if run:
+        return run.group(1)[:10], run.group(1)[10:]
+    # Слитные 19 цифр могли не склеиться (разделитель — не пробел): ищем
+    # 19 цифр в строке целиком, допуская разделители между ними.
+    loose = re.search(r"(?<!\d)(\d{10})[\s\-/|]*(\d{9})(?!\d)", packed)
+    if loose:
+        return loose.group(1), loose.group(2)
+    inn = _unique_digit_run(text, 10)
+    kpp = _unique_digit_run(text, 9)
+    return inn, kpp
+
+
 def _org_full_name(text):
     patterns = (
         r"(?:ОБЩЕСТВО\s+С\s+ОГРАНИЧЕННОЙ\s+ОТВЕТСТВЕННОСТЬЮ|ООО)\s*[«\"']([^»\"'\n]{2,80})[»\"']",
@@ -364,18 +462,40 @@ def _counterparty_card(lines, text):
     return _record("carrier", "counterparty_card", fields)
 
 
+def _line_with_digits(text, label, flags=re.I):
+    """
+    Последняя строка с меткой, в которой есть цифры.
+
+    Метка «ИНН» встречается дважды: в шапке («ИНН / КПП») и в строке со
+    значениями («иННкпП 770123456770101001»). Прежний разбор брал первую
+    строку и не находил в ней ни одного значения; здесь выбирается строка
+    со значениями — в ней есть цифры.
+    """
+    candidates = re.findall(rf"(?m)^[^\n]*{label}[^\n]*$", text or "", flags)
+    with_digits = [line for line in candidates if re.search(r"[0-9]", line)]
+    if with_digits:
+        return with_digits[-1]
+    return candidates[-1] if candidates else ""
+
+
 def _registration_certificate(lines, text):
     """FNS certificate of registration: name plus spaced ИНН/КПП and ОГРН."""
     fields = {"full_name": _org_full_name(text)}
-    inn_kpp = _unique_digit_run(text, 19)
-    if inn_kpp:
-        fields["inn"], fields["kpp"] = inn_kpp[:10], inn_kpp[10:]
-    if not fields.get("inn"):
-        same_line = re.search(r"ИНН\s*[:|]?\s*(\d{10})\b", text)
-        if same_line:
-            fields["inn"] = same_line.group(1)
+    if not fields.get("full_name"):
+        # «Полное наименование ООО «Тестовая Компания»» — наименование стоит
+        # в той же строке с меткой, а не в кавычках отдельным абзацем.
+        fields["full_name"] = _label_value(
+            lines, r"полное\s+наименование", 1)
+    inn, kpp = _inn_kpp_from_text(text)
+    if inn:
+        fields["inn"] = inn
+    if kpp:
+        fields["kpp"] = kpp
     if not fields.get("ogrn"):
         fields["ogrn"] = _unique_digit_run(text, 13)
+    if not fields.get("legal_address"):
+        fields["legal_address"] = _label_value(
+            lines, r"адрес\s*\(место\s+нахождения\)", 2)
     return _record("carrier", "registration_certificate", fields)
 
 
@@ -701,6 +821,13 @@ def extract_document_fields(text):
     if (re.search(r"постановке\s+на\s+учет\s+российской\s+организации|поставлена\s+на\s+учет", text, re.I)
             and re.search(r"ИНН\s*/?\s*КПП", text)):
         return _registration_certificate(lines, text)
+    # Та же справка, но шапка распознана иначе: «СВИДЕТЕЛЬСТВО О ПОСТАНОВКЕ
+    # НА УЧЕТ» без слов «российской организации». Признак документа ФНС —
+    # метка «ИНН/КПП» вместе с ОГРН: без этой ветви такой бланк не
+    # распознавался ВОВСЕ (разбор возвращал None, хотя ИНН в тексте есть).
+    if (re.search(r"ИНН\s*/?\s*КПП", text)
+            and re.search(r"\bОГРНИП\b|\bОГРН\b", text)):
+        return _registration_certificate(lines, text)
     if re.search(r"выписка\s+из\s+реестра\s+уведомлений|реестр[а-я]*\s+уведомлений\s+о\s+транспортно", text, re.I):
         return _rostransnadzor_notice(lines, text)
     if (re.search(r"единого\s+государственного\s+реестра\s+юридических\s+лиц", text, re.I)
@@ -709,14 +836,22 @@ def extract_document_fields(text):
     if (re.search(r"^\s*[РP]\s*Е\s*Ш\s*Е\s*Н\s*И\s*Е|решение\s+№?\s*\d*\s*единственного\s+учредителя", text, re.I | re.M)
             and re.search(r"учредител", text, re.I)):
         return _founder_decision(lines, text)
+    # Карточка водителя проверяется РАНЬШЕ паспорта: в свободной записи
+    # («Водитель: ФИО, д.р., паспорт РФ …, ВУ …, тягач») слово «Паспорт РФ»
+    # есть, и паспортная ветвь перехватывала разбор — карточка теряла ВУ,
+    # тягач и телефон. Признак карточки сильнее: строка «Водитель» плюс
+    # дата рождения или место рождения.
+    driver_block = (re.search(r"(?m)^\s*водитель\b", text, re.I)
+                    and re.search(r"д\.\s?р\.|место\s+рождения|дата\s+рождения",
+                                  text, re.I))
+    if driver_block:
+        return _driver_card(lines, text)
     license_marker = re.search(r"водительское\s+удостоверение|ID\s*карта|госномер\s+(?:тягача|прицепа)", text, re.I)
     card_marker = re.search(r"дата\s+рождения|д\.\s?р\.|прописка|прицеп|тягач|регистрац|место\s+рождения", text, re.I)
     # Свободная запись «серия номер выдано … категории …» без номерного бланка.
     free_form_license = (re.search(r"выдан[оа]|категори|срок\s+до", text, re.I)
                          and re.search(r"\b[0-9]{2}\s+[0-9]{2}\s+[0-9]{6}\b", text))
-    driver_block = (re.search(r"(?m)^\s*водитель\b", text, re.I)
-                    and re.search(r"д\.\s?р\.|место\s+рождения", text, re.I))
-    if (license_marker and (card_marker or free_form_license)) or driver_block:
+    if license_marker and (card_marker or free_form_license):
         return _driver_card(lines, text)
     if re.search(r"банк\s+получателя|номер\s+сч[её]та\s+получателя", text, re.I):
         return _bank(lines, text)

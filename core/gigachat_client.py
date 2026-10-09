@@ -368,7 +368,26 @@ def _clean_and_parse_json(raw_text: str) -> dict:
 # ============================================================
 class GigaChatClient:
     BASE_URL = "https://api.giga.chat/v1"
-    AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    AUTH_URL: str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+
+    #: Модель по умолчанию — для ТЕКСТА (транскрипция, извлечение из текста).
+    #: Изображение она не принимает: это отдельная возможность, у неё своя
+    #: модель (см. DEFAULT_VISION_MODEL).
+    #:
+    #: Модель по умолчанию. Проверено живьём 10.10.2026: GigaChat-2 картинку
+    #: НЕ принимает (422 «Model does not support image»), принимают
+    #: GigaChat-2-Max и GigaChat-2-Pro. Раньше по умолчанию стояла
+    #: GigaChat-2, и распознавание фотографий падало на первом же запросе.
+    DEFAULT_MODEL = "GigaChat-2-Max"
+
+    #: Модель для распознавания ИЗОБРАЖЕНИЙ (Vision). Модели GigaChat-2 и
+    #: GigaChat-3-Lightning изображение не принимают вовсе: API отвечает
+    #: «422 Model does not support image» (проверено живьём 10.10.2026).
+    DEFAULT_VISION_MODEL = "GigaChat-2-Max"
+
+    #: Запасные Vision-модели: если настроенная картинку не принимает,
+    #: распознавание пробует следующую, а не падает на первом запросе.
+    VISION_FALLBACKS = ("GigaChat-2-Max", "GigaChat-2-Pro")
 
     # ── Повторы и ограничения (Шаг 7 оптимизации) ──
     # При 429/5xx/таймауте повторяем с задержкой 1с → 2с → 4с.
@@ -479,7 +498,8 @@ class GigaChatClient:
 
     def __init__(self, auth_key: Optional[str] = None,
                  scope: str = "GIGACHAT_API_PERS",
-                 model: str = "GigaChat-2",
+                 model: str = DEFAULT_MODEL,
+                 vision_model: str = DEFAULT_VISION_MODEL,
                  timeout: int = 300,
                  verify_ssl: bool = True,
                  ca_bundle: Optional[str] = None):
@@ -495,6 +515,12 @@ class GigaChatClient:
 
         self.scope = scope
         self.model = model
+        #: Модель для распознавания КАРТИНОК. Обычная текстовая модель
+        #: изображение не принимает вовсе — API отвечает
+        #: «422 Model does not support image» (проверено живьём 10.10.2026:
+        #: GigaChat-2 и GigaChat-3-Lightning картинку не принимают,
+        #: GigaChat-2-Max и GigaChat-2-Pro принимают).
+        self.vision_model = vision_model
         self.timeout = timeout
         # ── TLS: проверка сертификата включена (Шаг 3 задания) ──
         # ca_bundle — путь к корневому сертификату (например, НУЦ Минцифры);
@@ -610,9 +636,15 @@ class GigaChatClient:
         cancelled = False
         error = None
 
+        #: Сколько раз пробуем один запрос. Три, а не два: одна попытка уходит
+        #: на смену Vision-модели (422 «Model does not support image»), одна —
+        #: на обновление протухшего токена (401).
+        max_attempts = 3
+
         def request(endpoint, **kwargs):
-            for attempt in range(2):
-                logger.debug("GigaChat: запрос к %s | попытка %s/2", endpoint, attempt + 1)
+            for attempt in range(max_attempts):
+                logger.debug("GigaChat: запрос к %s | попытка %s/%s",
+                             endpoint, attempt + 1, max_attempts)
                 started = time.perf_counter()
                 try:
                     token = self._get_token()
@@ -628,10 +660,32 @@ class GigaChatClient:
                     endpoint, response.status_code,
                     (time.perf_counter() - started) * 1000,
                 )
-                if response.status_code == 401 and attempt == 0:
+                if response.status_code == 401 and attempt < max_attempts - 1:
                     self._invalidate_token()
                     continue
                 if not 200 <= response.status_code < 300:
+                    # 422 «Model does not support image» — не ошибка данных, а
+                    # неверная модель: картинку принимает только Vision-модель.
+                    # Переключаемся на следующую запасную и повторяем, иначе
+                    # распознавание фотографий не работает вовсе.
+                    if (response.status_code == 422
+                            and "does not support image" in response.text
+                            and attempt < max_attempts - 1):
+                        for candidate in self.VISION_FALLBACKS:
+                            if candidate != self.vision_model:
+                                logger.warning(
+                                    "GigaChat: модель «%s» не принимает "
+                                    "изображения — перехожу на «%s»",
+                                    self.vision_model, candidate,
+                                )
+                                self.vision_model = candidate
+                                break
+                        else:
+                            raise RuntimeError(
+                                "GigaChat: ни одна из Vision-моделей не "
+                                "принимает изображения."
+                            )
+                        continue
                     raise RuntimeError(f"GigaChat: HTTP {response.status_code}.")
                 return response.json()
 
@@ -662,7 +716,7 @@ class GigaChatClient:
                     {"role": "user", "content": "Прочитай документ.",
                      "attachments": [file_id]},
                 ]
-            return {"model": self.model, "messages": messages,
+            return {"model": self.vision_model, "messages": messages,
                     "temperature": 0, "max_tokens": self.MAX_TOKENS}
 
         def structured_call(file_id):

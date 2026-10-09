@@ -1,0 +1,7030 @@
+{
+ "version": 1,
+ "seed": 20261010,
+ "count": 1000,
+ "kinds": {
+  "passport": 300,
+  "license": 200,
+  "bank": 200,
+  "inn": 100,
+  "sts": 100,
+  "application": 100
+ },
+ "qualities": {
+  "ideal": 100,
+  "good": 200,
+  "medium": 300,
+  "poor": 250,
+  "very_poor": 150
+ },
+ "defects": {
+  "cut_letter": 100,
+  "lookalike_digits": 100,
+  "double_exposure": 80,
+  "erased_letters": 100
+ },
+ "seeds": [
+  752030431,
+  500702941,
+  1421832150,
+  1720468559,
+  90581388,
+  1576346417,
+  1785786764,
+  2137379825,
+  552158568,
+  707352969,
+  862003252,
+  702194306,
+  765959242,
+  544939246,
+  1346444274,
+  2037665882,
+  372859073,
+  357165989,
+  843365675,
+  1641693744,
+  973195259,
+  5515876,
+  1687469832,
+  1212000438,
+  1102015060,
+  632771836,
+  703491514,
+  946607872,
+  1299003253,
+  1679252868,
+  365916924,
+  412648590,
+  741131363,
+  624460460,
+  642198257,
+  232156956,
+  1626940433,
+  198663551,
+  1459551286,
+  125931090,
+  182831392,
+  571853059,
+  684259754,
+  1893955439,
+  1852082716,
+  1896743977,
+  845660754,
+  634878090,
+  1445747126,
+  124282371,
+  975783309,
+  830393397,
+  291822840,
+  1811979910,
+  1584695999,
+  847719057,
+  1204799519,
+  1167402278,
+  2104240730,
+  83987100,
+  1172607867,
+  899428383,
+  386286870,
+  1777386713,
+  1293053658,
+  458043029,
+  1694959341,
+  147190259,
+  1725591404,
+  1206643288,
+  720664956,
+  1673316955,
+  1890261034,
+  654815771,
+  1304273138,
+  1270070257,
+  1875610525,
+  2040174641,
+  1455929813,
+  1307272575,
+  897507826,
+  1117265392,
+  450778718,
+  1451194573,
+  1155988700,
+  1922383636,
+  864342800,
+  923211828,
+  215118668,
+  676378715,
+  25137637,
+  1047947683,
+  1042075708,
+  1162281431,
+  1563965872,
+  1862174251,
+  600993990,
+  343980955,
+  56901004,
+  1379848215,
+  1549263419,
+  1137609740,
+  175510992,
+  886520433,
+  327616188,
+  1678879503,
+  1162549533,
+  907502917,
+  1569185157,
+  1054527935,
+  1218199308,
+  573793694,
+  1181702135,
+  461684167,
+  1265676884,
+  400321200,
+  881039846,
+  1385301211,
+  643154388,
+  743932998,
+  520776126,
+  165560180,
+  1757624944,
+  624249982,
+  576681559,
+  1455517537,
+  564050129,
+  111205604,
+  2072356728,
+  65894443,
+  1131865134,
+  1423033338,
+  325257595,
+  485466894,
+  1367014336,
+  1889651119,
+  557065003,
+  1453891320,
+  87415656,
+  3229531,
+  465425446,
+  311891264,
+  1841728506,
+  1484183779,
+  1885076230,
+  1226941777,
+  1942354743,
+  1333316679,
+  1130197194,
+  1465579945,
+  242263977,
+  1435133682,
+  1778401210,
+  1137502393,
+  78758082,
+  1114223427,
+  1704189318,
+  398706271,
+  478710529,
+  2071817501,
+  851717102,
+  284584656,
+  1658763238,
+  1177605295,
+  1542102117,
+  303099954,
+  1219090000,
+  1209136208,
+  534282700,
+  65927347,
+  77775024,
+  2129028561,
+  2000226846,
+  38602950,
+  1940659172,
+  1014369004,
+  1749703244,
+  1192535096,
+  2106392674,
+  1838335730,
+  1672271396,
+  1971339327,
+  859571403,
+  1081180950,
+  231818742,
+  21481316,
+  2094700334,
+  307807606,
+  299863904,
+  706958290,
+  6671130,
+  338600339,
+  1639905491,
+  1225091641,
+  1676903819,
+  1884716869,
+  1545309806,
+  1482397144,
+  1983598044,
+  886690620,
+  1639070631,
+  1331587750,
+  82795705,
+  1949106478,
+  1294276028,
+  1230515682,
+  1292608614,
+  1025720268,
+  1693964275,
+  1263463869,
+  487625815,
+  975189712,
+  811946859,
+  962771986,
+  1084215037,
+  739002639,
+  241097752,
+  2068880427,
+  1597933679,
+  309799494,
+  1111439584,
+  1198261834,
+  416742793,
+  1503242053,
+  2043350034,
+  1527953436,
+  1041596409,
+  1383895933,
+  1560951698,
+  1560753612,
+  1925812479,
+  1875908206,
+  2080578667,
+  870835190,
+  1601158042,
+  431997984,
+  2104254910,
+  1510672427,
+  1999616298,
+  1236887196,
+  105205986,
+  639177116,
+  2082904362,
+  755722582,
+  859877759,
+  2133732663,
+  976405387,
+  255504271,
+  2140284177,
+  1633112321,
+  489806225,
+  1565320005,
+  1378123683,
+  505715420,
+  886176381,
+  1431523713,
+  1587784481,
+  1623419075,
+  1197626030,
+  1725088194,
+  1132070240,
+  679806131,
+  893675591,
+  804528503,
+  1943114268,
+  21192703,
+  397301692,
+  978853466,
+  780267700,
+  42496990,
+  1539177625,
+  513168086,
+  1163564225,
+  1413231091,
+  940415461,
+  1511016530,
+  1878699547,
+  1633731726,
+  99891651,
+  186443352,
+  519690832,
+  671489312,
+  1148049621,
+  1279617547,
+  1758483287,
+  458018139,
+  723834894,
+  567144950,
+  1859050006,
+  1995059663,
+  1016782227,
+  1205069697,
+  105280505,
+  2103293642,
+  775416215,
+  531788593,
+  1618439515,
+  832090367,
+  1314216547,
+  235898680,
+  881184929,
+  64390854,
+  1103179301,
+  580354414,
+  1604158582,
+  323733233,
+  657675948,
+  1240655623,
+  795629220,
+  1985604370,
+  986888492,
+  57296860,
+  20358092,
+  405218076,
+  904560091,
+  374906,
+  1079770702,
+  544731864,
+  1297971124,
+  815911800,
+  2054043826,
+  1176478138,
+  1404602067,
+  199256330,
+  1559149372,
+  197274452,
+  1437671190,
+  1773752865,
+  1338810648,
+  1976415257,
+  1581036690,
+  1595017950,
+  1560456328,
+  2096353643,
+  1881413777,
+  970399744,
+  1731705164,
+  1586519461,
+  246127506,
+  1391076680,
+  2047510248,
+  84155931,
+  1176324932,
+  1808119474,
+  194863975,
+  114967330,
+  1298315367,
+  1174291129,
+  1747155805,
+  22407437,
+  1210300313,
+  2075434263,
+  1054210812,
+  822642933,
+  2078437750,
+  1431351245,
+  1703499775,
+  1889687610,
+  1836313671,
+  742544617,
+  819563206,
+  252721473,
+  191903764,
+  1746402108,
+  2007814644,
+  947813975,
+  182024976,
+  2094690968,
+  331251064,
+  1379499665,
+  948139418,
+  682258647,
+  1020100542,
+  579750155,
+  322048682,
+  470837887,
+  158114416,
+  1552595585,
+  1583187137,
+  2056531801,
+  1232703943,
+  8627316,
+  461816078,
+  741430588,
+  1734114393,
+  1157427655,
+  2009373507,
+  1380377715,
+  234782881,
+  1483378708,
+  1995968556,
+  503992100,
+  1649121534,
+  117529743,
+  1134859883,
+  470990865,
+  1541000844,
+  630735173,
+  1562140317,
+  1131323851,
+  421699860,
+  2017551003,
+  376128725,
+  1067216143,
+  1725327983,
+  1758636770,
+  825509511,
+  1367037798,
+  1674699393,
+  1470581199,
+  447410889,
+  197333969,
+  1203870567,
+  1356867688,
+  542298299,
+  712852510,
+  2117670044,
+  449783473,
+  530874477,
+  1713103680,
+  578909688,
+  1638202518,
+  1159389241,
+  299678471,
+  510464318,
+  1890813546,
+  514050222,
+  780515008,
+  1548915587,
+  1777859923,
+  1850653889,
+  1629435994,
+  1703616765,
+  1944294063,
+  33561857,
+  1290831746,
+  959878428,
+  62217655,
+  1755387352,
+  1139303386,
+  2032685864,
+  1248272679,
+  2041932079,
+  898301745,
+  1725282615,
+  1074271655,
+  1370535963,
+  466092655,
+  1185532718,
+  2006891536,
+  576049302,
+  899561871,
+  903872841,
+  18249486,
+  1865373287,
+  436833209,
+  388973792,
+  2068720162,
+  1053764395,
+  493025635,
+  1696450745,
+  1020127192,
+  1933205899,
+  619362958,
+  368028832,
+  2078065326,
+  1921566975,
+  970691616,
+  395042587,
+  1679127538,
+  1691799705,
+  152109445,
+  1833582531,
+  1652490766,
+  846734106,
+  984549134,
+  1733223475,
+  1303526262,
+  1339402438,
+  942050464,
+  1399290077,
+  1808611461,
+  853892682,
+  2002720559,
+  1636740383,
+  993216004,
+  1126708203,
+  107571206,
+  1733930874,
+  386724997,
+  682932172,
+  678328563,
+  978638808,
+  508697333,
+  1858047437,
+  1057924042,
+  1534140136,
+  1349028995,
+  1715765407,
+  322588907,
+  1475888100,
+  746422442,
+  427813080,
+  1043188345,
+  916366554,
+  1589392392,
+  635861375,
+  1557373693,
+  1592600815,
+  3324235,
+  1257355214,
+  2058023671,
+  1868245616,
+  284584365,
+  480934731,
+  947320257,
+  1823805212,
+  1689409587,
+  1004785210,
+  1432782097,
+  2054890681,
+  647179194,
+  1118071337,
+  957866962,
+  691729707,
+  514193426,
+  1467084444,
+  410481909,
+  537504397,
+  22369781,
+  690369537,
+  2019745261,
+  812527350,
+  1225427584,
+  953092783,
+  80709548,
+  811857759,
+  2118600834,
+  383324437,
+  134117315,
+  358646567,
+  555731443,
+  1015739550,
+  1775228491,
+  44644247,
+  2059747980,
+  1357825810,
+  1193427197,
+  1983686324,
+  1771423014,
+  780732774,
+  1724702101,
+  11207806,
+  1210654592,
+  1260584778,
+  345751386,
+  1450811013,
+  676175077,
+  358992248,
+  1049852511,
+  2048044620,
+  102218826,
+  901097583,
+  1206542171,
+  1415224850,
+  1011469539,
+  964554108,
+  887684696,
+  1430852004,
+  1561543755,
+  1416799419,
+  1523509938,
+  1129260707,
+  1912810728,
+  383551980,
+  1833593253,
+  1844737989,
+  489792331,
+  239821623,
+  386782973,
+  252752010,
+  595088266,
+  692582929,
+  1447348053,
+  471325798,
+  896433117,
+  1365443249,
+  30564029,
+  1188925836,
+  623601665,
+  1913301777,
+  1738613477,
+  6494048,
+  245812663,
+  866154823,
+  502137743,
+  2075761131,
+  280090711,
+  143567960,
+  1083727858,
+  1738487285,
+  783712320,
+  1353355550,
+  794455568,
+  64574212,
+  298512123,
+  1297321567,
+  194733495,
+  1867074600,
+  129803059,
+  590271204,
+  1271695203,
+  1218998477,
+  949326722,
+  994979475,
+  62481684,
+  1894315609,
+  841126497,
+  1761111125,
+  1399325683,
+  1293218056,
+  48863363,
+  996232459,
+  136382117,
+  964091947,
+  797000135,
+  876630580,
+  536940467,
+  1522856574,
+  2091140489,
+  1889167392,
+  365024870,
+  295341459,
+  1450927041,
+  250167967,
+  1044592245,
+  732728018,
+  1916055004,
+  1063795193,
+  450184865,
+  1275421862,
+  1650341413,
+  389177347,
+  1283158551,
+  1614437139,
+  40586415,
+  272866645,
+  499590047,
+  246344989,
+  182476936,
+  1076978060,
+  1588861405,
+  740456747,
+  1746099430,
+  1219018278,
+  233040443,
+  1322486058,
+  2023039143,
+  1652003893,
+  1975005288,
+  1668778927,
+  2062140768,
+  467495411,
+  1117312644,
+  21699851,
+  1123795021,
+  1822340012,
+  823310665,
+  605374188,
+  780550947,
+  1231588435,
+  30673002,
+  611378161,
+  628920331,
+  2056919628,
+  2005209490,
+  753935091,
+  411951863,
+  582791999,
+  1915104428,
+  638186731,
+  727132158,
+  33549897,
+  2096467913,
+  1551161752,
+  269475413,
+  1304973471,
+  505929433,
+  248513816,
+  844285031,
+  1977939920,
+  224550167,
+  1964571695,
+  624275191,
+  851035134,
+  1526215684,
+  1043064056,
+  1439609778,
+  764332558,
+  871983866,
+  925876467,
+  1575679632,
+  2055449605,
+  355327738,
+  1178676590,
+  943208428,
+  946912964,
+  1348099271,
+  1930230124,
+  1881971597,
+  1271321846,
+  130875986,
+  1975940286,
+  1195032152,
+  1672361520,
+  1460602903,
+  1120913784,
+  1691509063,
+  1576269212,
+  474354832,
+  261488505,
+  1117002960,
+  1918963227,
+  2141812647,
+  1959989077,
+  942531210,
+  1910716731,
+  1978223851,
+  243018025,
+  1368194157,
+  713925077,
+  427464887,
+  634279936,
+  1374458447,
+  1391782202,
+  1496940622,
+  1700558147,
+  61652410,
+  1371789697,
+  199477604,
+  1940518885,
+  2013527144,
+  621027637,
+  2077252026,
+  1906288992,
+  1388001317,
+  913230287,
+  41307936,
+  1694259439,
+  1212652556,
+  61340605,
+  880242871,
+  2138346186,
+  751281711,
+  795910164,
+  163476533,
+  200214978,
+  1643479841,
+  2120455728,
+  1816441997,
+  568640427,
+  1850511936,
+  1737930871,
+  737651295,
+  1623875952,
+  167478813,
+  493271292,
+  964629965,
+  503832893,
+  336182687,
+  748909658,
+  396295889,
+  1995155776,
+  1356830984,
+  1327244671,
+  316426740,
+  840882055,
+  645409644,
+  585748982,
+  772527590,
+  199081554,
+  15676172,
+  910540496,
+  1934321891,
+  1061094114,
+  622790209,
+  207447673,
+  1940825424,
+  1231885098,
+  2005160625,
+  1564656274,
+  2107492639,
+  1839123576,
+  1628449604,
+  494807491,
+  644077797,
+  1474643581,
+  1193517547,
+  811621954,
+  546300571,
+  1629015641,
+  248746186,
+  792339347,
+  820436801,
+  1438249924,
+  1602052890,
+  979043918,
+  641913722,
+  92415247,
+  734774011,
+  1578104788,
+  746448240,
+  416428252,
+  72227040,
+  418262272,
+  19975759,
+  29610855,
+  19330497,
+  1113711833,
+  1541389666,
+  410986881,
+  278017893,
+  1589253306,
+  1874183433,
+  378956231,
+  881372504,
+  797751332,
+  681571178,
+  1346321575,
+  562640035,
+  1194024115,
+  486992824,
+  1473124877,
+  651909558,
+  2067789181,
+  1809683680,
+  381414424,
+  38631827,
+  1077894237,
+  1155126965,
+  1504404498,
+  754207981,
+  1335508436,
+  1734379799,
+  307679153,
+  1051535968,
+  367804995,
+  1493562835,
+  2128045603,
+  1199957102,
+  380299800,
+  1518444795,
+  1150259781,
+  1736151772,
+  419810268,
+  722724126,
+  2077182801,
+  1748484658,
+  2110927194,
+  174515771,
+  879899827,
+  1747395069,
+  603367172,
+  1087255698,
+  618279471,
+  289244154,
+  2020315457,
+  283471215,
+  968686951,
+  1136300836,
+  2109526756,
+  1340826045,
+  463792664,
+  1268269805,
+  1062258129,
+  579750242,
+  1025793532,
+  584673810,
+  815230651,
+  1463589802,
+  1807632600,
+  1278313210,
+  1240031719,
+  827309135,
+  1115285297,
+  1356873467,
+  1277387553,
+  1000544937,
+  1251466296,
+  914775949,
+  570582051,
+  1484222989,
+  1628536810,
+  300105612,
+  1762878325,
+  1785878942,
+  1189388193,
+  236449471,
+  800514656,
+  1762951804,
+  1139393446,
+  1791409380,
+  1977462252,
+  1936586638,
+  1950522991,
+  325380464,
+  1484659825,
+  2137083554,
+  1753254409,
+  1554406137,
+  1334584786,
+  503513434,
+  1487154401,
+  1607658439,
+  2114658794,
+  840877045,
+  1412607922,
+  1582194765,
+  58177626,
+  1254803866,
+  1027422749,
+  712232405,
+  725014027,
+  802669741,
+  1915544946,
+  1765756940,
+  103250895,
+  1910916750,
+  1922798787,
+  935092893,
+  1687735310,
+  862982334,
+  2103799072,
+  465460000,
+  1541045735,
+  1574234427,
+  557146952,
+  564645406,
+  1200996444,
+  378015108,
+  1468010265,
+  755389812,
+  1434426178,
+  2046254637,
+  1284718026,
+  65425317,
+  630330179,
+  1554794291,
+  94260121,
+  1619028827,
+  1996011986,
+  1085109018,
+  452349679,
+  1568666931,
+  1108124540,
+  1975634629,
+  1349739805,
+  154963253,
+  1934862458,
+  1192570795,
+  1626816909,
+  2119151851,
+  1216258723,
+  1936274590,
+  1334917084,
+  826979941,
+  1053819408,
+  307791261,
+  1247442299,
+  1152905832,
+  1396715579,
+  751442593,
+  792211213,
+  477220614,
+  1787996700,
+  9622359,
+  1171153299,
+  1940523198,
+  601165331,
+  1022300994,
+  497257536,
+  1657877747,
+  1687191172,
+  826114633,
+  2079439076,
+  627650379,
+  139864340,
+  266490532,
+  596791721,
+  1153685692,
+  2011711854,
+  1657049477,
+  1093777282,
+  1167771613,
+  1445727591,
+  1019212630,
+  871939831,
+  1523355669,
+  559325660,
+  383384842
+ ],
+ "scenarios": [
+  {
+   "number": 1,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 2,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 3,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 4,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 5,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 6,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 7,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 8,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 9,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 10,
+   "kind": "license",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 11,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 12,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 13,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 14,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 15,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 16,
+   "kind": "sts",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 17,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 18,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 19,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 20,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 21,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 22,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 23,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 24,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 25,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 26,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 27,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 28,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 29,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 30,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 31,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 32,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 33,
+   "kind": "sts",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 34,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 35,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 36,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 37,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 38,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 39,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 40,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 41,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 42,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 43,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 44,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 45,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 46,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 47,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 48,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 49,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 50,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 51,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 52,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 53,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 54,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 55,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 56,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 57,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 58,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 59,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 60,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 61,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 62,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 63,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 64,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 65,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 66,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 67,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 68,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 69,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 70,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 71,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 72,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 73,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 74,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 75,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 76,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 77,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 78,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 79,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 80,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 81,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 82,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 83,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 84,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 85,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 86,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 87,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 88,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 89,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 90,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 91,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 92,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 93,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 94,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 95,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 96,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 97,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 98,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 99,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 100,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 101,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 102,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 103,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 104,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 105,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 106,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 107,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 108,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 109,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 110,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 111,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 112,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 113,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 114,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 115,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 116,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 117,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 118,
+   "kind": "license",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 119,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 120,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 121,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 122,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 123,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 124,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 125,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 126,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 127,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 128,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 129,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 130,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 131,
+   "kind": "license",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 132,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 133,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 134,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 135,
+   "kind": "license",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 136,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 137,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 138,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 139,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 140,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 141,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 142,
+   "kind": "application",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 143,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 144,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 145,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 146,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 147,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 148,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 149,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 150,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 151,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 152,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 153,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 154,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 155,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 156,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 157,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 158,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 159,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 160,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 161,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 162,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 163,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 164,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 165,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 166,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 167,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 168,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 169,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 170,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 171,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 172,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 173,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 174,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 175,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 176,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 177,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 178,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 179,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 180,
+   "kind": "license",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 181,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 182,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 183,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 184,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 185,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 186,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 187,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 188,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 189,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 190,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 191,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 192,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 193,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 194,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 195,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 196,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 197,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 198,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 199,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 200,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 201,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 202,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 203,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 204,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 205,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 206,
+   "kind": "license",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 207,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 208,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 209,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 210,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 211,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 212,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 213,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 214,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 215,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 216,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 217,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 218,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 219,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 220,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 221,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 222,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 223,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 224,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 225,
+   "kind": "license",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 226,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 227,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 228,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 229,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 230,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 231,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 232,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 233,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 234,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 235,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 236,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 237,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 238,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 239,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 240,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 241,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 242,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 243,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 244,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 245,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 246,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 247,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 248,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 249,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 250,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 251,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 252,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 253,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 254,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 255,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 256,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 257,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 258,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 259,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 260,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 261,
+   "kind": "sts",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 262,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 263,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 264,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 265,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 266,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 267,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 268,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 269,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 270,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 271,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 272,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 273,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 274,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 275,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 276,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 277,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 278,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 279,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 280,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 281,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 282,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 283,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 284,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 285,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 286,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 287,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 288,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 289,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 290,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 291,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 292,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 293,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 294,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 295,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 296,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 297,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 298,
+   "kind": "inn",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 299,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 300,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 301,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 302,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 303,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 304,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 305,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 306,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 307,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 308,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 309,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 310,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 311,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 312,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 313,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 314,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 315,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 316,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 317,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 318,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 319,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 320,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 321,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 322,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 323,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 324,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 325,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 326,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 327,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 328,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 329,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 330,
+   "kind": "application",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 331,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 332,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 333,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 334,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 335,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 336,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 337,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 338,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 339,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 340,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 341,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 342,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 343,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 344,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 345,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 346,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 347,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 348,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 349,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 350,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 351,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 352,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 353,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 354,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 355,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 356,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 357,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 358,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 359,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 360,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 361,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 362,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 363,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 364,
+   "kind": "application",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 365,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 366,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 367,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 368,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 369,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 370,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 371,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 372,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 373,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 374,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 375,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 376,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 377,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 378,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 379,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 380,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 381,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 382,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 383,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 384,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 385,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 386,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 387,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 388,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 389,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 390,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 391,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 392,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 393,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 394,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 395,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 396,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 397,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 398,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 399,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 400,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 401,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 402,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 403,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 404,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 405,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 406,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 407,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 408,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 409,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 410,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 411,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 412,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 413,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 414,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 415,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 416,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 417,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 418,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 419,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 420,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 421,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 422,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 423,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 424,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 425,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 426,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 427,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 428,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 429,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 430,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 431,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 432,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 433,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 434,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 435,
+   "kind": "license",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 436,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 437,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 438,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 439,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 440,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 441,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 442,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 443,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 444,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 445,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 446,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 447,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 448,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 449,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 450,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 451,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 452,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 453,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 454,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 455,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 456,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 457,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 458,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 459,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 460,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 461,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 462,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 463,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 464,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 465,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 466,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 467,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 468,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 469,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 470,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 471,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 472,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 473,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 474,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 475,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 476,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 477,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 478,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 479,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 480,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 481,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 482,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 483,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 484,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 485,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 486,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 487,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 488,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 489,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 490,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 491,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 492,
+   "kind": "license",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 493,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 494,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 495,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 496,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 497,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 498,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 499,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 500,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 501,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 502,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 503,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 504,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 505,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 506,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 507,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 508,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 509,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 510,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 511,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 512,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 513,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 514,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 515,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 516,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 517,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 518,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 519,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 520,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 521,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 522,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 523,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 524,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 525,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 526,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 527,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 528,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 529,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 530,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 531,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 532,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 533,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 534,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 535,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 536,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 537,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 538,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 539,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 540,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 541,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 542,
+   "kind": "license",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 543,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 544,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 545,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 546,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 547,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 548,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 549,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 550,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 551,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 552,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 553,
+   "kind": "application",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 554,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 555,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 556,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 557,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 558,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 559,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 560,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 561,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 562,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 563,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 564,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 565,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 566,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 567,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 568,
+   "kind": "sts",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 569,
+   "kind": "inn",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 570,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 571,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 572,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 573,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 574,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 575,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 576,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 577,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 578,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 579,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 580,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 581,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 582,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 583,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 584,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 585,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 586,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 587,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 588,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 589,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 590,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 591,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 592,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 593,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 594,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 595,
+   "kind": "sts",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 596,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 597,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 598,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 599,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 600,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 601,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 602,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 603,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 604,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 605,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 606,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 607,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 608,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 609,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 610,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 611,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 612,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 613,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 614,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 615,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 616,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 617,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 618,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 619,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 620,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 621,
+   "kind": "application",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 622,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 623,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 624,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 625,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 626,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 627,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 628,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 629,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 630,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 631,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 632,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 633,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 634,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 635,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 636,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 637,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 638,
+   "kind": "inn",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 639,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 640,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 641,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 642,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 643,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 644,
+   "kind": "sts",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 645,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 646,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 647,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 648,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 649,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 650,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 651,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 652,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 653,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 654,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 655,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 656,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 657,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 658,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 659,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 660,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 661,
+   "kind": "inn",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 662,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 663,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 664,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 665,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 666,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 667,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 668,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 669,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 670,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 671,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 672,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 673,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 674,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 675,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 676,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 677,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 678,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 679,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 680,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 681,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 682,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 683,
+   "kind": "application",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 684,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 685,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 686,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 687,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 688,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 689,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 690,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 691,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 692,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 693,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 694,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 695,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 696,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 697,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 698,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 699,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 700,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 701,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 702,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 703,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 704,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 705,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 706,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 707,
+   "kind": "application",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 708,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 709,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 710,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 711,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 712,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 713,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 714,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 715,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 716,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 717,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 718,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 719,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 720,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 721,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 722,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 723,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 724,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 725,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 726,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 727,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 728,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 729,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 730,
+   "kind": "application",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 731,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 732,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 733,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 734,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 735,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 736,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 737,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 738,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 739,
+   "kind": "sts",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 740,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 741,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 742,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 743,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 744,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 745,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 746,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 747,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 748,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 749,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 750,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 751,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 752,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 753,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 754,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 755,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 756,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 757,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 758,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 759,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 760,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 761,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 762,
+   "kind": "inn",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 763,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 764,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 765,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 766,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 767,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 768,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 769,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 770,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 771,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 772,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 773,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 774,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 775,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 776,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 777,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 778,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 779,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 780,
+   "kind": "inn",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 781,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 782,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 783,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 784,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 785,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 786,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 787,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 788,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 789,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 790,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 791,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 792,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 793,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 794,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 795,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 796,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 797,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 798,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 799,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 800,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 801,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 802,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 803,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 804,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 805,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 806,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 807,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 808,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 809,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 810,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 811,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 812,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 813,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 814,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 815,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 816,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 817,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 818,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 819,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 820,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 821,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 822,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 823,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 824,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 825,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 826,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 827,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 828,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 829,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 830,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 831,
+   "kind": "application",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 832,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 833,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 834,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 835,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 836,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 837,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 838,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 839,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 840,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 841,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 842,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 843,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 844,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 845,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 846,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 847,
+   "kind": "inn",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 848,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 849,
+   "kind": "license",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 850,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 851,
+   "kind": "application",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 852,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 853,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 854,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 855,
+   "kind": "application",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 856,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 857,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 858,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 859,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 860,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 861,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 862,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 863,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 864,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 865,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 866,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 867,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 868,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 869,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 870,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 871,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 872,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 873,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 874,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 875,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 876,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 877,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 878,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 879,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 880,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 881,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 882,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 883,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 884,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 885,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 886,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 887,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 888,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 889,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 890,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 891,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 892,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 893,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 894,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 895,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 896,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 897,
+   "kind": "application",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 898,
+   "kind": "application",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 899,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 900,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 901,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 902,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 903,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 904,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 905,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 906,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 907,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 908,
+   "kind": "sts",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 909,
+   "kind": "inn",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 910,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 911,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 912,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 913,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 914,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 915,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 916,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 917,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 918,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 919,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 920,
+   "kind": "bank",
+   "quality": "good",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 921,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 922,
+   "kind": "bank",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 923,
+   "kind": "license",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 924,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 925,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 926,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 927,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 928,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 929,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 930,
+   "kind": "application",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 931,
+   "kind": "inn",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 932,
+   "kind": "license",
+   "quality": "good",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 933,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 934,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 935,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 936,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 937,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 938,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 939,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 940,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 941,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 942,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 943,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 944,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 945,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 946,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 947,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 948,
+   "kind": "sts",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 949,
+   "kind": "passport",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 950,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 951,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 952,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 953,
+   "kind": "bank",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 954,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": ""
+  },
+  {
+   "number": 955,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 956,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 957,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 958,
+   "kind": "application",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 959,
+   "kind": "license",
+   "quality": "ideal",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 960,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 961,
+   "kind": "passport",
+   "quality": "good",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 962,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 963,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 964,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 965,
+   "kind": "inn",
+   "quality": "ideal",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 966,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 967,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 968,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 969,
+   "kind": "license",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 970,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 971,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 972,
+   "kind": "sts",
+   "quality": "good",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 973,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 974,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 975,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 976,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 977,
+   "kind": "bank",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 978,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 979,
+   "kind": "sts",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 980,
+   "kind": "passport",
+   "quality": "poor",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 981,
+   "kind": "license",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 982,
+   "kind": "inn",
+   "quality": "poor",
+   "defect": ""
+  },
+  {
+   "number": 983,
+   "kind": "license",
+   "quality": "medium",
+   "defect": ""
+  },
+  {
+   "number": 984,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 985,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 986,
+   "kind": "application",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 987,
+   "kind": "bank",
+   "quality": "ideal",
+   "defect": ""
+  },
+  {
+   "number": 988,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 989,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 990,
+   "kind": "license",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 991,
+   "kind": "license",
+   "quality": "medium",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 992,
+   "kind": "license",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 993,
+   "kind": "passport",
+   "quality": "good",
+   "defect": ""
+  },
+  {
+   "number": 994,
+   "kind": "sts",
+   "quality": "poor",
+   "defect": "erased_letters"
+  },
+  {
+   "number": 995,
+   "kind": "inn",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 996,
+   "kind": "passport",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 997,
+   "kind": "sts",
+   "quality": "medium",
+   "defect": "lookalike_digits"
+  },
+  {
+   "number": 998,
+   "kind": "bank",
+   "quality": "very_poor",
+   "defect": "double_exposure"
+  },
+  {
+   "number": 999,
+   "kind": "passport",
+   "quality": "medium",
+   "defect": "cut_letter"
+  },
+  {
+   "number": 1000,
+   "kind": "license",
+   "quality": "good",
+   "defect": "cut_letter"
+  }
+ ]
+}
