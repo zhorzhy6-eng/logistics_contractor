@@ -20,6 +20,11 @@ import weakref
 # Вызывается ДО всех остальных импортов, чтобы их логгеры унаследовали конфиг.
 from config.logging_config import setup_logging
 
+# ── Перехват необработанных исключений (главный поток и рабочие) ──
+# Импорт без побочных действий: хук ставится вызовом ниже, уже после
+# настройки логирования (иначе писать будет некуда).
+from core.crash_handler import install_crash_handler
+
 
 def _parse_args(argv=None):
     """Разбор аргументов командной строки (Шаг 4 задания по безопасности)."""
@@ -38,6 +43,12 @@ def _parse_args(argv=None):
 
 _ARGS = _parse_args()
 setup_logging(debug=_ARGS.debug)
+
+# ── Необработанные исключения — в logs/errors.log ──
+# Ставится сразу после логирования и ДО QApplication, а также до импорта
+# db.database: падение на старте тоже должно попасть в журнал. У pythonw.exe
+# stderr нет, поэтому без этого хука traceback исчезал бесследно.
+install_crash_handler()
 
 logger = logging.getLogger("main")
 
