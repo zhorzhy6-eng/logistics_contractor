@@ -216,3 +216,12 @@ def load_if_empty(path: str) -> int:
     )
     return added
 
+
+__all__ = [
+    "SALONS_XLSX_NAME",
+    "SALON_COLUMN_KEYS",
+    "load_if_empty",
+    "read_salons_rows",
+    "salons_xlsx_path",
+]
+
