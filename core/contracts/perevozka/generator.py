@@ -746,6 +746,86 @@ class PerevozkaGenerator(BaseContractGenerator):
         return "\n".join(lines)
 
     # ─────────────────────────────────────────────────────────
+    # ДИНАМИЧЕСКИЕ СТОРОНЫ: ИП ИЛИ ООО
+    # ─────────────────────────────────────────────────────────
+    #
+    # Бланк перевозки печатал сторону одной жёсткой формулировкой: в п. 1.1
+    # стояло «в лице Генерального директора Ахмедова Тимура Артуровича»
+    # (константа, а не поле), в п. 9 — «Генеральный директор /Т.А. Ахмедов /»,
+    # а ОГРНИП был захардкожен. У заказчика-ИП в договоре печатался чужой
+    # директор. Ниже считаются ключи, по которым бланк выбирает ветку.
+
+    #: Приставки, которые справочник хранит в full_name индивидуального
+    #: предпринимателя («Индивидуальный предприниматель Добросоцкий А.Н.»).
+    #: В бланке приставку печатает сам шаблон ({{*_legal_form}}), поэтому из
+    #: ФИО её надо убрать — иначе выходит «Индивидуальный предприниматель
+    #: Индивидуальный предприниматель Добросоцкий…».
+    IP_NAME_PREFIXES = ("Индивидуальный предприниматель ", "ИП ")
+
+    #: Окончания женских отчеств — по ним определяется род ФИО.
+    FEMALE_PATRONYMIC_ENDINGS = ("овна", "евна", "ична", "инична")
+
+    @classmethod
+    def _clean_ip_name(cls, full_name: Any) -> str:
+        """
+        ФИО индивидуального предпринимателя без приставки «ИП»/«Индивидуальный
+        предприниматель».
+
+        Приставка не часть имени, а вид лица: её печатает шаблон отдельным
+        плейсхолдером ({{carrier_legal_form}} / {{client_legal_form}}).
+        Значение без приставки остаётся как есть — у ООО наименование не
+        трогается вовсе (метод вызывается только для ИП).
+        """
+        text = str(full_name or "").strip()
+        for prefix in cls.IP_NAME_PREFIXES:
+            if text.lower().startswith(prefix.lower()):
+                return text[len(prefix):].strip()
+        return text
+
+    @classmethod
+    def _gender_from_name(cls, full_name: Any) -> str:
+        """
+        Род («male» / «female») по отчеству ФИО.
+
+        Отчество — слово с окончанием «-овна/-евна/-ична/-инична»; прове-
+        ряются все слова, кроме первого (фамилии): у ИП в full_name могла
+        остаться приставка, и по номеру слова род тогда не угадывается.
+        Отчества нет — мужской род, как в бланке по умолчанию.
+        """
+        parts = str(full_name or "").split()
+        for part in parts[1:]:
+            if part.lower().endswith(cls.FEMALE_PATRONYMIC_ENDINGS):
+                return "female"
+        return "male"
+
+    @staticmethod
+    def _paren_suffix(full_name: Any, short_name: Any) -> str:
+        """
+        « (сокращённое наименование)» — только если оно отличается от полного.
+
+        В справочнике short_name часто повторяет full_name (в рабочей базе
+        так у ИП и у части ООО) — тогда в договоре печаталось
+        «ООО «Ромашка» (ООО «Ромашка»)». Пустая скобка не выводится.
+        """
+        full = str(full_name or "").strip()
+        short = str(short_name or "").strip()
+        if short and short != full:
+            return f" ({short})"
+        return ""
+
+    @staticmethod
+    def _filled(value: Any) -> bool:
+        """
+        True, если значение непустое — для флагов «печатать строку или нет».
+
+        «0» и «0.0» считаются пустыми: так интерфейс отдаёт незаполненный
+        год выпуска (ШАГ FIX-6, часть C), и строка «Год выпуска: 0» в бланке
+        не нужна. Для КПП это же правило закрывает запись с КПП = «0».
+        """
+        text = str(value if value is not None else "").strip()
+        return bool(text) and text not in ("0", "0.0")
+
+    # ─────────────────────────────────────────────────────────
     # КАРТА ЗАМЕН
     # ─────────────────────────────────────────────────────────
 
@@ -819,11 +899,49 @@ class PerevozkaGenerator(BaseContractGenerator):
             f"ИП_с_НДС={is_ip_with_vat}, ИП_без_НДС={is_ip_without_vat}"
         )
 
+        # ── Тип перевозчика: ИП или ООО (условные ветви бланка) ──
+        # Главный признак — тип из вкладки «Договор» (он же выбирает бланк);
+        # запасные — entity_type из распознавания/DaData и приставка в
+        # наименовании: в справочнике ИП записан как «Индивидуальный
+        # предприниматель <ФИО>».
+        carrier_full_raw = str(carrier.get("full_name", "") or "").strip()
+        carrier_full_lower = carrier_full_raw.lower()
+        is_carrier_ip = (
+            not is_ooo
+            or str(carrier.get("entity_type") or "").strip().upper().startswith("ИП")
+            or carrier_full_lower.startswith("индивидуальный предприниматель")
+            or carrier_full_lower.startswith("ип ")
+        )
+        # Приставку «Индивидуальный предприниматель» печатает сам бланк
+        # ({{carrier_legal_form}}) — в ФИО она не нужна, иначе в договоре
+        # выходит «Индивидуальный предприниматель Индивидуальный
+        # предприниматель Добросоцкий…».
+        carrier_full = (
+            self._clean_ip_name(carrier_full_raw) if is_carrier_ip else carrier_full_raw
+        )
+        carrier_gender = self._gender_from_name(carrier_full)
+
+        replacements["is_carrier_ip"] = is_carrier_ip
         replacements["carrier_legal_form"] = legal_form
-        replacements["carrier_pronoun"] = pronoun
+        # Род причастия: у ИП «действующий» («действующая» — женщина),
+        # у ООО «действующего» — «в лице директора …, действующего…».
+        replacements["carrier_acting"] = (
+            "действующего" if not is_carrier_ip
+            else ("действующая" if carrier_gender == "female" else "действующий")
+        )
+        replacements["carrier_pronoun"] = (
+            pronoun if not is_carrier_ip
+            else ("именуемая" if carrier_gender == "female" else "именуемый")
+        )
         replacements["carrier_basis"] = basis
-        replacements["carrier_full_name"] = carrier.get("full_name", "")
+        replacements["carrier_full_name"] = carrier_full
         replacements["carrier_name"] = carrier.get("short_name", "") or carrier.get("full_name", "")
+        # Скобки с сокращённым наименованием — только если оно ОТЛИЧАЕТСЯ от
+        # полного: в рабочей базе short_name часто его повторяет, и в договоре
+        # печаталось «ООО «Ромашка» (ООО «Ромашка»)».
+        replacements["carrier_name_in_parens"] = self._paren_suffix(
+            carrier.get("full_name", ""), carrier.get("short_name", "")
+        )
         # Реквизиты печатаются ТОЛЬКО цифрами. В поля ИНН / КПП / ОГРН / БИК /
         # корр. счёт могло попасть словосочетание из исходного документа
         # («Корреспондентский счет БИК 044030786») — из распознавания или
@@ -842,20 +960,100 @@ class PerevozkaGenerator(BaseContractGenerator):
             carrier.get("correspondent_account")
         )
         replacements["carrier_director"] = carrier.get("director_name", "")
+        # ИП подписывает договор сам, а «директора» у него нет: в п. 9 бланка
+        # стоит «{{carrier_director_position_short}} ________
+        # /{{carrier_director}}/», и с пустым director_name справочника
+        # печаталось «Индивидуальный предприниматель ________ //».
+        if is_carrier_ip and carrier_full:
+            replacements["carrier_director"] = carrier_full
         replacements["carrier_director_position"] = director_position_full
         replacements["carrier_director_position_short"] = director_position_short
         replacements["carrier_phone"] = carrier.get("phone", "")
         replacements["carrier_email"] = carrier.get("email", "")
+
+        # ── Флаги «печатать строку или нет» ──
+        # Пустое необязательное поле бланк печатал «дыркой»: «КПП ,»,
+        # «Фактический адрес:», «E-mail:». Шаблон по этим ключам выводит
+        # строку только с заполненным значением ({%p if has_... %}).
+        replacements["has_carrier_kpp"] = self._filled(kpp)
+        replacements["has_carrier_actual_address"] = self._filled(
+            carrier.get("actual_address")
+        )
+        replacements["has_carrier_email"] = self._filled(carrier.get("email"))
+        replacements["has_carrier_phone"] = self._filled(carrier.get("phone"))
+        replacements["has_carrier_license_number"] = self._filled(
+            carrier.get("license_number")
+        )
+        replacements["has_carrier_license_date"] = self._filled(
+            carrier.get("license_date")
+        )
 
         # ── Заказчик ──
         # ВАЖНО (Шаг 2): здесь больше нет выдуманных значений по умолчанию
         # («ООО ТЕХНОЛОГИСТИКА», ИНН 9709112631, «Ахмедова Т.А.»).
         # Если заказчик не заполнен — подставляется пустая строка, а
         # core.validator сообщает об этом пользователю до генерации.
+        #
+        # ШАГ «Динамические стороны»: заказчик бывает и ИП, и ООО, а бланк
+        # печатал для обоих одно и то же — «в лице Генерального директора
+        # Ахмедова Тимура Артуровича» (КОНСТАНТА шаблона, не поле) и подпись
+        # «Генеральный директор /Т.А. Ахмедов /». Ветвь в бланке выбирают
+        # ключи, которые считаются здесь.
         customer = contract_data.customer
-        customer_director = customer.get("director_name", "")
-        replacements["client_full_name"] = customer.get("full_name", "")
+        customer_full_raw = str(customer.get("full_name", "") or "").strip()
+        customer_full_lower = customer_full_raw.lower()
+        is_client_ip = (
+            str(customer.get("entity_type") or "").strip().upper().startswith("ИП")
+            or customer_full_lower.startswith("индивидуальный предприниматель")
+            or customer_full_lower.startswith("ип ")
+        )
+        # Приставка — не часть имени: её печатает {{client_legal_form}}.
+        customer_full = (
+            self._clean_ip_name(customer_full_raw) if is_client_ip else customer_full_raw
+        )
+        client_gender = self._gender_from_name(customer_full)
+        client_director = str(customer.get("director_name", "") or "").strip()
+
+        replacements["is_client_ip"] = is_client_ip
+        replacements["client_full_name"] = customer_full
         replacements["client_name"] = customer.get("short_name", "") or customer.get("full_name", "")
+        replacements["client_name_in_parens"] = self._paren_suffix(
+            customer.get("full_name", ""), customer.get("short_name", "")
+        )
+        # У ИП вместо ОГРН — ОГРНИП (15 цифр), метка зависит от вида заказчика.
+        replacements["client_ogrn_label"] = "ОГРНИП" if is_client_ip else "ОГРН"
+
+        if is_client_ip:
+            # Индивидуальный предприниматель действует сам, «в лице»
+            # директора у него не бывает: основание — свидетельство
+            # о государственной регистрации.
+            replacements["client_legal_form"] = "Индивидуальный предприниматель"
+            replacements["client_pronoun"] = (
+                "именуемая" if client_gender == "female" else "именуемый"
+            )
+            replacements["client_acting"] = (
+                "действующая" if client_gender == "female" else "действующий"
+            )
+            replacements["client_director_position_short"] = "Индивидуальный предприниматель"
+            replacements["client_director"] = customer_full
+            replacements["client_director_short"] = customer_full
+            replacements["client_basis"] = "свидетельства о государственной регистрации"
+        else:
+            replacements["client_legal_form"] = (
+                "Общество с ограниченной ответственностью"
+            )
+            replacements["client_pronoun"] = "именуемое"
+            replacements["client_acting"] = "действующее"
+            # Должность подписанта: у ООО это «Генеральный директор» (или своё
+            # значение из справочника), пустое поле печатало бы «в лице  Иванов».
+            replacements["client_director_position_short"] = (
+                str(customer.get("director_position", "") or "").strip()
+                or "Генеральный директор"
+            )
+            replacements["client_director"] = client_director
+            replacements["client_director_short"] = self._short_fio(client_director)
+            replacements["client_basis"] = "Устава"
+
         replacements["client_inn"] = customer.get("inn", "")
         replacements["client_kpp"] = customer.get("kpp", "")
         replacements["client_ogrn"] = customer.get("ogrn", "")
@@ -866,13 +1064,19 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["client_corr_account"] = self._digits_only(
             customer.get("correspondent_account")
         )
-        replacements["client_director"] = customer_director
+        # Историческое имя ключа (было = director_name): оставлено, чтобы
+        # шаблоны и внешний код не сломались. В бланке печатается
+        # client_director — он зависит от вида заказчика.
         replacements["client_director_position"] = customer.get("director_position", "")
-        replacements["client_director_position_short"] = customer.get("director_position", "")
-        replacements["client_director_short"] = self._short_fio(customer_director)
-        replacements["client_basis"] = "Устава"
         replacements["client_phone"] = customer.get("phone", "")
         replacements["client_email"] = customer.get("email", "")
+
+        # ── Необязательные поля заказчика: пустые не печатаются ──
+        replacements["has_client_actual_address"] = self._filled(
+            customer.get("actual_address")
+        )
+        replacements["has_client_phone"] = self._filled(customer.get("phone"))
+        replacements["has_client_email"] = self._filled(customer.get("email"))
 
         # ── Водитель ──
         driver = contract_data.driver
@@ -897,6 +1101,19 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["driver_license_categories"] = driver.get("license_categories", "")
         replacements["driver_phone"] = driver.get("phone", "")
 
+        # ── Необязательные поля водителя: пустые строки не печатаются ──
+        replacements["has_driver_birth_place"] = self._filled(driver.get("birth_place"))
+        replacements["has_driver_passport_code"] = self._filled(
+            driver.get("passport_code")
+        )
+        replacements["has_driver_license_categories"] = self._filled(
+            driver.get("license_categories")
+        )
+        replacements["has_driver_license_expiry"] = self._filled(
+            driver.get("license_expiry_date")
+        )
+        replacements["has_driver_phone"] = self._filled(driver.get("phone"))
+
         # ── Тягач / Прицеп ──
         # Исправление бага 2.2: UI отдаёт tractor/trailer ПЛОСКО
         # (MainWindow._collect_data → ContractData), а не в data["trailer"]["tractor"].
@@ -911,6 +1128,12 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["trailer_plate"] = trailer.get("plate_number", "")
         replacements["trailer_color"] = trailer.get("color", "")
         replacements["trailer_year"] = str(trailer.get("year", ""))
+
+        # ── Необязательные поля ТС: пустые строки не печатаются ──
+        replacements["has_tractor_color"] = self._filled(tractor.get("color"))
+        replacements["has_tractor_year"] = self._filled(tractor.get("year"))
+        replacements["has_trailer_color"] = self._filled(trailer.get("color"))
+        replacements["has_trailer_year"] = self._filled(trailer.get("year"))
 
         # ── Груз и ТС ──
         all_vehicles = contract_data.vehicles

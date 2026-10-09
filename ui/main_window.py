@@ -15,6 +15,8 @@ from db.database import (
     save_driver,
     save_driver_vehicle,
     save_organization,
+    update_organization,
+    restore_organization,
     find_organization_id,
     load_organization,
     load_organization_by_id,
@@ -1381,6 +1383,78 @@ class MainWindow(QMainWindow):
     # --------------------------------------------------------
     # СОХРАНЕНИЕ В БАЗУ  ← ГЛАВНОЕ ЗДЕСЬ
     # --------------------------------------------------------
+    def _sync_organization_with_db(
+        self, org: Dict[str, Any], is_carrier: bool, create: bool = True
+    ) -> Optional[int]:
+        """
+        Приводит запись справочника в соответствие с данными формы.
+
+        Логика одна для перевозчика и заказчика:
+
+          * организация ищется по реквизитам формы (`find_organization_id`:
+            ИНН, затем полное наименование);
+          * НАЙДЕНА — ОБНОВЛЯЕТСЯ данными формы. Раньше найденная запись
+            просто пропускалась, и правки оператора (телефон, КПП, банк)
+            терялись: писало «Перевозчик найден в справочнике», а в базе
+            оставалось старое значение;
+          * НЕ найдена — создаётся новая (`create=True`) либо договор
+            сохраняется без ссылки (`create=False`, так ведёт себя заказчик:
+            автосоздание плодило дубли — ШАГ «Заказчик без дублей»);
+          * мягко удалённая запись возвращается в справочник: иначе «Успех»
+            печатался бы про запись, которой в дереве базы не видно (так и
+            выглядел баг «перевозчик не сохранился» — запись с тем же ИНН
+            лежала удалённой, обновления не было, а в справочнике её нет).
+
+        :return: id записи справочника или None, если её нет и создавать
+            не разрешено (либо создать не удалось).
+        """
+        title = "Перевозчик" if is_carrier else "Заказчик"
+
+        existing_id = find_organization_id(org, is_carrier=is_carrier)
+        if not existing_id:
+            if not create:
+                logger.info(
+                    f"{title} не найден в справочнике — запись не создана, "
+                    f"договор сохранится без ссылки"
+                )
+                return None
+
+            record_id = save_organization(org, is_carrier=is_carrier)
+            logger.info(f"{title} сохранён: ID={record_id}")
+            return record_id
+
+        # Существующая запись: форма — источник правды, поэтому обновляем.
+        # Прочитанная ДО обновления запись нужна ради флага is_deleted.
+        was_deleted = bool(
+            (self._safe_organization_record(existing_id, is_carrier) or {}).get(
+                "is_deleted"
+            )
+        )
+
+        if not update_organization(existing_id, org, is_carrier=is_carrier):
+            logger.error(
+                f"{title}: не удалось обновить запись ID={existing_id} — "
+                f"в справочнике остались прежние данные"
+            )
+            return existing_id
+
+        logger.info(f"{title} обновлён: ID={existing_id}")
+        if was_deleted and restore_organization(existing_id, is_carrier=is_carrier):
+            logger.info(f"{title} возвращён в справочник: ID={existing_id}")
+
+        return existing_id
+
+    @staticmethod
+    def _safe_organization_record(
+        org_id: int, is_carrier: bool
+    ) -> Optional[Dict[str, Any]]:
+        """Запись справочника по id (включая мягко удалённую) или None."""
+        try:
+            return load_organization(org_id, is_carrier=is_carrier)
+        except Exception as e:  # noqa: BLE001 — чтение не должно мешать записи
+            logger.warning(f"Не удалось прочитать организацию ID={org_id}: {e}")
+            return None
+
     def _on_save_to_db(self):
         logger.info("Нажата кнопка «Сохранить в базу»")
         self._log_ui_action("нажата кнопка «Сохранить в базу»")
@@ -1466,18 +1540,20 @@ class MainWindow(QMainWindow):
                 logger.info("Водитель не сохранён — ФИО пустое")
 
             # ── Заказчик ──
-            # Автосохранение НЕ пишет в customers: заказчиков в организации
-            # всего 2, автосоздание плодит дубли. Ищем существующего по
-            # ИНН/наименованию — если нашли, ставим ссылку в договор.
-            # Если не нашли — договор сохраняется без ссылки, запись НЕ
-            # создаётся; пользователь добавит заказчика вручную через
-            # «База данных», если это нужно.
+            # Автосохранение НЕ создаёт запись в customers: заказчиков в
+            # организации всего 2, автосоздание плодит дубли. НО найденная
+            # по ИНН/наименованию запись ОБНОВЛЯЕТСЯ данными формы — иначе
+            # правки оператора (адрес, банк, руководитель) терялись бы молча.
+            # Не нашли — договор сохраняется без ссылки; пользователь
+            # добавит заказчика вручную через «База данных», если нужно.
             customer_id = None
             if customer.get("full_name") or customer.get("short_name"):
-                customer_id = find_organization_id(customer, is_carrier=False)
+                customer_id = self._sync_organization_with_db(
+                    customer, is_carrier=False, create=False
+                )
                 if customer_id:
                     logger.info(
-                        f"Заказчик найден в справочнике: ID={customer_id}, "
+                        f"Заказчик в справочнике: ID={customer_id}, "
                         f"ссылка записана в договор"
                     )
                 else:
@@ -1490,20 +1566,14 @@ class MainWindow(QMainWindow):
                 logger.info("Заказчик в форме пуст — ссылка не записана")
 
             # ── Перевозчик ──
-            # Сначала ищем существующего: перевозчик мог быть подставлен из
-            # карточки водителя (или загружен из справочника) — тогда договор
-            # ссылается на ту же запись, а не на её копию. Совсем нового
-            # перевозчика по-прежнему создаём.
+            # Перевозчик мог быть подставлен из карточки водителя (или
+            # загружен из справочника) — тогда договор ссылается на ту же
+            # запись, а не на её копию; сама запись при этом обновляется
+            # данными формы. Совсем нового перевозчика по-прежнему создаём.
             if carrier.get("full_name") or carrier.get("short_name"):
-                carrier_id = find_organization_id(carrier, is_carrier=True)
-                if carrier_id:
-                    logger.info(
-                        f"Перевозчик найден в справочнике: ID={carrier_id}, "
-                        f"ссылка записана в договор"
-                    )
-                else:
-                    carrier_id = save_organization(carrier, is_carrier=True)
-                    logger.info(f"Перевозчик сохранён: ID={carrier_id}")
+                carrier_id = self._sync_organization_with_db(
+                    carrier, is_carrier=True
+                )
             else:
                 logger.info("Перевозчик не сохранён — наименование пустое")
 
