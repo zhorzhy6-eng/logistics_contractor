@@ -206,7 +206,28 @@ CARRIER_FILTER_NONE = 0
 # ═════════════════════════════════════════════════════════════
 
 class EditCarrierDialog(QDialog):
-    """Диалог создания/редактирования перевозчика или заказчика."""
+    """
+    Диалог создания/редактирования перевозчика или заказчика.
+
+    Поля — те же, что печатает бланк в п. 1.1 / 1.2 и п. 9: вид лица,
+    реквизиты, банк, подписант и основание его полномочий. Пока в диалоге
+    не было «Тип», «Директор», «Должность», «Основание», они не попадали
+    в базу, и при следующей загрузке стороны в форму ИП печатался как ООО,
+    а вместо падежа подставлялась формулировка по умолчанию.
+    """
+
+    #: Вид лица — те же значения, что на вкладке «Договор» и в генераторе
+    #: (`_resolve_carrier_type`): по ним выбирается бланк и ветвь п. 1.1 / 1.2.
+    #: Ставка НДС указана явно: у ИП она в справочнике не хранится, а бланк
+    #: выбирается по этому значению.
+    ENTITY_TYPES = ("ООО (с НДС)", "ИП с НДС", "ИП без НДС")
+
+    #: Основание полномочий по умолчанию — по виду лица.
+    DEFAULT_BASES = {
+        "ООО (с НДС)": "Устава",
+        "ИП с НДС": "свидетельства о государственной регистрации",
+        "ИП без НДС": "свидетельства о государственной регистрации",
+    }
 
     def __init__(self, org: Dict[str, Any], is_carrier: bool = True, parent=None):
         super().__init__(parent)
@@ -226,7 +247,7 @@ class EditCarrierDialog(QDialog):
         else:
             title = "✏ Редактирование перевозчика" if is_carrier else "✏ Редактирование заказчика"
         self.setWindowTitle(title)
-        self.setMinimumSize(650, 700)
+        self.setMinimumSize(650, 760)
 
         layout = QVBoxLayout(self)
 
@@ -239,16 +260,25 @@ class EditCarrierDialog(QDialog):
         # ── Общие сведения ──
         g1 = QGroupBox("Общие сведения")
         f1 = QFormLayout(g1)
+        self.entity_type = QComboBox()
+        self.entity_type.addItems(list(self.ENTITY_TYPES))
+        self.entity_type.setCurrentText(self._initial_entity_type(org))
+        self.entity_type.currentIndexChanged.connect(self._on_entity_type_changed)
         self.full_name = QLineEdit(org.get("full_name", ""))
         self.short_name = QLineEdit(org.get("short_name", ""))
         self.inn = QLineEdit(org.get("inn", ""))
         self.kpp = QLineEdit(org.get("kpp", ""))
         self.ogrn = QLineEdit(org.get("ogrn", ""))
+        self.phone = QLineEdit(org.get("phone", ""))
+        self.email = QLineEdit(org.get("email", ""))
+        f1.addRow("Тип:", self.entity_type)
         f1.addRow("Полное наименование:", self.full_name)
         f1.addRow("Сокращённое:", self.short_name)
         f1.addRow("ИНН:", self.inn)
         f1.addRow("КПП:", self.kpp)
-        f1.addRow("ОГРН:", self.ogrn)
+        f1.addRow("ОГРН / ОГРНИП:", self.ogrn)
+        f1.addRow("Телефон:", self.phone)
+        f1.addRow("E-mail:", self.email)
         content_layout.addWidget(g1)
 
         # ── Адреса ──
@@ -275,17 +305,18 @@ class EditCarrierDialog(QDialog):
         f3.addRow("Банк:", self.bank_name)
         content_layout.addWidget(g3)
 
-        # ── Директор ──
-        g4 = QGroupBox("Директор и контакты")
+        # ── Руководитель: должность, ФИО и основание полномочий ──
+        # Основание печатается в п. 1.1 / 1.2 сразу после причастия
+        # («действующего на основании Устава»), поэтому оно живёт здесь же,
+        # рядом с подписантом, а не в «Общих сведениях».
+        g4 = QGroupBox("Руководитель")
         f4 = QFormLayout(g4)
         self.director_name = QLineEdit(org.get("director_name", ""))
         self.director_position = QLineEdit(org.get("director_position", ""))
-        self.phone = QLineEdit(org.get("phone", ""))
-        self.email = QLineEdit(org.get("email", ""))
+        self.basis = QLineEdit(self._initial_basis(org))
         f4.addRow("ФИО директора:", self.director_name)
         f4.addRow("Должность:", self.director_position)
-        f4.addRow("Телефон:", self.phone)
-        f4.addRow("Email:", self.email)
+        f4.addRow("Основание полномочий:", self.basis)
 
         if is_carrier:
             self.license_number = QLineEdit(org.get("license_number", ""))
@@ -297,6 +328,15 @@ class EditCarrierDialog(QDialog):
             self.license_date = None
 
         content_layout.addWidget(g4)
+
+        # Телефон и e-mail — контакты стороны; печатаются в п. 9 бланка.
+        if self.entity_type.currentText().startswith("ИП"):
+            self.kpp.setEnabled(False)
+            self.director_name.setToolTip(
+                "У индивидуального предпринимателя директора нет: "
+                "подписант — сам ИП, а в договоре печатается его ФИО."
+            )
+
         content_layout.addStretch()
         scroll.setWidget(content)
         layout.addWidget(scroll)
@@ -328,6 +368,60 @@ class EditCarrierDialog(QDialog):
         btn_layout.addWidget(btn_save)
 
         layout.addLayout(btn_layout)
+
+    def _initial_entity_type(self, org: Dict[str, Any]) -> str:
+        """
+        Вид лица для выпадающего списка: из записи, а если её нет — по виду
+        наименования.
+
+        В базе до этого шага колонки `entity_type` не было, поэтому у старых
+        записей её значение пустое: тогда вид определяется по наименованию
+        («Индивидуальный предприниматель …» и «ИП …» — это ИП). Ставка НДС
+        из наименования не видна, поэтому у такого ИП берётся вариант «с НДС»
+        — как на вкладке «Перевозчик» по умолчанию; оператор поправит.
+        """
+        saved = str(org.get("entity_type") or "").strip()
+        if saved:
+            # Запись могла быть сохранена и КОРОТКИМ видом («ООО», «ИП»):
+            # ставка НДС в списке указана явно, поэтому сверяем по части до
+            # скобки, а не по строке целиком — иначе «ООО» не нашлось бы.
+            base = saved.split(" (")[0].strip().upper()
+            for title in self.ENTITY_TYPES:
+                if title.split(" (")[0].strip().upper() == base:
+                    return title
+            if base == "ИП":
+                return "ИП с НДС"
+
+        full_name = str(org.get("full_name") or "").strip().lower()
+        if full_name.startswith(("индивидуальный предприниматель", "ип ")):
+            return "ИП с НДС"
+        return "ООО (с НДС)"
+
+    def _initial_basis(self, org: Dict[str, Any]) -> str:
+        """Основание полномочий: из записи или по виду лица."""
+        saved = str(org.get("basis") or "").strip()
+        if saved:
+            return saved
+        return self.DEFAULT_BASES.get(self.entity_type.currentText(), "Устава")
+
+    def _on_entity_type_changed(self) -> None:
+        """
+        Смена вида лица: у ИП не бывает КПП, а основание — свидетельство.
+
+        Основание подставляется только если оператор его ещё не менял сам:
+        своё значение важнее умолчания (у части ИП в договоре стоит
+        «свидетельства о государственной регистрации» с уточнением).
+        """
+        entity_type = self.entity_type.currentText()
+        is_ip = entity_type.startswith("ИП")
+
+        self.kpp.setEnabled(not is_ip)
+        current = self.basis.text().strip()
+        defaults = set(self.DEFAULT_BASES.values())
+        if not current or current in defaults:
+            self.basis.setText(self.DEFAULT_BASES.get(entity_type, "Устава"))
+
+        logger.debug(f"Вид стороны в карточке: {entity_type!r}, ИП={is_ip}")
 
     def _on_drivers(self) -> None:
         """
@@ -362,11 +456,20 @@ class EditCarrierDialog(QDialog):
         self.accept()
 
     def get_data(self) -> Dict[str, Any]:
+        """
+        Все поля карточки — в том числе вид лица и основание полномочий.
+
+        `kpp` у ИП уходит пустым: в бланке КПП индивидуального
+        предпринимателя не печатается, и оставшееся от прежнего вида
+        значение попало бы в договор.
+        """
+        is_ip = self.entity_type.currentText().startswith("ИП")
         data = {
+            "entity_type": self.entity_type.currentText(),
             "full_name": self.full_name.text().strip(),
             "short_name": self.short_name.text().strip(),
             "inn": self.inn.text().strip(),
-            "kpp": self.kpp.text().strip(),
+            "kpp": "" if is_ip else self.kpp.text().strip(),
             "ogrn": self.ogrn.text().strip(),
             "legal_address": self.legal_address.toPlainText().strip(),
             "actual_address": self.actual_address.toPlainText().strip(),
@@ -376,6 +479,7 @@ class EditCarrierDialog(QDialog):
             "bank_name": self.bank_name.text().strip(),
             "director_name": self.director_name.text().strip(),
             "director_position": self.director_position.text().strip(),
+            "basis": self.basis.text().strip(),
             "phone": self.phone.text().strip(),
             "email": self.email.text().strip(),
         }

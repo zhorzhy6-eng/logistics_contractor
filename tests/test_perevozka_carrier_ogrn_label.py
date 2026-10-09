@@ -195,12 +195,20 @@ def test_ip_carrier_acts_himself(generator, work_file):
 
 
 def test_ooo_carrier_acts_through_director(generator, work_file):
-    """ООО действует через директора: формулировка прежняя."""
+    """
+    ООО действует через директора: «в лице», но в РОДИТЕЛЬНОМ падеже.
+
+    Было «в лице директора Сидоров Сидор Сидорович, действующего» —
+    именительный падеж; шаг «Полные стороны + склонение с учётом рода»
+    подставляет падеж в самом генераторе (см.
+    tests/test_perevozka_party_full_rendering.py).
+    """
     doc = _render(generator, OOO_CARRIER, "ООО (с НДС)",
                   work_file("ogrn_ooo_acting.docx"))
 
     clause = _clause_text(doc, "1.2. Перевозчик:")
-    assert "в лице директора Сидоров Сидор Сидорович, действующего" in clause
+    assert "в лице Генерального директора Сидорова Сидора Сидоровича, " \
+        "действующего" in clause
     assert "именуемое в дальнейшем «Перевозчик»" in clause
 
 

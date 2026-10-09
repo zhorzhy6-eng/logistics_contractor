@@ -297,6 +297,46 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
         logger.info("DaData: тип перевозчика установлен по данным организации")
         return ["carrier_type"]
 
+    def apply_entity_type(self, entity_type: Any) -> bool:
+        """
+        Вид перевозчика из справочника: «ООО (с НДС)» / «ИП с НДС» / «ИП без НДС».
+
+        Нужен при загрузке записи из базы: в справочнике вид хранится
+        (`carriers.entity_type`), а без него ИП печатался как ООО — в
+        договоре выходили КПП, ОГРН и «именуемое».
+
+        Принимается и короткий вид («ООО», «ИП»): такие значения могли
+        сохраниться раньше или прийти из распознавания. Ставка НДС при
+        коротком виде сохраняется прежняя — из наименования её не видно.
+
+        :return: True, если вид установлен.
+        """
+        text = str(entity_type or "").strip()
+        if not text:
+            return False
+
+        target = self._carrier_type_title(text)
+        if not target:
+            logger.debug("Вид перевозчика из справочника не распознан — пропущен")
+            return False
+
+        index = self.carrier_type.findText(target)
+        if index < 0:
+            return False
+
+        self.carrier_type.setCurrentIndex(index)
+        logger.info(f"Вид перевозчика из справочника: {target}")
+        return True
+
+    def _carrier_type_title(self, entity_type: str) -> str:
+        """Название пункта списка «Тип» по виду стороны из справочника."""
+        base = entity_type.split(" (")[0].strip().upper()
+        for index in range(self.carrier_type.count()):
+            title = self.carrier_type.itemText(index)
+            if title.split(" (")[0].strip().upper() == base:
+                return title
+        return ""
+
     def get_data(self) -> Dict[str, Any]:
         """
         Собирает данные.

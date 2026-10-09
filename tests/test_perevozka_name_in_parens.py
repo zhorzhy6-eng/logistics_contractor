@@ -188,8 +188,9 @@ def test_ooo_client_parens_printed_when_short_differs(generator, work_file):
     clause = _clause_text(doc, "1.1. Заказчик:")
     assert clause.startswith(
         "Общество с ограниченной ответственностью «Заказчик» "
-        "(ООО «Заказчик»), именуемое"
+        "(ООО «Заказчик»), ИНН 7707654321"
     )
+    assert "именуемое в дальнейшем «Заказчик»" in clause
 
 
 def test_ooo_client_no_parens_when_short_equals_full(generator, work_file):
@@ -202,7 +203,10 @@ def test_ooo_client_no_parens_when_short_equals_full(generator, work_file):
                   customer=customer)
 
     clause = _clause_text(doc, "1.1. Заказчик:")
-    assert clause.startswith("ООО «Заказчик», именуемое")
+    assert clause.startswith(
+        "ООО «Заказчик», ИНН 7707654321, КПП 770701001, ОГРН 1027700132195, "
+        "именуемое"
+    )
     assert "(" not in clause
 
 
@@ -213,7 +217,8 @@ def test_ip_client_short_name_not_printed_in_parens(generator, work_file):
 
     clause = _clause_text(doc, "1.1. Заказчик:")
     assert clause.startswith(
-        "Индивидуальный предприниматель Смирнова Елена Владимировна, именуемая"
+        "Индивидуальный предприниматель Смирнова Елена Владимировна, "
+        "ИНН 770123456789"
     )
     assert "(" not in clause
 
