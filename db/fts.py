@@ -39,6 +39,8 @@ import re
 import sqlite3
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from db import connection
+
 logger = logging.getLogger("db.fts")
 
 #: Токенизатор: Unicode + снятие диакритики (регистронезависимость кириллицы).
@@ -433,3 +435,48 @@ def match_query_for(text: str) -> Optional[str]:
     if needs_like_fallback(text):
         return None
     return build_match_query(text)
+
+
+def rebuild_fts_index() -> bool:
+    """
+    Полностью перестраивает поисковые индексы FTS5 (адреса, водители,
+    организации).
+
+    Нужна редко: при обычной работе индекс поддерживается точечно, а после
+    массового импорта доливаются только новые строки. Метод пригодится,
+    если база правилась в обход приложения (например, вручную в SQLite).
+    """
+    conn = connection.get_connection()
+    try:
+        ok = rebuild_all(conn)
+        conn.commit()
+        logger.info(f"Перестройка FTS-индексов: {'успешно' if ok else 'недоступно'}")
+        return ok
+    except sqlite3.DatabaseError as e:
+        logger.warning(f"Не удалось перестроить FTS-индексы: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+__all__ = [
+    "FTS_TABLES",
+    "META_TABLE",
+    "TOKENIZER",
+    "build_match_query",
+    "delete_row",
+    "ensure_meta_table",
+    "ensure_schema",
+    "fts5_available",
+    "match_query_for",
+    "needs_like_fallback",
+    "needs_sync",
+    "rebuild",
+    "rebuild_all",
+    "rebuild_fts_index",
+    "replace_row",
+    "reset_availability_cache",
+    "sync_content",
+    "table_exists",
+    "tokens",
+]
