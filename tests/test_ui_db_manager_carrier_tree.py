@@ -356,6 +356,53 @@ def test_tree_driver_without_carrier_is_not_in_tree(manager, isolated_db, carrie
     assert _child_names(_top_by_name(manager, CARRIER_A_NAME)) == []
 
 
+def test_hover_over_tree_sets_tooltips(manager, isolated_db, carrier_a):
+    """
+    Наведение мыши на дерево не роняет приложение (срочный фикс 09.10.2026).
+
+    Ловушка: общий помощник подсказок звал `item.toolTip()` без номера
+    колонки, а у `QTreeWidgetItem` метод её требует. Исключение в слоте Qt
+    для PyQt фатально (`qFatal` → `abort`, в журнале Windows —
+    `0xC0000409` в `Qt5Core.dll`), то есть приложение умирало, едва оператор
+    наводил курсор на дерево. Здесь этот путь проверяется целиком: сигнал
+    `itemEntered` подаётся так же, как его шлёт Qt, — и на перевозчике,
+    и на водителе, по всем колонкам.
+    """
+    _add_driver(
+        isolated_db, GALUSHKIN_NAME, carrier_a,
+        birth_date="1985-03-12", phone="+7 (999) 111-22-33",
+    )
+    manager._load_carriers_tree()
+    tree = _tree(manager)
+    top = _top_by_name(manager, CARRIER_A_NAME)
+    child = _driver_child(top, GALUSHKIN_NAME)
+
+    for node in (top, child):
+        for column in range(tree.columnCount()):
+            tree.itemEntered.emit(node, column)
+
+    assert top.toolTip(1) == "7701234567", "ИНН перевозчика — в подсказке"
+    assert child.toolTip(4) == "+7 (999) 111-22-33", "телефон водителя"
+    assert child.toolTip(3) == "1985-03-12", "дата рождения водителя"
+
+
+def test_hover_over_deleted_node_sets_tooltip(
+    manager, isolated_db, carrier_a
+):
+    """Удалённый узел тоже переживает наведение мыши."""
+    driver_id = _add_driver(isolated_db, DRIVER_NAME, carrier_a)
+    isolated_db.delete_driver(driver_id)
+    manager.chk_deleted.setChecked(True)
+    tree = _tree(manager)
+
+    top = _top_by_name(manager, CARRIER_A_NAME)
+    child = _driver_child(top, DRIVER_NAME)
+    for column in range(tree.columnCount()):
+        tree.itemEntered.emit(child, column)
+
+    assert child.toolTip(4) == "удалён"
+
+
 # ─────────────────────────────────────────────────────────────
 # B.4: мягкое удаление на обоих уровнях
 # ─────────────────────────────────────────────────────────────

@@ -8,7 +8,10 @@
   * режимы колонок — «растянуть» / «по содержимому» / «фиксированная»
     (QHeaderView.Stretch / ResizeToContents / Interactive);
   * минимальные ширины колонок;
-  * подсказка с полным текстом ячейки (itemEntered + mouse tracking);
+  * подсказка с полным текстом ячейки (itemEntered + mouse tracking) —
+    и у ТАБЛИЦ, и у ДЕРЕВЬЕВ: у `QTreeWidgetItem` методы требуют номер
+    колонки, а помощник звал их без него (срочный фикс 09.10.2026, падение
+    приложения `0xC0000409` при наведении мыши на дерево перевозчиков);
   * сохранение и восстановление ширин через QSettings;
   * без ключа хранилища таблица ничего не пишет;
   * растяжение по вертикали (make_table_expandable): политика Expanding,
@@ -35,9 +38,9 @@ from PyQt5.QtWidgets import (  # noqa: E402
 
 from ui.widgets.table_helpers import (  # noqa: E402
     MODE_CONTENTS, MODE_FIXED, MODE_STRETCH, ROW_HEIGHT_TWO_LINES,
-    STORAGE_KEY_PROPERTY, WidthsSaver, column_index, install_tooltip_on_table,
-    make_table_expandable, restore_column_widths, save_column_widths,
-    setup_point_table, stored_widths,
+    STORAGE_KEY_PROPERTY, WidthsSaver, apply_cell_tooltip, column_index,
+    install_tooltip_on_table, make_table_expandable, restore_column_widths,
+    save_column_widths, setup_point_table, stored_widths,
 )
 
 #: Ключ тестового хранилища (боевые начинаются с «ui/»).
@@ -218,6 +221,94 @@ def test_tooltip_installed_once(table):
     table.itemEntered.emit(table.item(0, 0))
 
     assert table.item(0, 0).toolTip() == "Салон"
+
+
+# ─────────────────────────────────────────────────────────────
+# Подсказки в ДЕРЕВЕ (срочный фикс 09.10.2026)
+# ─────────────────────────────────────────────────────────────
+
+def _make_tree(qapp):
+    """Дерево из двух уровней: та же форма, что у дерева перевозчиков."""
+    from PyQt5.QtWidgets import QTreeWidget, QTreeWidgetItem
+
+    tree = QTreeWidget()
+    tree.setColumnCount(3)
+    tree.setHeaderLabels(["Наименование", "ИНН", "Статус"])
+    top = QTreeWidgetItem(["ООО «Ромашка»", "7707654321", ""])
+    child = QTreeWidgetItem(["Иванов Иван Иванович", "", "+7 (999) 111-22-33"])
+    top.addChild(child)
+    tree.addTopLevelItem(top)
+    return tree
+
+
+def test_tooltip_appears_on_tree_hover(qapp):
+    """
+    Наведение на узел дерева даёт подсказку — и НЕ роняет приложение.
+
+    Ловушка: у `QTreeWidgetItem` методы требуют номер колонки, а общий
+    помощник звал `item.toolTip()` без него. Исключение в слоте Qt для PyQt
+    фатально (qFatal → abort), поэтому дерево перевозчиков роняло всё
+    приложение при наведении мыши.
+    """
+    from PyQt5.QtWidgets import QTreeWidgetItem
+
+    tree = _make_tree(qapp)
+    try:
+        install_tooltip_on_table(tree)
+        top = tree.topLevelItem(0)
+        child = top.child(0)
+
+        tree.itemEntered.emit(top, 1)
+        tree.itemEntered.emit(child, 2)
+
+        assert top.toolTip(1) == "7707654321"
+        assert child.toolTip(2) == "+7 (999) 111-22-33"
+        assert isinstance(child, QTreeWidgetItem)
+    finally:
+        tree.deleteLater()
+
+
+def test_tooltip_on_tree_keeps_own_tooltip(qapp):
+    """Своя подсказка узла не затирается текстом колонки."""
+    tree = _make_tree(qapp)
+    try:
+        install_tooltip_on_table(tree)
+        top = tree.topLevelItem(0)
+        top.setToolTip(0, "Текущий перевозчик водителя")
+
+        tree.itemEntered.emit(top, 0)
+
+        assert top.toolTip(0) == "Текущий перевозчик водителя"
+    finally:
+        tree.deleteLater()
+
+
+def test_tooltip_on_tree_skips_empty_cell(qapp):
+    """Пустая ячейка узла подсказки не получает."""
+    tree = _make_tree(qapp)
+    try:
+        install_tooltip_on_table(tree)
+
+        tree.itemEntered.emit(tree.topLevelItem(0), 2)
+
+        assert tree.topLevelItem(0).toolTip(2) == ""
+    finally:
+        tree.deleteLater()
+
+
+def test_tooltip_does_not_raise_on_foreign_item(qapp):
+    """
+    Чужой объект вместо ячейки не роняет приложение.
+
+    Подсказка ставится в слоте Qt: любое исключение здесь — это `qFatal` и
+    падение процесса, поэтому помощник обязан промолчать и записать
+    предупреждение, а не пробрасывать ошибку наружу.
+    """
+
+    class BrokenItem:
+        """Объект, у которого нет ни toolTip(), ни text()."""
+
+    apply_cell_tooltip(BrokenItem())  # не должно бросить исключение
 
 
 # ─────────────────────────────────────────────────────────────

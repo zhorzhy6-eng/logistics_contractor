@@ -430,3 +430,25 @@ def test_new_vehicle_becomes_its_own_row(dialog, window):
     dialog.apply()
     assert window.vehicles_tab.table.rowCount() == 1
     assert window.vehicles_tab.get_field(0, "vin") == VIN
+
+
+def test_hover_over_import_tree_does_not_crash(dialog):
+    """
+    Наведение мыши на дерево импорта не роняет приложение.
+
+    Срочный фикс 09.10.2026: общий помощник подсказок звал `item.toolTip()`
+    без номера колонки, а у `QTreeWidgetItem` метод её требует. Исключение
+    в слоте Qt для PyQt фатально (`qFatal` → `abort`, `0xC0000409` в
+    `Qt5Core.dll`), поэтому наведение курсора на это дерево убивало
+    приложение. Проверяем путь сигналом `itemEntered`, как его шлёт Qt.
+    """
+    load(dialog, driver_evidence())
+    tree = dialog.tree
+    top = tree.topLevelItem(0)
+    nodes = [top] + [top.child(i) for i in range(top.childCount())]
+
+    for node in nodes:
+        for column in range(tree.columnCount()):
+            tree.itemEntered.emit(node, column)
+
+    assert top.toolTip(0), "подсказка узла проставлена"

@@ -41,7 +41,9 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from PyQt5.QtCore import QObject, QPoint, QSettings, QTimer, Qt
-from PyQt5.QtWidgets import QHeaderView, QMenu, QSizePolicy, QTableWidget
+from PyQt5.QtWidgets import (
+    QHeaderView, QMenu, QSizePolicy, QTableWidget, QTreeWidgetItem,
+)
 
 from ui.widgets.column_settings import (
     ColumnSpec,
@@ -447,6 +449,11 @@ def install_tooltip_on_table(table: QTableWidget) -> None:
     Своя подсказка ячейки (например, «справочно» у даты выгрузки аренды)
     НЕ затирается — она важнее повтора текста.
 
+    Работает и с `QTreeWidget` (дерево перевозчиков, дерево проверки
+    импорта): сигнал `itemEntered` у дерева передаёт ещё и номер колонки,
+    а `apply_cell_tooltip` его принимает — см. её докстринг про ловушку
+    с `QTreeWidgetItem`.
+
     Вызывается один раз при инициализации таблицы: повторный вызов
     ничего не делает.
     """
@@ -458,20 +465,46 @@ def install_tooltip_on_table(table: QTableWidget) -> None:
     setattr(table, _TOOLTIPS_FLAG, True)
 
 
-def apply_cell_tooltip(item: Any) -> None:
+def apply_cell_tooltip(item: Any, column: int = 0) -> None:
     """
     Ставит подсказку ячейки по её тексту (слот itemEntered).
+
+    У `QTableWidgetItem` методы идут БЕЗ аргументов, у `QTreeWidgetItem` —
+    с номером колонки: `toolTip(column)`, `text(column)`,
+    `setToolTip(column, text)`. Сигнал `itemEntered` у дерева номер колонки
+    передаёт, у таблицы — нет, поэтому колонка принимается вторым
+    аргументом со значением по умолчанию.
+
+    ЛОВУШКА (срочный фикс 09.10.2026): вызов `item.toolTip()` на узле
+    дерева бросает `TypeError`, а необработанное исключение в слоте Qt для
+    PyQt фатально — PyQt вызывает `qFatal()`, процесс падает с
+    `0xC0000409` в `Qt5Core.dll`, и в логах приложения ничего нет
+    (traceback уходит в stderr, которого у `pythonw.exe` нет). Именно так
+    падало приложение при наведении мыши на дерево перевозчиков. Поэтому
+    тело под защитой: подсказка не должна ронять программу.
 
     Пустая ячейка подсказки не получает: повторять нечего.
     """
     if item is None:
         return
-    if item.toolTip():
-        return
 
-    text = str(item.text() or "").strip()
-    if text:
-        item.setToolTip(text)
+    try:
+        if isinstance(item, QTreeWidgetItem):
+            if item.toolTip(column):
+                return
+            text = str(item.text(column) or "").strip()
+            if text:
+                item.setToolTip(column, text)
+            return
+
+        if item.toolTip():
+            return
+
+        text = str(item.text() or "").strip()
+        if text:
+            item.setToolTip(text)
+    except Exception as e:  # noqa: BLE001 — подсказка не должна ронять приложение
+        logger.warning("Подсказка ячейки не поставлена: %s", e)
 
 
 def save_column_widths(table: QTableWidget, storage_key: str) -> None:
