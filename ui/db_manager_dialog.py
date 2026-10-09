@@ -980,13 +980,18 @@ class DbManagerDialog(QDialog):
         layout.addLayout(close_layout)
 
         # ── Debounce поиска (Шаг 5 оптимизации) ──
+        # Слоты таймеров — связанные методы БЕЗ параметров: `lambda` в
+        # `connect` создаёт цикл ссылок Python ↔ Qt (AGENTS.md § 5.1).
         self._org_search_text = {True: "", False: ""}
         self._org_timers = {}
-        for is_carrier in (True, False):
+        for is_carrier, slot in (
+            (True, self._on_carrier_org_filter_timeout),
+            (False, self._on_customer_org_filter_timeout),
+        ):
             timer = QTimer(self)
             timer.setSingleShot(True)
             timer.setInterval(250)
-            timer.timeout.connect(lambda c=is_carrier: self._apply_org_filter(c))
+            timer.timeout.connect(slot)
             self._org_timers[is_carrier] = timer
 
         self._driver_search_text = ""
@@ -1279,6 +1284,14 @@ class DbManagerDialog(QDialog):
     def _on_customer_search_changed(self, text: str) -> None:
         """Ввод в поиске заказчиков: отложенная фильтрация таблицы."""
         self._schedule_org_filter(False, text)
+
+    def _on_customer_org_filter_timeout(self) -> None:
+        """Сработал таймер поиска заказчиков: применяем фильтр таблицы."""
+        self._apply_org_filter(False)
+
+    def _on_carrier_org_filter_timeout(self) -> None:
+        """Сработал таймер поиска перевозчиков (вкладка-дерево)."""
+        self._apply_org_filter(True)
 
     def _on_carrier_search_changed(self, text: str) -> None:
         """Ввод в поиске перевозчиков: отложенная фильтрация дерева."""
