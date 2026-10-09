@@ -622,6 +622,30 @@ def test_clear_resets_both_fields(tab):
 # F.6: бланки
 # ─────────────────────────────────────────────────────────────
 
+def _payment_clause_branches(xml: str):
+    """
+    Ветки условного блока п. 4.4: (ветка `if`, ветка `else`).
+
+    Теги ищутся ОТ ТЕКСТА пункта, а не как первые в документе: условных
+    блоков в бланке теперь несколько (п. 1.1 и 1.2 «Динамические стороны»,
+    строки необязательных полей, п. 9), и первый `{%p else %}` в файле —
+    уже не тот, что у оплаты. Текст ветки `else` — прежний п. 4.4.
+    """
+    clause = xml.find("4.4. Оплата производится в течение")
+    assert clause > 0, "в бланке нет прежнего текста п. 4.4"
+
+    else_at = xml.rfind("{%p else %}", 0, clause)
+    assert else_at > 0, "у п. 4.4 нет ветки else"
+
+    if_at = xml.rfind("{%p if has_prepayment %}", 0, else_at)
+    assert if_at > 0, "у п. 4.4 нет ветки if"
+
+    endif_at = xml.find("{%p endif %}", clause)
+    assert endif_at > 0, "у п. 4.4 нет закрывающего тега"
+
+    return xml[if_at:else_at], xml[else_at:endif_at]
+
+
 @pytest.mark.parametrize("name", PEREVOZKA_TEMPLATES)
 def test_template_has_conditional_payment_clause(name):
     """
@@ -645,13 +669,11 @@ def test_template_else_branch_keeps_old_payment_text(name):
     with zipfile.ZipFile(str(TEMPLATES / name)) as archive:
         xml = archive.read("word/document.xml").decode("utf-8")
 
-    position = xml.find("{%p else %}")
-    assert position > 0, name
+    _branch_if, branch_else = _payment_clause_branches(xml)
 
-    tail = xml[position:]
     for fragment in ("4.4. Оплата производится в течение", "{{payment_days}}",
                      "{{payment_days_words}}", "банковских дней"):
-        assert fragment in tail, f"{name}: в ветке else нет {fragment!r}"
+        assert fragment in branch_else, f"{name}: в ветке else нет {fragment!r}"
 
 
 @pytest.mark.parametrize("name", PEREVOZKA_TEMPLATES)
@@ -660,9 +682,7 @@ def test_template_if_branch_has_report_wording(name):
     with zipfile.ZipFile(str(TEMPLATES / name)) as archive:
         xml = archive.read("word/document.xml").decode("utf-8")
 
-    position = xml.find("{%p if has_prepayment %}")
-    end = xml.find("{%p else %}")
-    branch = xml[position:end]
+    branch, _branch_else = _payment_clause_branches(xml)
 
     assert "Оплата услуг осуществляется Заказчиком в следующем порядке" in branch
     assert "предоплата в размере {{prepayment_percent}}%" in branch
@@ -684,11 +704,7 @@ def test_template_keeps_single_number_for_clause(name):
     with zipfile.ZipFile(str(TEMPLATES / name)) as archive:
         xml = archive.read("word/document.xml").decode("utf-8")
 
-    start = xml.find("{%p if has_prepayment %}")
-    end = xml.find("{%p else %}")
-    endif = xml.find("{%p endif %}")
-    branch_if = xml[start:end]
-    branch_else = xml[end:endif]
+    branch_if, branch_else = _payment_clause_branches(xml)
 
     assert "4.4. Оплата услуг" in branch_if, name
     assert "4.2." not in branch_if, f"{name}: в ветке if остался номер 4.2"
