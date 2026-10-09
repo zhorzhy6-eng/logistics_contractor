@@ -14,6 +14,7 @@
   customers.py       — заказчики — имена из db/crud/organizations.py
   carriers.py        — перевозчики — имена из db/crud/organizations.py
   vehicles.py        — ТС: машины договора и тягач/прицеп водителя
+  contracts.py       — договоры и точки маршрута
   search.py          — общий слой поиска (синхронизация и подсчёт FTS)
 """
 
@@ -95,6 +96,13 @@ from db.crud.vehicles import (
     save_vehicles,
 )
 
+from db.crud.contracts import (
+    load_contract_points,
+    save_contract,
+    save_contract_points,
+    save_contract_with_details,
+)
+
 from db.crud.search import (
     addresses_fts_count,
     ensure_fts_fresh,
@@ -119,6 +127,7 @@ __all__ = [
     "get_driver_carriers",
     "import_addresses_from_list",
     "link_driver_to_carrier",
+    "load_contract_points",
     "load_counterparty",
     "load_driver",
     "load_driver_vehicle",
@@ -128,6 +137,9 @@ __all__ = [
     "restore_driver",
     "restore_organization",
     "save_address",
+    "save_contract",
+    "save_contract_points",
+    "save_contract_with_details",
     "save_counterparty",
     "save_driver",
     "save_driver_vehicle",
