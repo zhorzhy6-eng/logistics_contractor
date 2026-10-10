@@ -84,6 +84,10 @@ STATE.md обновлён: HEAD=<хеш>, tests=<число>, шаг=<стату
   следующий шаг, новые замечания.
 - Коммитить `docs/STATE.md` **вместе** с изменениями шага (одним коммитом)
   или отдельным — на выбор агента, но **запушить до отчёта**.
+  - Менять core/document_fields.py, core/recognizer.py, core/document_reader.py, 
+  core/document_ocr.py, core/gigachat_client.py, core/document_import_service.py.
+  Это слой распознавания; правки допустимы, но с прогоном tests/test_document_*.py 
+  и tests/test_recognition_*.py.
 
 ### Ask first (спроси перед действием)
 

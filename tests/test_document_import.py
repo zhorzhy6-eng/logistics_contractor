@@ -343,9 +343,9 @@ def test_cloud_enabled_without_client_uses_local_ocr(monkeypatch, caplog):
         DocumentImportService({"document_cloud_enabled": True}, None).process(
             ["a"], Event(), lambda *a: received.append(a))
     assert received[0][1][0].method == "OCR локально"
-    assert "Облако включено, но GigaChat недоступен, используется локальный OCR" in caplog.text
+    assert "облако включено, но GigaChat недоступен, используется локальный OCR" in caplog.text
     # Сообщение о выборе метода выводится один раз на запуск, а не на каждую страницу.
-    assert caplog.text.count("Импорт документов: Облако включено, но GigaChat недоступен") == 1
+    assert caplog.text.count("облако включено, но GigaChat недоступен") == 1
 
 def test_vision_cleanup_warning_and_preview(monkeypatch):
     import core.document_import_service as module
@@ -508,7 +508,7 @@ def test_text_page_uses_cloud_text_fallback(monkeypatch):
         DocumentPage(1, "Некое описание без подписей и без меток реквизитов")]))
     calls = []
 
-    def recognize_text(text):
+    def recognize_text(text, **kwargs):
         calls.append(text)
         return {"carrier": {"inn": "7701234567"}}
 
@@ -529,7 +529,7 @@ def test_text_page_falls_back_to_rendered_vision(monkeypatch):
                         image_loader=lambda: Image.new("RGB", (10, 10)))
     monkeypatch.setattr(module, "read_document", lambda *a: iter([page]))
     client = SimpleNamespace(
-        recognize_text=lambda text: {"driver": {"full_name": ""}},
+        recognize_text=lambda text, **kwargs: {"driver": {"full_name": ""}},
         recognize_image=lambda image, cancel, deep=True: ({"driver": {"full_name": "Тестов Тест"}}, ""))
     received = []
     DocumentImportService({"document_cloud_enabled": True}, client).process(
@@ -560,7 +560,7 @@ def test_deep_fallback_is_budgeted_per_file(monkeypatch):
     calls = []
     texts = []
 
-    def recognize_text(text):
+    def recognize_text(text, **kwargs):
         texts.append(text)
         return {}
 
@@ -605,7 +605,7 @@ def test_deep_fallback_stops_after_first_data(monkeypatch):
             return {"driver": {"full_name": "Тестов Тест"}}, ""
         return {}, ""
 
-    client = SimpleNamespace(recognize_text=lambda text: {},
+    client = SimpleNamespace(recognize_text=lambda text, **kwargs: {},
                              recognize_image=vision)
     monkeypatch.setattr(module, "read_document", lambda *a: iter([
         DocumentPage(number, text="Описание без подписей и меток реквизитов",

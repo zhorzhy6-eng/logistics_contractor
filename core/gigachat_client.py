@@ -7,6 +7,7 @@ from typing import Optional
 
 import requests
 
+from core.import_cancel import interruptible_sleep
 from core.pseudonymizer import Pseudonymizer
 from core.secrets_store import MISSING_KEY_MESSAGE, get_gigachat_key
 from core.tls_config import describe_tls, resolve_ca_bundle, ssl_error_hint
@@ -820,7 +821,8 @@ class GigaChatClient:
                 if not self._has_meaningful_values(parsed) and raw_text.strip():
                     if sum(c.isalnum() for c in raw_text) >= 40:
                         try:
-                            structured = self.recognize_text(raw_text, retries=1)
+                            structured = self.recognize_text(raw_text, retries=1,
+                                                             cancel=cancel)
                         except RuntimeError:
                             structured = {}
                         if self._has_meaningful_values(structured):
@@ -862,6 +864,9 @@ class GigaChatClient:
                                 type(exc).__name__,
                             )
                         else:
+                            # Ожидание перед второй попыткой удаления остаётся
+                            # обычным: это блок finally, и ImportCancelled здесь
+                            # подменил бы исходную ошибку распознавания.
                             time.sleep(.5)
             if cleanup_failed:
                 warning = " ".join(filter(None, [
@@ -998,7 +1003,8 @@ class GigaChatClient:
         return GigaChatClient.RETRY_BASE_DELAY * (2 ** attempt)
 
     def recognize_text(self, text: str, prompt: Optional[str] = None,
-                       retries: Optional[int] = None) -> dict:
+                       retries: Optional[int] = None,
+                       cancel=None) -> dict:
         """
         Отправляет текст в GigaChat и возвращает разобранный JSON.
 
@@ -1032,6 +1038,10 @@ class GigaChatClient:
 
         retries — переопределение числа повторов для вложенных вызовов
         (fallback внутри Vision не должен добивать API повторами).
+
+        cancel — признак отмены импорта (необязательный): паузы перед
+        повторами становятся прерываемыми. Окна типов договоров зовут метод
+        без него — там отмены нет, и ожидание идёт как раньше.
         """
         max_retries = self.MAX_RETRIES if retries is None else max(0, int(retries))
 
@@ -1116,7 +1126,7 @@ class GigaChatClient:
                         f"GigaChat: таймаут ({self.timeout} сек), "
                         f"повтор через {delay:.0f} сек (попытка {attempt + 2}/{max_retries + 1})"
                     )
-                    time.sleep(delay)
+                    interruptible_sleep(delay, cancel)
                     continue
                 raise RuntimeError(
                     f"GigaChat: превышено время ожидания ({self.timeout} сек) "
@@ -1132,7 +1142,7 @@ class GigaChatClient:
                         f"GigaChat: ошибка соединения ({type(exc).__name__}), "
                         f"повтор через {delay:.0f} сек (попытка {attempt + 2}/{max_retries + 1})"
                     )
-                    time.sleep(delay)
+                    interruptible_sleep(delay, cancel)
                     continue
                 raise _request_error(exc, "/chat/completions") from exc
             except (requests.exceptions.RequestException, OSError) as exc:
@@ -1170,7 +1180,7 @@ class GigaChatClient:
                     f"GigaChat вернул {resp.status_code} — повтор через {delay:.0f} сек "
                     f"(попытка {attempt + 2}/{max_retries + 1})"
                 )
-                time.sleep(delay)
+                interruptible_sleep(delay, cancel)
                 continue
 
             # ── Остальные коды — как раньше ──
