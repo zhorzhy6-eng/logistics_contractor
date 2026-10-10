@@ -163,6 +163,10 @@ class FieldValue:
     section: str = ""
     label: str = ""
     sources: List[str] = field(default_factory=list)
+    #: Путь распознавания КАЖДОГО источника этого поля: {«файл» → метод}.
+    #: Нужен там, где у поля значения из разных документов (спорное поле):
+    #: один файл мог прийти из облака, другой — из локального OCR.
+    source_methods: Dict[str, str] = field(default_factory=dict)
     variants: List[Tuple[str, str]] = field(default_factory=list)   # (источник, значение)
     detail: str = ""              # как это состояние назвал сборщик
     note: str = ""
@@ -329,6 +333,10 @@ def field_from_row(row) -> FieldValue:
         source, method = entries[0][0], entries[0][1]
     notes = [line.strip() for line in str(getattr(row, "sources", "") or "").splitlines()
              if line.strip() and not SOURCE_LINE_RE.match(line.strip())]
+    per_source = {}
+    for entry_source, entry_method, _ in entries:
+        if entry_source:
+            per_source.setdefault(entry_source, entry_method)
     return FieldValue(
         field=row.key,
         value=value,
@@ -339,6 +347,7 @@ def field_from_row(row) -> FieldValue:
         section=row.section,
         label=LABELS.get(row.key, row.key) or row.key,
         sources=_unique_sources(row, entries),
+        source_methods=per_source,
         variants=[(entry_source, entry_value) for entry_source, _, entry_value in entries],
         detail=str(getattr(row, "state", "") or ""),
         note=" ".join(notes),
@@ -367,6 +376,25 @@ def _unique_sources(row, entries: Sequence[Tuple[str, str, str]]) -> List[str]:
             return [line]
         break
     return []
+
+
+def source_methods(values: Sequence["FieldValue"]) -> Dict[str, str]:
+    """
+    Каким путём прочитан КАЖДЫЙ источник: ``{«passport_01.jpg» → метод}``.
+
+    Оператор должен видеть в дереве, где сработал GigaChat Vision, а где
+    локальный OCR (требование шага). Метод берётся из строк источников
+    (`compare_fields`), которые уже разобраны в `variants`, поэтому ничего
+    дополнительно передавать не нужно. Если источник встречается у нескольких
+    полей, показывается метод ПЕРВОГО источника — так же выбирает основной
+    источник `field_from_row`.
+    """
+    result: Dict[str, str] = {}
+    for value in values:
+        for source, _ in value.variants:
+            if source:
+                result.setdefault(source, value.method)
+    return result
 
 
 def _field_title(section: str, fields: Dict[str, FieldValue]) -> str:
