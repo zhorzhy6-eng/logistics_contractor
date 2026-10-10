@@ -47,8 +47,11 @@ from core.contracts.ru_morphology import (
 from core.dates import to_iso
 from core.num_to_words import amount_to_words
 from core.vat import (
+    VAT_FREE,
     compute_carrier_type,
+    compute_vat,
     is_vat_free,
+    total_from_base,
     vat_rate_label,
     vat_rate_number,
 )
@@ -1537,29 +1540,60 @@ class PerevozkaGenerator(BaseContractGenerator):
         )
 
         # ── Стоимость и НДС ──
-        price_without_vat = float(contract.get("price_without_vat", 0) or 0)
+        # Суммы считаются «НДС В ТОМ ЧИСЛЕ»: главная величина — ИТОГ договора
+        # (`price_with_vat`, та сумма, которую ввёл оператор), а база без НДС
+        # и налог выводятся из него. Раньше главной была база, налог считался
+        # сверху и прибавлялся — из-за этого сумма в договоре была больше
+        # введённой оператором.
+        #
+        # Записи, сохранённые до перехода, хранят только базу без НДС: тогда
+        # итог восстанавливается умножением на (1 + ставка/100) — тем же
+        # множителем, каким он считался раньше, поэтому пересборка старого
+        # договора даёт прежние суммы до копейки.
+        price_with_vat = contract.get("price_with_vat")
+        price_without_vat = contract.get("price_without_vat", 0)
+        if price_with_vat in (None, ""):
+            total_amount = total_from_base(price_without_vat or 0, vat_rate_num)
+        else:
+            try:
+                total_amount = round(float(price_with_vat), 2)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Итоговая сумма в данных не число — взята база без НДС"
+                )
+                total_amount = total_from_base(price_without_vat or 0, vat_rate_num)
 
-        # Ветвь «НДС не облагается» — только для ставки «Без НДС» и вида
-        # «ИП без НДС». Ставка «0%» (экспорт) налогом не облагается по
-        # сумме, но ставкой остаётся: в договоре печатается «в настоящее
-        # время 0%» и нулевой НДС, а не «НДС не облагается».
+        # «Без НДС» — налога нет вовсе, и итог РАВЕН базе. Если в данных эти
+        # две суммы расходятся (старая запись: базу писали отдельно, а итог
+        # считался сверху), верна база — иначе договор без налога вырос бы на
+        # ставку. У новых записей суммы совпадают, и правило ничего не меняет.
+        if is_vat_free_flag and price_without_vat not in (None, ""):
+            try:
+                total_amount = round(float(price_without_vat), 2)
+            except (TypeError, ValueError):
+                pass
+
+        vat = compute_vat(
+            total_amount, VAT_FREE if is_vat_free_flag else vat_rate_raw
+        )
+        total_amount = vat["sum_total"]
+        sum_wo_nds = vat["sum_wo_nds"]
+        nds_amount = vat["sum_nds"]
+
+        replacements["sum_wo_nds"] = f"{sum_wo_nds:.2f}"
+        replacements["sum_wo_nds_words"] = amount_to_words(sum_wo_nds)
+        replacements["sum_total"] = f"{total_amount:.2f}"
+        replacements["sum_total_words"] = amount_to_words(total_amount)
+
         if is_vat_free_flag:
-            nds_amount = 0.0
-            total_amount = price_without_vat
-            replacements["sum_wo_nds"] = f"{price_without_vat:.2f}"
-            replacements["sum_wo_nds_words"] = amount_to_words(price_without_vat)
+            # Ветвь «НДС не облагается» — для ставки «Без НДС» и вида
+            # «ИП без НДС». Ставка «0%» (экспорт) налогом не облагается по
+            # сумме, но ставкой остаётся: печатается «в настоящее время 0%»
+            # и нулевой НДС, а не «НДС не облагается».
             replacements["nds_text"] = "НДС не облагается"
             replacements["sum_nds"] = ""
             replacements["sum_nds_words"] = ""
-            replacements["sum_total"] = f"{total_amount:.2f}"
-            replacements["sum_total_words"] = amount_to_words(total_amount)
         else:
-            nds_amount = round(price_without_vat * vat_rate_num / 100, 2)
-            total_amount = round(price_without_vat + nds_amount, 2)
-
-            replacements["sum_wo_nds"] = f"{price_without_vat:.2f}"
-            replacements["sum_wo_nds_words"] = amount_to_words(price_without_vat)
-
             replacements["sum_nds"] = f"{nds_amount:.2f}"
             replacements["sum_nds_words"] = amount_to_words(nds_amount)
 
@@ -1567,9 +1601,6 @@ class PerevozkaGenerator(BaseContractGenerator):
                 f"НДС по ставке, действующей на дату оказания услуг "
                 f"(в настоящее время {vat_rate_num:.0f}%) — {nds_amount:.2f} руб."
             )
-
-            replacements["sum_total"] = f"{total_amount:.2f}"
-            replacements["sum_total_words"] = amount_to_words(total_amount)
 
         # Синонимы ключей сумм: «wo_nds» — историческое имя перевозки,
         # «wo_vat» — имя сумм в остальных типах (аренда, Логистикс).
@@ -1603,7 +1634,7 @@ class PerevozkaGenerator(BaseContractGenerator):
         self._log_split_payment(split)
 
         logger.info(
-            f"Итоговые суммы: без НДС={price_without_vat:.2f}, "
+            f"Итоговые суммы: без НДС={sum_wo_nds:.2f}, "
             f"НДС={nds_amount:.2f} ({vat_rate_num:.0f}%), итого={total_amount:.2f}"
         )
 

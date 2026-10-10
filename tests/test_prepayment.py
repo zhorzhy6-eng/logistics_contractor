@@ -15,7 +15,7 @@
   * карта замен перевозки несёт восемь ключей разбивки, при 0 % — пустые;
   * валидатор перевозки ловит отрицательную предоплату и предоплату больше
     стоимости (ошибки) и предоплату 100 % (замечание);
-  * вкладка «Договор»: поле «Предоплата, ₽» и расчётный «Предоплата (%)»,
+  * вкладка «Договор»: поле «Предоплата, ₽» и расчётный «Предоплата, %»,
     ДВУСТОРОННИЙ ввод (сумма ↔ процент), процент считается от ИТОГА
     (суммы с НДС) и НЕ меняет введённую сумму;
   * в трёх бланках перевозки стоит условный блок `{%p if has_prepayment %}`,
@@ -375,15 +375,15 @@ def test_tab_has_prepayment_fields(tab):
 
 
 def test_tab_percent_is_computed_from_total(tab):
-    """Стоимость 100 000 ₽ без НДС, предоплата 30 000 ₽ → 24.59 % (с НДС 22 %)."""
+    """Стоимость (итог) 100 000 ₽, предоплата 30 000 ₽ → ровно 30.00 %."""
     tab.price_input.setValue(100000.0)
     tab.prepayment_amount.setValue(30000.0)
 
     data = tab.get_data()
 
     assert data["prepayment_amount"] == 30000.0
-    assert data["prepayment_percent"] == pytest.approx(24.59)
-    assert tab.prepayment_percent.value() == pytest.approx(24.59)
+    assert data["prepayment_percent"] == pytest.approx(30.00)
+    assert tab.prepayment_percent.value() == pytest.approx(30.00)
 
 
 def test_tab_both_fields_are_editable(tab):
@@ -416,23 +416,45 @@ def test_tab_price_change_keeps_amount_and_recomputes_percent(tab):
     """
     Сумму предоплаты оператор ввёл руками — стоимость её не меняет.
 
-    Стоимость 100 000 ₽ без НДС → итог 122 000 ₽ → 30 000 ₽ это 24.59 %.
-    Стоимость удвоили: сумма осталась 30 000 ₽, а процент стал 12.3 %
-    (30 000 / 244 000). Проценты считаются от ИТОГА с НДС, поэтому и
-    ожидание берётся по итогу, а не делением прошлого процента.
+    Стоимость 100 000 ₽ (это ИТОГ, «НДС в том числе») → 30 000 ₽ это 30.00 %.
+    Стоимость удвоили: сумма осталась 30 000 ₽, а процент стал 15.00 %
+    (30 000 / 200 000). Проценты считаются от «Стоимости» — той суммы,
+    которая печатается в договоре итогом, поэтому и ожидание берётся по ней,
+    а не делением прошлого процента.
     """
     tab.price_input.setValue(100000.0)
     tab.prepayment_amount.setValue(30000.0)
 
-    assert tab.get_data()["prepayment_percent"] == pytest.approx(24.59)
+    assert tab.get_data()["prepayment_percent"] == pytest.approx(30.00)
 
     tab.price_input.setValue(200000.0)
     second = tab.get_data()
 
     assert second["prepayment_amount"] == 30000.0
     assert second["prepayment_percent"] == pytest.approx(
-        round(30000.0 / 244000.0 * 100, 2)
+        round(30000.0 / 200000.0 * 100, 2)
     )
+
+
+def test_tab_prepayment_50_percent_of_the_contract_total(tab):
+    """Пример шага: итог 250 000 ₽ и предоплата 50 % → 125 000 ₽."""
+    tab.vat_rate.setCurrentText("22%")
+    tab.price_input.setValue(250000.0)
+
+    tab.prepayment_percent.setValue(50.0)
+
+    assert tab.prepayment_amount.value() == pytest.approx(125000.00)
+    assert tab.get_data()["price_with_vat"] == pytest.approx(250000.00)
+    assert tab.get_data()["prepayment_amount"] == pytest.approx(125000.00)
+
+
+def test_tab_prepayment_amount_gives_percent_of_the_contract_total(tab):
+    """Пример шага: итог 250 000 ₽ и предоплата 100 000 ₽ → ровно 40.00 %."""
+    tab.price_input.setValue(250000.0)
+    tab.prepayment_amount.setValue(100000.0)
+
+    assert tab.prepayment_percent.value() == pytest.approx(40.00)
+    assert tab.get_data()["prepayment_percent"] == pytest.approx(40.00)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -443,10 +465,10 @@ def _exactly_100k(tab) -> None:
     """
     Итог ровно 100 000 ₽: ставка 0 % и стоимость 100 000.
 
-    С шага «Ставки НДС» вкладка не спрашивает «сумма с НДС или без»:
-    «Стоимость» — это всегда база без НДС, а итог вкладка считает сама.
-    Ноль процентов оставляет итог равным введённой сумме — тем и удобен
-    здесь: проверки этого раздела про предоплату, а не про НДС.
+    С шага «Калькулятор „НДС в том числе“» «Стоимость» — это ИТОГ договора
+    (оператор вводит сумму, которую видит заказчик), а база без НДС и налог
+    считаются из неё. Ноль процентов оставляет базу равной итогу — тем и
+    удобен здесь: проверки этого раздела про предоплату, а не про НДС.
     """
     tab.vat_rate.setCurrentText("0%")
     tab.price_input.setValue(100000.0)

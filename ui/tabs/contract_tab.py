@@ -36,7 +36,7 @@ from PyQt5.QtCore import QDate, QTime, QTimer, pyqtSignal, Qt
 from core.vat import (
     DEFAULT_ENTITY_TYPE, DEFAULT_VAT_RATE, ENTITY_TYPES, VAT_RATES,
     compute_carrier_type, compute_vat, normalize_entity_type,
-    normalize_vat_rate, split_carrier_type, vat_rate_number,
+    normalize_vat_rate, split_carrier_type, total_from_base, vat_rate_number,
 )
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
@@ -316,7 +316,8 @@ class ContractTab(TabMixin, QWidget):
         # число выглядело как введённое оператором (ШАГ FIX-6, часть C).
         self.price_input.setValue(0)
         self.price_input.setToolTip(
-            "Стоимость услуг без НДС. НДС и итог вкладка считает сама."
+            "Стоимость услуг — ИТОГ, который видит заказчик (сумма договора). "
+            "Базу без НДС и сам налог вкладка считает из неё."
         )
         price_layout.addRow("Стоимость *", self.price_input)
 
@@ -324,23 +325,17 @@ class ContractTab(TabMixin, QWidget):
         # Оформление «только для чтения» берётся из темы (ui/theme.py):
         # локальный стиль нужен потому, что Qt не пересчитывает QSS при
         # изменении свойства readOnly у уже отрисованного поля.
-        self.vat_rate_display = QLineEdit()
-        self.vat_rate_display.setReadOnly(True)
-        self.vat_rate_display.setProperty("readonlyField", True)
-        self.vat_rate_display.setStyleSheet(theme.readonly_field_qss())
-        price_layout.addRow("Ставка НДС, %", self.vat_rate_display)
-
         self.vat_amount = QLineEdit()
         self.vat_amount.setReadOnly(True)
         self.vat_amount.setProperty("readonlyField", True)
         self.vat_amount.setStyleSheet(theme.readonly_field_qss())
         price_layout.addRow("НДС", self.vat_amount)
 
-        self.price_with_vat = QLineEdit()
-        self.price_with_vat.setReadOnly(True)
-        self.price_with_vat.setProperty("readonlyField", True)
-        self.price_with_vat.setStyleSheet(theme.readonly_field_qss())
-        price_layout.addRow("Стоимость (с НДС)", self.price_with_vat)
+        self.price_without_vat = QLineEdit()
+        self.price_without_vat.setReadOnly(True)
+        self.price_without_vat.setProperty("readonlyField", True)
+        self.price_without_vat.setStyleSheet(theme.readonly_field_qss())
+        price_layout.addRow("Стоимость без НДС", self.price_without_vat)
 
         self.payment_days = QLineEdit()
         self.payment_days.setPlaceholderText("10")
@@ -351,8 +346,8 @@ class ContractTab(TabMixin, QWidget):
         # ── Предоплата (разбивка оплаты на предоплату и окончательный расчёт) ──
         # Вводить можно ЛЮБОЕ из двух полей: оператор называет либо сумму
         # в рублях, либо процент, и второе поле пересчитывается. База
-        # процента — итог договора (сумма с НДС), та же величина, что
-        # печатается в договоре. При изменении стоимости сумма предоплаты
+        # процента — «Стоимость», то есть итог договора (та же величина, что
+        # печатается в договоре). При изменении стоимости сумма предоплаты
         # НЕ пересчитывается (её ввёл оператор) — обновляется только процент.
         self.prepayment_amount = NoWheelDoubleSpinBox()
         self.prepayment_amount.setRange(0, 100000000)
@@ -371,10 +366,10 @@ class ContractTab(TabMixin, QWidget):
         self.prepayment_percent.setSuffix(" %")
         self.prepayment_percent.setValue(0)
         self.prepayment_percent.setToolTip(
-            "Процент предоплаты. Можно вводить и здесь, и в поле «Сумма» — "
-            "второе поле пересчитается."
+            "Процент предоплаты от «Стоимости». Можно вводить и здесь, "
+            "и в поле «Сумма» — второе поле пересчитается."
         )
-        price_layout.addRow("Предоплата (%)", self.prepayment_percent)
+        price_layout.addRow("Предоплата, %", self.prepayment_percent)
 
         layout.addWidget(price_group)
 
@@ -884,28 +879,25 @@ class ContractTab(TabMixin, QWidget):
 
     def _calculate_price(self) -> None:
         """
-        Пересчитывает НДС и итог от введённой стоимости.
+        Пересчитывает базу без НДС и налог от введённой стоимости.
 
-        «Стоимость» — это ВСЕГДА база без НДС (так поле и подписано):
-        оператор вводит сумму услуг, а налог и итог вкладка считает сама.
-        Раньше смысл поля зависел от радиокнопок «С НДС / Без НДС», и одно
-        и то же число означало то базу, то итог — из-за этого итог в форме
-        расходился с договором.
+        «Стоимость» — это ИТОГ договора (сумма, которую видит заказчик):
+        оператор вводит одну сумму, а вкладка вынимает из неё НДС («НДС в том
+        числе»). Раньше было наоборот: вводилась база, налог считался сверху
+        и прибавлялся, из-за чего сумма в договоре была больше введённой.
 
         «Без НДС» и «0%» дают нулевой налог: в первом случае перевозчик не
         плательщик, во втором ставка есть, а налог нулевой.
         """
         try:
-            price_without_vat = float(self.price_input.value())
+            price_with_vat = float(self.price_input.value())
         except (ValueError, TypeError):
-            price_without_vat = 0.0
+            price_with_vat = 0.0
 
-        rate_text = self.current_vat_rate()
-        nds_amount, price_with_vat = compute_vat(price_without_vat, rate_text)
+        vat = compute_vat(price_with_vat, self.current_vat_rate())
 
-        self.vat_rate_display.setText(f"{self.current_vat_rate_number():.0f}")
-        self.vat_amount.setText(f"{nds_amount:.2f} ₽")
-        self.price_with_vat.setText(f"{price_with_vat:.2f} ₽")
+        self.vat_amount.setText(f"{vat['sum_nds']:.2f} ₽")
+        self.price_without_vat.setText(f"{vat['sum_wo_nds']:.2f} ₽")
 
         self._sync_prepayment_percent_from_amount()
 
@@ -917,20 +909,13 @@ class ContractTab(TabMixin, QWidget):
         """
         Текущий итог с НДС — база для процента предоплаты.
 
-        Читается из самого поля «Стоимость (с НДС)»: это ровно та величина,
-        которую видит оператор и которая печатается в договоре как итог.
-        Поле показывает сумму с суффиксом «₽», поэтому он снимается; запятая
-        как десятичный разделитель тоже принимается. Непонятное значение
-        даёт 0.0 — процент считать не от чего, падать вкладке незачем.
+        Это ровно та сумма, которую оператор ввёл в поле «Стоимость» и
+        которая печатается в договоре как итог. Значение читается из самого
+        поля (а не из подписи «Стоимость без НДС»), чтобы процент считался
+        от того же числа, что уходит в договор.
         """
         try:
-            text = (
-                self.price_with_vat.text()
-                .replace("₽", "").replace("\u00a0", "")
-                .replace(" ", "").replace(",", ".")
-                .strip()
-            )
-            return float(text)
+            return round(float(self.price_input.value() or 0), 2)
         except (ValueError, TypeError):
             return 0.0
 
@@ -1072,9 +1057,11 @@ class ContractTab(TabMixin, QWidget):
         (ООО → shablon_ooo.docx, ИП с НДС → shablon_ip_with_vat.docx,
         ИП без НДС → shablon_ip_without_vat.docx).
 
-        «Стоимость» — база без НДС, поэтому `price_without_vat` — это ровно
-        введённое число, а `price_with_vat` и `vat_rate_num` согласованы с
-        ним до копейки (тем же расчётом, что и в генераторе).
+        «Стоимость» — ИТОГ договора, поэтому `price_with_vat` — это ровно
+        введённое число, а `price_without_vat` и `vat_amount` посчитаны из
+        него тем же правилом, что и в генераторе («НДС в том числе»).
+        `price_input` остаётся для распознавания и ручного ввода: под этим
+        именем сумма приходит из модели.
         """
         vat_rate_text = self.current_vat_rate()
         vat_rate_num = self.current_vat_rate_number()
@@ -1085,11 +1072,11 @@ class ContractTab(TabMixin, QWidget):
             payment_days = 0
 
         try:
-            price_without_vat = round(float(self.price_input.value() or 0), 2)
+            price_with_vat = round(float(self.price_input.value() or 0), 2)
         except (ValueError, TypeError):
-            price_without_vat = 0.0
+            price_with_vat = 0.0
 
-        vat_amount, price_with_vat = compute_vat(price_without_vat, vat_rate_text)
+        vat = compute_vat(price_with_vat, vat_rate_text)
 
         loadings = self._read_table(self.loadings_table)
         unloadings = self._read_table(self.unloadings_table)
@@ -1131,9 +1118,9 @@ class ContractTab(TabMixin, QWidget):
             "vat_rate": vat_rate_text,
             "vat_rate_num": vat_rate_num,
             "price_input": self.price_input.value(),
-            "price_without_vat": price_without_vat,
-            "vat_amount": vat_amount,
-            "price_with_vat": price_with_vat,
+            "price_with_vat": vat["sum_total"],
+            "price_without_vat": vat["sum_wo_nds"],
+            "vat_amount": vat["sum_nds"],
             "payment_days": payment_days,
             "prepayment_amount": prepay_amount,
             "prepayment_percent": getattr(self, "_prepayment_percent", 0.0),
@@ -1209,14 +1196,29 @@ class ContractTab(TabMixin, QWidget):
         # ── Стоимость ──
         # Значения по умолчанию здесь не подставляются: иначе распознавание
         # без блока «contract» вернуло бы НДС и срок оплаты к 22% и 10 дням.
-        # Сумма принимается и как `price_input` (поле вкладки/распознавание),
-        # и как `price_without_vat` (так её хранит база).
-        price_input = data.get("price_input")
-        if price_input in (None, ""):
-            price_input = data.get("price_without_vat")
-        if price_input not in (None, ""):
+        # Порядок источников:
+        #   1) `price_with_vat` — ИТОГ (так его отдаёт эта же вкладка и
+        #      хранит база): он и есть та сумма, которую вводит оператор;
+        #   2) `price_input` — сумма от распознавания или ручного ввода;
+        #   3) только `price_without_vat` (записи, сохранённые до перехода на
+        #      «НДС в том числе») — итог восстанавливается умножением базы на
+        #      (1 + ставка/100), то есть ровно так, как он считался раньше.
+        price_total = data.get("price_with_vat")
+        if price_total in (None, ""):
+            price_total = data.get("price_input")
+        if price_total in (None, ""):
+            price_base = data.get("price_without_vat")
+            if price_base not in (None, ""):
+                try:
+                    price_total = total_from_base(
+                        float(price_base), self.current_vat_rate()
+                    )
+                except (ValueError, TypeError):
+                    price_total = None
+                    logger.warning("Стоимость без НДС в данных не число — поле не тронуто")
+        if price_total not in (None, ""):
             try:
-                self.price_input.setValue(float(price_input))
+                self.price_input.setValue(float(price_total))
             except (ValueError, TypeError):
                 logger.warning("Стоимость в данных не число — поле не тронуто")
 
