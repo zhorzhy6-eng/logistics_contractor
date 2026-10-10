@@ -6,10 +6,9 @@ from pathlib import Path
 import json
 import logging
 import re
-import time
 import traceback
 
-from core.import_cancel import ImportCancelled, check_cancel
+from core.import_cancel import ImportCancelled, check_cancel, interruptible_sleep
 from core.document_reader import read_document
 from core.recognizer import DataMapper
 
@@ -27,10 +26,64 @@ LOCAL_OCR_METHOD = "OCR"
 LOCAL_OCR_FALLBACK_METHOD = "OCR локально"
 LOCAL_OCR_NOTE = "GigaChat недоступен, распознано локально"
 LOCAL_OCR_LIMIT_NOTE = "GigaChat вернул 429 (лимит запросов), распознано локально"
+LOCAL_OCR_FAILED_NOTE = "GigaChat Vision не сработал, распознано локально"
 VISION_METHODS = (VISION_METHOD,)
 TEXT_MODEL_METHODS = (TEXT_METHOD,)
 LOCAL_OCR_METHODS = (LOCAL_OCR_METHOD, LOCAL_OCR_FALLBACK_METHOD)
 STRUCTURED_TEXT_METHODS = (LOCAL_OCR_METHOD, LOCAL_TEXT_METHOD)
+
+# ── Почему изображение читал локальный OCR ─────────────────────────────
+# Одной пометки «OCR локально» мало: оператор должен различать «облако
+# выключено», «облако недоступно» и «облако отказало». Код причины —
+# машинный (в дерево и в лог идёт только он), текст собирает UI.
+CLOUD_DISABLED = "cloud_disabled"          # оператор снял галочку облака
+CLOUD_CLIENT_MISSING = "client_missing"    # клиента нет, ключа нет, ответ 401
+CLOUD_RATE_LIMIT = "rate_limit"            # GigaChat ответил 429
+CLOUD_VISION_FAILED = "vision_failed"      # Vision упал по другой причине
+
+#: Короткая приписка к пометке в дереве: «OCR локально (облако выключено)».
+LOCAL_OCR_REASON_LABELS = {
+    CLOUD_DISABLED: "облако выключено",
+    CLOUD_CLIENT_MISSING: "GigaChat недоступен",
+    CLOUD_RATE_LIMIT: "GigaChat вернул 429",
+    CLOUD_VISION_FAILED: "Vision не сработал",
+}
+#: Развёрнутая причина для подсказки (tooltip) строки источника.
+LOCAL_OCR_REASON_HINTS = {
+    CLOUD_DISABLED: "Tesseract, русский + английский. Облако выключено в настройках.",
+    CLOUD_CLIENT_MISSING: "Tesseract, русский + английский. GigaChat недоступен: нет ключа.",
+    CLOUD_RATE_LIMIT: "Tesseract, русский + английский. GigaChat вернул 429 (лимит).",
+    CLOUD_VISION_FAILED: "Tesseract, русский + английский. GigaChat вернул ошибку.",
+}
+#: Примечание к полю (`Evidence.note`) для каждой причины.
+LOCAL_OCR_REASON_NOTES = {
+    CLOUD_DISABLED: "",
+    CLOUD_CLIENT_MISSING: LOCAL_OCR_NOTE,
+    CLOUD_RATE_LIMIT: LOCAL_OCR_LIMIT_NOTE,
+    CLOUD_VISION_FAILED: LOCAL_OCR_FAILED_NOTE,
+}
+
+
+def local_ocr_label(reason):
+    """Пометка локального пути: «OCR локально (облако выключено)»."""
+    suffix = LOCAL_OCR_REASON_LABELS.get(str(reason or ""), "")
+    return f"{LOCAL_OCR_FALLBACK_METHOD} ({suffix})" if suffix else LOCAL_OCR_FALLBACK_METHOD
+
+
+def local_ocr_hint(reason):
+    """Подсказка локального пути: чем читали и почему не облаком."""
+    return LOCAL_OCR_REASON_HINTS.get(str(reason or ""), "")
+
+
+def vision_failure_reason(exc):
+    """Причина отказа Vision по тексту ошибки: 429, 401 или прочая ошибка."""
+    text = str(exc)
+    if "429" in text:
+        return CLOUD_RATE_LIMIT
+    if "401" in text:
+        # 401 — ключ отозван или неверен: клиент в этом запуске бесполезен.
+        return CLOUD_CLIENT_MISSING
+    return CLOUD_VISION_FAILED
 
 
 def _safe_traceback(exc):
@@ -217,8 +270,9 @@ class CloudOcr:
     used: bool = False                               # Vision уже подтвердил работу
     rate_limited: bool = False                       # Vision ответил 429
     user_disabled: bool = False                      # оператор снял галочку облака
-    reason: str = ""                                 # почему облака нет
+    reason: str = ""                                 # код: почему локальный путь
     note: str = ""                                   # что сказать оператору
+    failed: str = ""                                 # код: почему отказал Vision
 
 
 @dataclass
@@ -230,6 +284,9 @@ class Evidence:
     uncertain: bool = False
     document_kind: str = ""
     note: str = ""
+    #: Почему значение прочитано локально (`CLOUD_*`), если это был резерв:
+    #: пусто — обычный путь. По этому коду дерево строит пометку и подсказку.
+    local_reason: str = ""
 
 
 @dataclass
@@ -330,7 +387,9 @@ class DocumentImportService:
         Ключ, изображения и текст в лог не попадают — только факт выбора пути.
         Отдельно различаются два случая: оператор САМ выключил облако и облако
         включено, но GigaChat недоступен. Во втором документ прочитан резервным
-        путём, и оператор об этом узнаёт.
+        путём, и оператор об этом узнаёт. Код причины (`CloudOcr.reason`)
+        доходит до дерева: «облако выключено» и «облако отказало» — разные
+        пометки, а не одна.
         """
         key = "document_cloud_enabled"
         enabled = self.settings.get(key) is True
@@ -340,13 +399,12 @@ class DocumentImportService:
             return CloudOcr(True)
         if enabled:
             # Ключ есть, а клиента нет: GigaChat в этом запуске недоступен.
-            reason = "Облако включено, но GigaChat недоступен, используется локальный OCR"
-            logger.warning("Импорт документов: %s", reason)
-            return CloudOcr(False, reason=reason, note=LOCAL_OCR_NOTE)
-        logger.info("Импорт документов: GigaChat Vision недоступен (нет ключа), "
+            logger.warning("Импорт документов: облако включено, но GigaChat недоступен, "
+                           "используется локальный OCR (Tesseract)")
+            return CloudOcr(False, reason=CLOUD_CLIENT_MISSING, note=LOCAL_OCR_NOTE)
+        logger.info("Импорт документов: оператор выключил облако, "
                     "используется локальный OCR (Tesseract)")
-        return CloudOcr(False, user_disabled=True,
-                        reason="GigaChat Vision выключен, используется локальный OCR (Tesseract)")
+        return CloudOcr(False, user_disabled=True, reason=CLOUD_DISABLED)
 
     def _process_page(self, page, source, file_index, cancel,
                       on_result, on_text, workers, cloud, state):
@@ -379,7 +437,10 @@ class DocumentImportService:
               and deep_allowed and not cancel.is_set()):
             # Читаемый текст не подошёл под локальные правила — отдаём его
             # текстовой модели (дешевле и точнее, чем Vision для текста).
-            jobs.append((TEXT_METHOD, workers.submit(self.client.recognize_text, page.text)))
+            # cancel передаётся и сюда: паузы перед повторами при 429 внутри
+            # клиента тоже должны прерываться кнопкой «Отменить».
+            jobs.append((TEXT_METHOD, workers.submit(self.client.recognize_text,
+                                                     page.text, cancel=cancel)))
             fallback_attempted = True
 
         for method, future in jobs:
@@ -418,11 +479,12 @@ class DocumentImportService:
         """
         if not cloud.enabled:
             # Облака нет по решению оператора или из-за недоступности ключа:
-            # метод и примечание говорят, что именно произошло.
+            # метод, причина и примечание говорят, что именно произошло.
             method = LOCAL_OCR_METHOD if cloud.user_disabled else LOCAL_OCR_FALLBACK_METHOD
             return self._run_job(method, workers.submit(self._local_ocr(), page.image, cancel),
                                  page, source, file_index, cancel, on_result, on_text,
-                                 note=cloud.note)
+                                 note=cloud.note, local_reason=cloud.reason)
+        cloud.failed = ""          # причина относится к ЭТОМУ кадру, не к прошлому
         produced = self._run_job(
             VISION_METHOD,
             workers.submit(self.client.recognize_image, page.image, cancel, True),
@@ -430,11 +492,13 @@ class DocumentImportService:
         if produced or cancel.is_set():
             return produced
         # Резерв после отказа Vision: тот же кадр читает локальный Tesseract.
-        reason = "GigaChat Vision недоступен"
-        if cloud.rate_limited:
-            reason += " (ответ 429)"
-        logger.warning("Импорт документов: %s, переключение на Tesseract", reason)
-        note = LOCAL_OCR_LIMIT_NOTE if cloud.rate_limited else LOCAL_OCR_NOTE
+        # Причина отказа берётся от самого Vision (429, 401, прочая ошибка),
+        # а не угадывается: от неё зависит пометка в дереве. Пусто — значит
+        # Vision ответил, но полей не нашёл.
+        reason = cloud.failed or CLOUD_VISION_FAILED
+        logger.warning("Импорт документов: %s, переключение на Tesseract",
+                       LOCAL_OCR_REASON_HINTS.get(reason, reason))
+        note = LOCAL_OCR_REASON_NOTES.get(reason, LOCAL_OCR_NOTE)
         try:
             text = self._local_ocr()(page.image, cancel)
         except ImportCancelled:
@@ -445,11 +509,11 @@ class DocumentImportService:
             on_result(source, [], "Локальный OCR (Tesseract) также не смог прочитать "
                                   "изображение. Проверьте оригинал.")
             return False
-        logger.info("Импорт документов: файл=%s, страница=%s, резервный путь=%s",
-                    file_index, page.number, LOCAL_OCR_FALLBACK_METHOD)
+        logger.info("Импорт документов: файл=%s, страница=%s, резервный путь=%s (причина=%s)",
+                    file_index, page.number, LOCAL_OCR_FALLBACK_METHOD, reason)
         return self._run_job(LOCAL_OCR_FALLBACK_METHOD, _ReadyFuture(text),
                              page, source, file_index, cancel, on_result, on_text,
-                             note=note)
+                             note=note, local_reason=reason)
 
     def _vision_retry(self, exc, cancel, cloud, page):
         """Повтор Vision после 429: пауза 30 секунд, один раз за импорт.
@@ -466,16 +530,20 @@ class DocumentImportService:
                        "повтор через %.0f сек", pause)
         if cancel.is_set():
             return None
-        # Пауза перед повтором: ждём именно временем, а не отметкой отмены,
-        # иначе отмена превратила бы паузу в мгновенный повтор.
-        time.sleep(pause)
+        # Пауза прерываемая: ждём короткими шагами, чтобы кнопка «Отменить»
+        # не ждала все 30 секунд (раньше здесь был time.sleep одним куском).
+        try:
+            interruptible_sleep(pause, cancel)
+        except ImportCancelled:
+            logger.info("Импорт документов: пауза 429 прервана пользователем")
+            raise
         if cancel.is_set():
             return None
         logger.info("Импорт документов: повтор GigaChat Vision после 429")
         return _submit_once(self.client.recognize_image, page.image, cancel, False)
 
     def _run_job(self, method, future, page, source, file_index,
-                 cancel, on_result, on_text, note="", cloud=None):
+                 cancel, on_result, on_text, note="", cloud=None, local_reason=""):
         logger.info("Импорт документов: файл=%s, страница=%s, ожидание %s",
                     file_index, page.number, method)
         try:
@@ -487,6 +555,9 @@ class DocumentImportService:
             self._report_job_failure(method, exc, source, file_index, page, on_result)
             if method not in VISION_METHODS or cloud is None:
                 return False
+            # Почему Vision не отдал данные: от этого зависит пометка в дереве
+            # («GigaChat вернул 429», «GigaChat недоступен» или «Vision не сработал»).
+            cloud.failed = vision_failure_reason(exc)
             # 429: ждём и пробуем ещё раз, прежде чем уходить в локальный OCR.
             repeated = self._vision_retry(exc, cancel, cloud, page)
             if repeated is None:
@@ -503,17 +574,19 @@ class DocumentImportService:
                 raw_text = data["_raw_text"]
                 evidence = self._evidence(
                     extract_local_fields(page.text + "\n" + raw_text), source, method,
-                    note=note)
+                    note=note, local_reason=local_reason)
                 if on_text is not None and not cancel.is_set():
                     on_text(source, [raw_text])
                 warnings = " ".join(filter(None, [
                     warnings, "Использован текстовый fallback GigaChat."]))
             else:
-                evidence = self._evidence(data, source, method, note=note)
+                evidence = self._evidence(data, source, method, note=note,
+                                          local_reason=local_reason)
                 if on_text is not None and not cancel.is_set():
                     on_text(source, [json.dumps(data, ensure_ascii=False, indent=2)])
         elif method in TEXT_MODEL_METHODS:
-            evidence = self._evidence(data, source, method, note=note)
+            evidence = self._evidence(data, source, method, note=note,
+                                      local_reason=local_reason)
             if on_text is not None and not cancel.is_set():
                 on_text(source, [json.dumps(data, ensure_ascii=False, indent=2)])
         else:
@@ -523,7 +596,7 @@ class DocumentImportService:
                 on_text(source, [text])
             evidence = self._evidence(
                 extract_local_fields(page.text + "\n" + text), source, method,
-                note=note)
+                note=note, local_reason=local_reason)
         if not evidence and not warnings:
             # «Текст распознан, но поля не выделены» — неправда, если текста
             # нет вовсе: локальный OCR вернул пустую строку (смазанное фото).
@@ -554,7 +627,7 @@ class DocumentImportService:
         on_result(source, [], method + ": " + message[:300])
 
     @staticmethod
-    def _evidence(data, source, method, note=""):
+    def _evidence(data, source, method, note="", local_reason=""):
         if not isinstance(data, dict):
             raise RuntimeError("Ожидался структурированный ответ.")
         result = []
@@ -576,7 +649,7 @@ class DocumentImportService:
                         section, clean, source, method,
                         method in LOCAL_OCR_METHODS,
                         str(value.get("_kind", "")) if method in STRUCTURED_TEXT_METHODS else "",
-                        own_note))
+                        own_note, local_reason))
         return result
 
 

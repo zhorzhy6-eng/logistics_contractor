@@ -15,8 +15,10 @@ from types import SimpleNamespace
 import pytest
 
 from core.document_import_service import (
-    DocumentImportService, LOCAL_OCR_FALLBACK_METHOD, LOCAL_OCR_LIMIT_NOTE,
-    LOCAL_OCR_METHOD, LOCAL_OCR_NOTE, LOCAL_TEXT_METHOD, TEXT_METHOD, VISION_METHOD,
+    CLOUD_CLIENT_MISSING, CLOUD_DISABLED, CLOUD_RATE_LIMIT, CLOUD_VISION_FAILED,
+    DocumentImportService, LOCAL_OCR_FAILED_NOTE, LOCAL_OCR_FALLBACK_METHOD,
+    LOCAL_OCR_LIMIT_NOTE, LOCAL_OCR_METHOD, LOCAL_OCR_NOTE, LOCAL_TEXT_METHOD,
+    TEXT_METHOD, VISION_METHOD,
 )
 from core.document_reader import DocumentPage
 
@@ -40,7 +42,7 @@ class FakeClient:
         self.vision_calls.append((image, deep))
         return self._vision(cancel, deep) if callable(self._vision) else self._vision
 
-    def recognize_text(self, text):
+    def recognize_text(self, text, **kwargs):
         self.text_calls.append(text)
         return self._text(text) if callable(self._text) else self._text
 
@@ -134,6 +136,8 @@ def test_image_without_cloud_uses_local_ocr(pages, ocr):
     assert len(local.calls) == 1
     assert received[0][1][0].method == LOCAL_OCR_METHOD
     assert received[0][1][0].note == ""
+    # Причина локального пути доходит до дерева: «облако выключено».
+    assert received[0][1][0].local_reason == CLOUD_DISABLED
 
 
 def test_image_without_client_uses_local_ocr_with_note(pages, ocr):
@@ -144,6 +148,7 @@ def test_image_without_client_uses_local_ocr_with_note(pages, ocr):
     assert len(local.calls) == 1
     assert received[0][1][0].method == LOCAL_OCR_FALLBACK_METHOD
     assert "GigaChat недоступен" in received[0][1][0].note
+    assert received[0][1][0].local_reason == CLOUD_CLIENT_MISSING
 
 
 # ─────────────────────────────────────────────────────────────
@@ -165,10 +170,12 @@ def test_vision_failure_switches_to_local_ocr(pages, ocr, caplog):
     assert len(local.calls) == 1                   # резерв сработал
     evidence = received[-1][1][0]
     assert evidence.method == LOCAL_OCR_FALLBACK_METHOD
-    assert LOCAL_OCR_NOTE in evidence.note
+    assert LOCAL_OCR_FAILED_NOTE in evidence.note
+    assert evidence.local_reason == CLOUD_VISION_FAILED
     # Причина отказа GigaChat не потеряна: она ушла отдельным сообщением.
     assert any("503" in error for _, _, error in received)
     assert "переключение на Tesseract" in caplog.text
+    assert "причина=vision_failed" in caplog.text
     # В логе нет ни значения поля, ни имени файла.
     assert FIO not in caplog.text
     assert "passport_01.jpg" not in caplog.text
@@ -212,7 +219,10 @@ def test_rate_limit_is_retried_after_pause(pages, ocr, monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="core.document_import_service"):
         received = run(["passport_01.jpg"], client)
 
-    assert pauses == [30.0]                        # ровно одна пауза 30 секунд
+    # Пауза идёт короткими шагами (отмена должна срабатывать мгновенно),
+    # но суммарно — ровно 30 секунд.
+    assert sum(pauses) == pytest.approx(30.0)
+    assert len(pauses) == 300
     assert len(client.vision_calls) == 2           # и ровно один повтор
     assert local.calls == []                       # до резерва дело не дошло
     assert received[-1][1][0].method == VISION_METHOD
@@ -238,6 +248,7 @@ def test_rate_limit_exhausted_falls_back_with_visible_note(pages, ocr, monkeypat
     evidence = received[-1][1][0]
     assert evidence.method == LOCAL_OCR_FALLBACK_METHOD
     assert evidence.note == LOCAL_OCR_LIMIT_NOTE
+    assert evidence.local_reason == CLOUD_RATE_LIMIT
     assert "429" in evidence.note
     assert "429" in caplog.text
 
@@ -359,5 +370,5 @@ def test_log_reports_local_fallback(pages, ocr, caplog):
         run(["scan.png"], client)
 
     assert f"метод={LOCAL_OCR_FALLBACK_METHOD}" in caplog.text
-    assert "GigaChat Vision недоступен" in caplog.text
+    assert "причина=vision_failed" in caplog.text
     assert FIO not in caplog.text
