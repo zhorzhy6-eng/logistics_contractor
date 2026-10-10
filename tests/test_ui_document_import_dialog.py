@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.document_import_service import Evidence, compare_fields
+from core.document_import_service import LOCAL_OCR_FALLBACK_METHOD, LOCAL_OCR_LIMIT_NOTE
 
 # ── синтетические данные ──
 FIO = "Иванов Иван Иванович"
@@ -94,13 +95,13 @@ def test_dialog_has_entity_grouping(dialog):
 
 
 def test_tree_shows_source_under_entity_and_fields_under_source(dialog):
-    """Три уровня: сущность → 📄 источник → поля."""
+    """Три уровня: сущность → 📄 источник → поля. У источника — путь распознавания."""
     load(dialog, driver_evidence())
     driver = dialog.entity_item(entity_of(dialog, "driver").uid)
     sources = [driver.child(i).text(COL_WHAT) for i in range(driver.childCount())]
-    assert "📄 passport_01.jpg" in sources
-    assert "📄 vu_01.jpg" in sources
-    passport = driver.child(sources.index("📄 passport_01.jpg"))
+    assert "📄 passport_01.jpg (GigaChat Vision)" in sources
+    assert "📄 vu_01.jpg (OCR локально)" in sources
+    passport = driver.child(sources.index("📄 passport_01.jpg (GigaChat Vision)"))
     fields = [passport.child(i).text(COL_WHAT) for i in range(passport.childCount())]
     assert "Серия паспорта" in fields
     assert "Номер паспорта" in fields
@@ -113,6 +114,33 @@ def test_entity_node_lists_documents_in_tooltip(dialog):
     hint = driver.toolTip(COL_WHAT)
     assert "Найдено в файлах: passport_01.jpg, vu_01.jpg" in hint
     assert "Подтвердить водителя целиком" in hint
+
+
+def test_source_tooltip_names_the_recognition_path(dialog):
+    """Подсказка источника: чем прочитан документ, без значений полей."""
+    load(dialog, driver_evidence())
+    driver = dialog.entity_item(entity_of(dialog, "driver").uid)
+    sources = {driver.child(i).text(COL_WHAT): driver.child(i).toolTip(COL_WHAT)
+               for i in range(driver.childCount())}
+    vision_hint = sources["📄 passport_01.jpg (GigaChat Vision)"]
+    assert "Vision" in vision_hint and "модель" in vision_hint
+    ocr_hint = sources["📄 vu_01.jpg (OCR локально)"]
+    assert "Tesseract" in ocr_hint and "русский" in ocr_hint
+    # Значений полей в подсказках нет — только путь распознавания.
+    assert FIO not in vision_hint and PASSPORT_NUMBER not in vision_hint
+
+
+def test_local_fallback_is_visible_in_tree(dialog):
+    """Резерв после отказа GigaChat: и в строке источника, и в подсказке."""
+    dialog.task = SimpleNamespace(cancel=Event())
+    dialog.receive("scan_01.png", [Evidence("driver", {"full_name": FIO}, "scan_01.png",
+                                            LOCAL_OCR_FALLBACK_METHOD, False, "", LOCAL_OCR_LIMIT_NOTE)], "")
+    dialog.finished()
+    driver = dialog.entity_item(entity_of(dialog, "driver").uid)
+    labels = [driver.child(i).text(COL_WHAT) for i in range(driver.childCount())]
+    assert "📄 scan_01.png (OCR локально)" in labels
+    hint = driver.child(labels.index("📄 scan_01.png (OCR локально)")).toolTip(COL_WHAT)
+    assert "429" in hint and "распознано локально" in hint
 
 
 def test_dialog_explains_itself(dialog):
@@ -330,8 +358,8 @@ def test_conflict_field_keeps_both_values_in_tree(dialog):
     item = dialog.field_item(entity_of(dialog, "driver").uid, "passport_number")
     variants = [(item.child(i).text(COL_WHAT), item.child(i).text(COL_VALUE))
                 for i in range(item.childCount())]
-    assert sorted(variants) == [("passport_01.jpg", PASSPORT_NUMBER),
-                                ("passport_02.jpg", "654321")]
+    assert sorted(variants) == [("📄 passport_01.jpg (текст документа)", PASSPORT_NUMBER),
+                                ("📄 passport_02.jpg (OCR локально)", "654321")]
     # Спорное поле — на красном фоне, у значений тоже.
     assert item.background(COL_VALUE).style() != Qt.NoBrush
     assert item.child(0).background(COL_VALUE).style() != Qt.NoBrush

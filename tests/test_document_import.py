@@ -330,6 +330,7 @@ def test_cloud_vision_replaces_local_ocr(monkeypatch):
     DocumentImportService({}, client).process(["a"], Event(), lambda *a: result.append(a))
     assert calls == ["local"]  # облако выключено — работает офлайн-fallback
     assert result[1][1][0].method == "OCR"
+    assert not result[1][2]
 
 
 def test_cloud_enabled_without_client_uses_local_ocr(monkeypatch, caplog):
@@ -341,11 +342,10 @@ def test_cloud_enabled_without_client_uses_local_ocr(monkeypatch, caplog):
     with caplog.at_level("INFO", logger=module.__name__):
         DocumentImportService({"document_cloud_enabled": True}, None).process(
             ["a"], Event(), lambda *a: received.append(a))
-    assert received[0][1][0].method == "OCR"
+    assert received[0][1][0].method == "OCR локально"
     assert "Облако включено, но GigaChat недоступен, используется локальный OCR" in caplog.text
     # Сообщение о выборе метода выводится один раз на запуск, а не на каждую страницу.
-    assert caplog.text.count("Импорт документов: используется локальный OCR") == 1
-
+    assert caplog.text.count("Импорт документов: Облако включено, но GigaChat недоступен") == 1
 
 def test_vision_cleanup_warning_and_preview(monkeypatch):
     import core.document_import_service as module
@@ -538,29 +538,65 @@ def test_text_page_falls_back_to_rendered_vision(monkeypatch):
     assert received[-1][1][0].method == "GigaChat Vision"
 
 
-def test_deep_fallback_is_budgeted_per_file(monkeypatch):
-    import core.document_import_service as module
-    from PIL import Image
-    monkeypatch.setattr(module, "read_document", lambda *a: iter([
-        DocumentPage(number, image=Image.new("RGB", (12, 12))) for number in range(1, 5)]))
-    calls = []
-
+def vision_deep_probe(records):
+    """Клиент-двойник: глубокий флаг каждой страницы попадает в записи."""
     def vision(image, cancel, deep=True):
-        calls.append(deep)
+        records.append(deep)
         return {}, ""
+    return vision
 
-    client = SimpleNamespace(recognize_image=vision)
+
+def test_deep_fallback_is_budgeted_per_file(monkeypatch):
+    """Бюджет резервных попыток действует на ТЕКСТОВЫЕ страницы, не на фото.
+
+    Фото и сканы идут в Vision основным путём, и глубокая цепочка у них
+    всегда включена: иначе «плохие» снимки с третьей страницы файла уходили бы
+    на слабый локальный OCR.
+    """
+    import core.document_import_service as module
+    import core.document_ocr as ocr_module
+    from PIL import Image
+    monkeypatch.setattr(ocr_module, "recognize_image", lambda *a: "")
+    calls = []
+    texts = []
+
+    def recognize_text(text):
+        texts.append(text)
+        return {}
+
+    client = SimpleNamespace(recognize_text=recognize_text,
+                             recognize_image=vision_deep_probe(calls))
+    monkeypatch.setattr(module, "read_document", lambda *a: iter([
+        DocumentPage(number, text="Описание без подписей и меток реквизитов",
+                     image_loader=lambda: Image.new("RGB", (12, 12)))
+        for number in range(1, 5)]))
     DocumentImportService({"document_cloud_enabled": True}, client).process(
         ["synthetic.pdf"], Event(), lambda *args: None)
-    # Пустые страницы тратят бюджет (2), дальше — только структурированный запрос.
-    assert calls == [True, True, False, False]
+    # Первые две страницы тратят бюджет: текстовая модель и повтор по картинке.
+    # Дальше бюджет исчерпан — в облако не уходит ни одного запроса.
+    assert calls == [False, False]
+    assert len(texts) == 2
+
+
+def test_image_pages_always_use_deep_vision(monkeypatch):
+    """Бюджет не сокращает глубокую цепочку Vision: проверяем на текстовых страницах.
+
+    У изображения резервных попыток нет вовсе — глубокий флаг всегда True.
+    """
+    import core.document_import_service as module
+    from PIL import Image
+    calls = []
+    client = SimpleNamespace(recognize_image=vision_deep_probe(calls))
+    monkeypatch.setattr(module, "read_document", lambda *a: iter([
+        DocumentPage(number, image=Image.new("RGB", (12, 12))) for number in range(1, 4)]))
+    DocumentImportService({"document_cloud_enabled": True}, client).process(
+        ["synthetic.pdf"], Event(), lambda *args: None)
+    assert calls == [True, True, True]
 
 
 def test_deep_fallback_stops_after_first_data(monkeypatch):
     import core.document_import_service as module
     from PIL import Image
-    monkeypatch.setattr(module, "read_document", lambda *a: iter([
-        DocumentPage(number, image=Image.new("RGB", (12, 12))) for number in range(1, 4)]))
     calls = []
 
     def vision(image, cancel, deep=True):
@@ -569,10 +605,16 @@ def test_deep_fallback_stops_after_first_data(monkeypatch):
             return {"driver": {"full_name": "Тестов Тест"}}, ""
         return {}, ""
 
-    client = SimpleNamespace(recognize_image=vision)
+    client = SimpleNamespace(recognize_text=lambda text: {},
+                             recognize_image=vision)
+    monkeypatch.setattr(module, "read_document", lambda *a: iter([
+        DocumentPage(number, text="Описание без подписей и меток реквизитов",
+                     image_loader=lambda: Image.new("RGB", (12, 12)))
+        for number in range(1, 3)]))
     DocumentImportService({"document_cloud_enabled": True}, client).process(
         ["synthetic.pdf"], Event(), lambda *args: None)
-    assert calls == [True, False, False]
+    # Первая страница дала данные — дальше глубоких повторов нет вовсе.
+    assert calls == [False]
 
 
 def test_import_service_extracts_vision_plain_text(monkeypatch):
@@ -680,9 +722,11 @@ def test_cancel_during_ocr_discards_late_fields(monkeypatch):
 
 def test_vision_error_does_not_stop_batch(monkeypatch):
     import core.document_import_service as module
+    import core.document_ocr as ocr_module
     from PIL import Image
     monkeypatch.setattr(module, "read_document", lambda *a: iter([
         DocumentPage(1, image=Image.new("RGB", (20, 20)))]))
+    monkeypatch.setattr(ocr_module, "recognize_image", lambda *a: "ФИО: Локально Прочитан")
     calls = []
     def vision(image, cancel, deep=True):
         calls.append(1)
@@ -694,8 +738,13 @@ def test_vision_error_does_not_stop_batch(monkeypatch):
     service = DocumentImportService({"document_cloud_enabled": True}, client)
     service.process(["bad.png", "good.png"], Event(), lambda *a: received.append(a))
     assert len(calls) == 2
-    assert "401" in received[0][2]
-    assert received[1][1][0].values["full_name"] == "Тестов Тест"
+    # Первый файл: причина отказа GigaChat, затем — результат локального OCR.
+    assert "401" in received[0][2] and received[0][1] == []
+    assert received[1][1][0].method == "OCR локально"
+    assert "GigaChat недоступен" in received[1][1][0].note
+    # Второй файл прочитан облаком обычным путём.
+    assert received[2][1][0].method == "GigaChat Vision"
+    assert received[2][1][0].values["full_name"] == "Тестов Тест"
 
 
 def test_unread_file_is_visible_and_cannot_be_applied(window):

@@ -73,7 +73,7 @@ class MethodProbe(logging.Handler):
         if record.name != "core.document_import_service":
             return
         message = record.getMessage()
-        for method in ("GigaChat Vision", "GigaChat Текст", "OCR"):
+        for method in ("GigaChat Vision", "GigaChat Текст", "OCR локально", "OCR"):
             if "ожидание " + method in message:
                 self.methods.add(method)
         if "текстовых групп=" in message:

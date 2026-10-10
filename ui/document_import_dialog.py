@@ -25,10 +25,12 @@ from PyQt5.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog,
     QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout)
 
 from core.document_import_service import (DocumentImportService, FieldResult, LABELS,
-    SCHEMA, TITLES, canonical_value, compare_fields, normalized, same_entity, valid_value)
+    LOCAL_OCR_FALLBACK_METHOD, LOCAL_OCR_METHOD, LOCAL_TEXT_METHOD,
+    SCHEMA, TEXT_METHOD, TITLES, VISION_METHOD, canonical_value, compare_fields,
+    normalized, same_entity, valid_value)
 from core.import_entities import (STATE_CONFLICT, STATE_INVALID, STATE_UNREADABLE,
     UNREADABLE_SOURCE_LABEL, detect_conflicts, entities_from_rows, entity_by_uid,
-    progress_text, summary_text)
+    progress_text, source_methods, summary_text)
 
 from ui.widgets.table_helpers import (
     MODE_FIXED, install_tooltip_on_table, setup_point_table,
@@ -59,6 +61,57 @@ UNREAD_FILES_HEADING = "📄 НЕ ПРОЧИТАННЫЕ ФАЙЛЫ"
 FORM_EMPTY_MARK = "— пусто —"
 FORM_DIFFERS_MARK = "≠ "
 
+# ── признак пути распознавания у источника ──
+# Оператор должен видеть, чем прочитан документ: облаком или локально.
+# Подписи короткие, потому что стоят в строке дерева рядом с именем файла.
+METHOD_LABELS = {
+    VISION_METHOD: "GigaChat Vision",
+    TEXT_METHOD: "GigaChat Текст",
+    LOCAL_TEXT_METHOD: "текст документа",
+    LOCAL_OCR_METHOD: "OCR локально",
+    LOCAL_OCR_FALLBACK_METHOD: "OCR локально",
+}
+#: Чего стоит каждый путь — для подсказки (tooltip) строки источника.
+METHOD_HINTS = {
+    VISION_METHOD: "Фото и скан читает облачная Vision-модель {model}.",
+    TEXT_METHOD: "Текст документа уходит в облачную текстовую модель {model}.",
+    LOCAL_TEXT_METHOD: "Текстовый слой документа прочитан на этом компьютере, без облака.",
+    LOCAL_OCR_METHOD: "Локальный OCR: Tesseract, русский + английский. Файл никуда не отправлялся.",
+    LOCAL_OCR_FALLBACK_METHOD: "Локальный OCR: Tesseract, русский + английский.",
+}
+
+
+def method_label(method: str) -> str:
+    """Короткая подпись пути распознавания (пусто — подписи нет)."""
+    return METHOD_LABELS.get(method, str(method or ""))
+
+
+def source_label(source: str, method: str) -> str:
+    """Строка источника в дереве: «📄 passport_01.jpg (GigaChat Vision)»."""
+    label = method_label(method)
+    return f"{SOURCE_PREFIX}{source} ({label})" if label else SOURCE_PREFIX + source
+
+
+def method_hint(method: str, model: str = "") -> str:
+    """Подсказка к строке источника: чем и как прочитан документ."""
+    if not method:
+        return ""
+    if method in METHOD_HINTS:
+        return METHOD_HINTS[method].format(model=model or VISION_METHOD)
+    return "Путь распознавания: " + str(method)
+
+
+def source_hint(method: str, model: str = "", note: str = "") -> str:
+    """Подсказка строки источника: путь распознавания и, если был, резерв.
+
+    Резерв называется прямо: оператор должен знать, что облако не сработало
+    и данные прочитаны локально, а не молча получить другой результат.
+    """
+    parts = [method_hint(method, model)]
+    if note:
+        parts.append(str(note))
+    return " ".join(part for part in parts if part)
+
 # ── оформление строк дерева ──
 #: Спорное поле (источники дают разные значения) — светло-красный фон:
 #: видно издалека, но текст остаётся читаемым.
@@ -72,6 +125,8 @@ NO_BRUSH = QBrush()
 INSTRUCTION = (
     "Проверка документов.\n"
     "Слева — что нашли в документах. Справа — куда это попадёт в форме.\n"
+    "Рядом с именем файла указано, чем он прочитан: (GigaChat Vision) — облако, "
+    "(OCR локально) — распознавание на этом компьютере.\n"
     "Галочка = «да, верно, перенести». Кнопка «Подтвердить целиком» подтверждает "
     "все поля одной сущности сразу.\n"
     "Добавьте файлы или перетащите их в окно. Ничего не переносится автоматически."
@@ -185,6 +240,10 @@ class DocumentImportDialog(QDialog):
         self.ocr_texts = {}
         self.unread_sources = set()
         self.reported_sources = set()
+        # Источники, прочитанные локально после отказа GigaChat: в дереве у них
+        # должна быть видна причина резерва, а не только слово «локально».
+        self.local_fallback_sources = set()
+        self.fallback_notes = {}     # источник -> примечание сервиса о резерве
         # Текст ошибки -> источники, в которых она повторилась (для сводки).
         self.error_sources = {}
         self._items = {}             # uid сущности -> узел дерева
@@ -394,6 +453,8 @@ class DocumentImportDialog(QDialog):
         self.ocr_texts = {}
         self.unread_sources = set()
         self.reported_sources = set()
+        self.local_fallback_sources = set()
+        self.fallback_notes = {}
         self.error_sources = {}
         self.unread_files = []
         self.confirmed = {}
@@ -419,10 +480,17 @@ class DocumentImportDialog(QDialog):
     def receive(self, source, evidence, error):
         logger.info("Импорт документов: получен результат, групп=%s, ошибка=%s", len(evidence), bool(error))
         self.reported_sources.add(source)
+        self.evidence.extend(evidence)
+        # Резервный путь виден и в дереве, и в логе — но без значений полей.
+        for item in evidence:
+            if item.method == LOCAL_OCR_FALLBACK_METHOD:
+                self.local_fallback_sources.add(source)
+                self._remember_fallback(source, item.note)
+                logger.info("Импорт документов: источник прочитан локально после отказа GigaChat")
+                break
         self.status.setText("Обработан: " + source + ". Найдено полей-кандидатов: " +
                             str(sum(sum(not k.startswith('_') for k in e.values) for e in evidence)) +
                             ". Ожидаем завершения остальных документов…")
-        self.evidence.extend(evidence)
         if not evidence:
             self.unread_sources.add(source)
         if error:
@@ -582,17 +650,22 @@ class DocumentImportDialog(QDialog):
                                            "Проверьте отмеченное по оригиналу.")
 
         for source, values in entity.fields_by_source().items():
-            node = QTreeWidgetItem(top, [SOURCE_PREFIX + source if source else NO_SOURCE_LABEL,
+            methods = source_methods(values)
+            method = methods.get(source, "")
+            node = QTreeWidgetItem(top, [source_label(source, method) if source else NO_SOURCE_LABEL,
                                          "", "", "", ""])
             if not source:
                 node.setToolTip(COL_WHAT, "В документах этих полей нет: введите значение "
                                           "вручную, если оно нужно в форме.")
                 self._unreadable_items.append(node)
+            else:
+                fallback = self._fallback_note(source) if source in self.local_fallback_sources else ""
+                node.setToolTip(COL_WHAT, source_hint(method, self.vision_model, fallback))
             for value in values:
-                self._add_field_item(node, entity, value)
+                self._add_field_item(node, entity, value, methods)
         self._refresh_entity_item(entity.uid)
 
-    def _add_field_item(self, node, entity, value):
+    def _add_field_item(self, node, entity, value, methods=None):
         item = QTreeWidgetItem(node, [value.label, "", "", "", ""])
         item.setData(COL_WHAT, Qt.UserRole, ("field", entity.uid, value.field))
         item.setFlags((item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
@@ -606,28 +679,37 @@ class DocumentImportDialog(QDialog):
         button.setProperty(FIELD_PROPERTY, value.field)
         button.clicked.connect(self._on_edit_field_pressed)
         self.tree.setItemWidget(item, COL_ACTION, button)
-        self._add_conflict_variants(item, entity, value)
+        self._add_conflict_variants(item, entity, value, methods)
         self._refresh_field_item(entity, value)
 
-    def _add_conflict_variants(self, item, entity, value):
+    def _add_conflict_variants(self, item, entity, value, methods=None):
         """
         Спорное поле: оба значения остаются в дереве, каждое со своим файлом.
 
         Оператор видит, что именно напечатано в каждом документе, и решает
-        сам — правкой поля или выбором одного из значений.
+        сам — правкой поля или выбором одного из значений. Рядом с файлом —
+        путь распознавания: у одного поля значения могут прийти из облака
+        и из локального OCR.
         """
         if not value.conflicted:
             return
+        # Метод нужен КОНКРЕТНОГО источника этого поля: у спорного поля
+        # значения могли прийти и из облака, и из локального OCR.
+        methods = dict(methods or {})
+        methods.update(value.source_methods)
         for source, variant in value.variants:
             if not variant:
                 continue
-            child = QTreeWidgetItem(item, [source, variant, "", "", ""])
+            child = QTreeWidgetItem(item, [source_label(source, methods.get(source, "")),
+                                           variant, "", "", ""])
             child.setData(COL_WHAT, Qt.UserRole, ("variant", entity.uid, value.field))
             child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             child.setBackground(COL_WHAT, CONFLICT_BRUSH)
             child.setBackground(COL_VALUE, CONFLICT_BRUSH)
-            child.setToolTip(COL_WHAT, "Значение из этого файла. Подтвердить его "
-                                       "можно кнопкой «Править» у поля выше.")
+            fallback = self._fallback_note(source) if source in self.local_fallback_sources else ""
+            child.setToolTip(COL_WHAT, source_hint(methods.get(source, ""), self.vision_model, fallback)
+                             or "Значение из этого файла. Подтвердить его "
+                                "можно кнопкой «Править» у поля выше.")
 
     def _add_unread_files_item(self):
         if not self.unread_files:
@@ -644,6 +726,27 @@ class DocumentImportDialog(QDialog):
             child = QTreeWidgetItem(root, [SOURCE_PREFIX + name, "", "", "", ""])
             child.setData(COL_WHAT, Qt.UserRole, ("unread_file", name))
             child.setToolTip(COL_WHAT, "Поля не прочитаны; проверьте оригинал.")
+
+    @property
+    def vision_model(self):
+        """Имя Vision-модели для подсказки: что именно читало документ."""
+        client = getattr(self.window, "gigachat", None)
+        model = getattr(client, "vision_model", "")
+        if model:
+            return model
+        try:
+            return self.window.settings_service.get_str("gigachat_model", "") or VISION_METHOD
+        except Exception:
+            return VISION_METHOD
+
+    def _remember_fallback(self, source, note):
+        """Причина резерва — по источнику: «429» и «нет ключа» звучат по-разному."""
+        if note:
+            self.fallback_notes[source] = str(note)
+
+    def _fallback_note(self, source):
+        """Примечание о резерве: переданное сервисом или общее."""
+        return self.fallback_notes.get(source) or "GigaChat недоступен, распознано локально"
 
     def _target_widget(self, entity):
         """Куда попадёт сущность: выбор есть только там, где он осмыслен."""
