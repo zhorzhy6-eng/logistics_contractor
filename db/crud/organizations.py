@@ -14,6 +14,12 @@
 find_organization_id() мягко удалённые находит специально: ссылка договора
 должна пережить удаление из справочника.
 
+Запись нормализует ДОЛЖНОСТЬ руководителя: «ДИРЕКТОР» из DaData или из выписки
+ЕГРЮЛ сохраняется как «Директор» (_normalize_organization_fields). Наименования
+(`full_name`, `short_name`) не трогаются: для них авторитетный источник — DaData
+(данные ЕГРЮЛ), и «ООО "АВАТЭК"» капсом остаётся как есть. Правила общие для
+всех входов и живут в core/text_normalize.py.
+
 Поиск — FTS5 по наименованию/ИНН/руководителю и прежний LIKE-резерв
 (цифры ИНН, середина слова).
 """
@@ -23,6 +29,7 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 from core import audit
+from core.text_normalize import normalize_organization_fields
 
 from db import fts
 from db.connection import get_connection
@@ -31,7 +38,31 @@ from db.crud.search import ensure_fts_fresh
 logger = logging.getLogger("db.crud.organizations")
 
 
+def _normalize_organization_fields(org_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Реквизиты организации с нормализованной ДОЛЖНОСТЬЮ руководителя.
+
+    Правится ровно одно поле — `director_position`: «ДИРЕКТОР» → «Директор»
+    (см. `core/text_normalize.py`). Сокращения («ИП», «ООО», «АО») и значения
+    в обычном регистре не меняются.
+
+    Наименования (`full_name`, `short_name`) НЕ нормализуются: для них
+    авторитетный источник — DaData (данные ЕГРЮЛ). «ООО "АВАТЭК"» капсом —
+    это запись реестра, а «ООО "Аватэк"» было бы уже другим наименованием.
+
+    Возвращается КОПИЯ: вызывающий код (форма, распознавание) продолжает
+    работать со своими значениями и не получает неожиданной правки
+    на месте. Поля, которых в словаре нет, не добавляются.
+    """
+    return normalize_organization_fields(org_data)
+
+
 def save_organization(org_data: Dict[str, Any], is_carrier: bool = False) -> int:
+    # Нормализация ДО записи и ДО индекса: в базе и в FTS5 должно лежать
+    # одно и то же значение, иначе поиск найдёт запись по строке, которой
+    # в таблице уже нет.
+    org_data = _normalize_organization_fields(org_data)
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -114,6 +145,9 @@ def save_organization(org_data: Dict[str, Any], is_carrier: bool = False) -> int
 
 
 def update_organization(org_id: int, org_data: Dict[str, Any], is_carrier: bool = False) -> bool:
+    # Нормализация ДО записи и ДО индекса (см. save_organization).
+    org_data = _normalize_organization_fields(org_data)
+
     conn = None
     table = "carriers" if is_carrier else "customers"
     fts_name = "fts_carriers" if is_carrier else "fts_customers"
@@ -450,4 +484,5 @@ __all__ = [
     "save_organization",
     "search_organizations",
     "update_organization",
+    "_normalize_organization_fields",
 ]
