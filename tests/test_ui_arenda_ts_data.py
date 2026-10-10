@@ -804,24 +804,26 @@ def test_ip_without_vat_single_sum_is_mapped():
     # Плейсхолдеров сумм НДС в варианте без НДС нет — и ключей тоже.
     assert "sum_wo_vat" not in cd.contract
     assert "sum_vat" not in cd.contract
-    assert "price_with_vat" not in cd.contract
+    # Итог пишется всегда: у варианта без НДС он равен единственной сумме
+    # (в договор без налога база и итог — одно и то же число).
+    assert cd.contract["price_with_vat"] == IP_SUM
 
 
-def test_ooo_with_only_total_uses_total_without_vat():
+def test_ooo_with_only_total_takes_it_as_the_total():
     """
-    У ООО в документе только итог: он и становится суммой без НДС.
+    У ООО в документе только итог: он и есть ИТОГ договора.
 
-    Ставка при этом не выдумывается (0.0): считать НДС от чужой суммы нельзя,
-    о расхождении скажет валидатор.
+    Единое правило «НДС в том числе»: база без НДС вынимается из итога —
+    269 741,00 при 22% дают 221 099,18 и 48 641,82.
     """
     cd = collect_arenda_ts_data({
         "lessee": _lessee_tab(CARRIER_TYPE_OOO),
         "price": {"sum_total": OOO_TOTAL_SUM},
     })
 
-    assert cd.contract["price_without_vat"] == OOO_TOTAL_SUM
-    assert cd.contract["vat_rate_num"] == 0.0
-    assert cd.contract["vat_rate"] == "0%"
+    assert cd.contract["price_with_vat"] == OOO_TOTAL_SUM
+    assert cd.contract["price_without_vat"] == OOO_BASE_SUM
+    assert cd.contract["vat_amount"] == OOO_VAT_SUM
 
 
 def test_vat_rate_string_is_parsed():
@@ -836,13 +838,16 @@ def test_vat_rate_string_is_parsed():
 
 
 def test_zero_vat_rate_string_means_without_vat():
+    """«Без НДС» — нулевая ставка; в contract она остаётся своим названием."""
     cd = collect_arenda_ts_data({"price": {
-        "sum_wo_vat": OOO_BASE_SUM,
+        "sum_total": OOO_TOTAL_SUM,
         "vat_rate": "Без НДС",
     }})
 
     assert cd.contract["vat_rate_num"] == 0.0
-    assert cd.contract["vat_rate"] == "0%"
+    assert cd.contract["vat_rate"] == "Без НДС"
+    assert cd.contract["vat_amount"] == 0.0
+    assert cd.contract["price_without_vat"] == OOO_TOTAL_SUM
 
 
 def test_vat_rate_defaults_when_absent():

@@ -39,6 +39,7 @@ from core.contracts.contract_types import ContractType
 from core.contracts.formika.postprocess import RemoveEmptyVehicleRowsStep
 from core.contracts.formika.validator import FormikaValidator
 from core.num_to_words import amount_to_words
+from core.vat import is_vat_free, total_from_base, vat_rate_number
 
 logger = logging.getLogger("core.contract_generator")
 
@@ -452,29 +453,34 @@ class FormikaGenerator(BaseContractGenerator):
         """
         Ставка НДС: (число, текст).
 
-        Число нужно для расчёта суммы с НДС, текст — для бланка
-        («включая НДС 22%»). Если ставки нет, берётся DEFAULT_VAT_RATE.
+        Число нужно для расчёта, текст — для бланка («включая НДС 22%»).
+        Ставка разбирается правилом ядра (core/vat.py): принимаются «22%»,
+        22 и «Без НДС»; непонятное значение даёт ставку по умолчанию.
         """
         raw = contract.get("vat_rate")
         number = contract.get("vat_rate_num")
 
-        if number is None and raw:
-            number = cls._to_float(str(raw).replace("%", "").strip(), default=None)
+        if number in (None, ""):
+            number = raw if raw not in (None, "") else cls.DEFAULT_VAT_RATE
 
-        if number is None:
-            number = cls.DEFAULT_VAT_RATE
-
-        text = str(raw).strip() if raw else f"{number:.0f}%"
+        number = vat_rate_number(number)
+        # «Без НДС» — налогом не облагается: в бланке это нулевая ставка
+        # («включая НДС 0%»), слов «НДС не облагается» этот бланк не знает.
+        text = "0%" if is_vat_free(raw) else (
+            str(raw).strip() if raw not in (None, "") else f"{number:.0f}%"
+        )
         return float(number), text
 
     @classmethod
     def _total_with_vat(cls, contract: Dict[str, Any], vat_rate_num: float) -> float:
         """
-        Сумма договора, включающая НДС.
+        Сумма договора, включающая НДС, — по единому правилу «НДС в том числе».
 
         Источники по приоритету:
           1. price_with_vat — готовая сумма с НДС (её считает интерфейс);
-          2. price_without_vat + ставка;
+          2. price_without_vat + ставка (записи до перехода на «НДС в том
+             числе»: там хранилась только база, и итог восстанавливается
+             прежней формулой — база × (1 + ставка/100));
           3. price_input — сумма из распознанного документа (в Формике она
              уже включает НДС, см. core/prompts/formika.py).
         Отсутствующие данные дают 0.00 — сумма не выдумывается.
@@ -485,9 +491,7 @@ class FormikaGenerator(BaseContractGenerator):
 
         price_without_vat = cls._to_float(contract.get("price_without_vat"), default=0.0)
         if price_without_vat > 0:
-            if vat_rate_num > 0:
-                return round(price_without_vat * (1 + vat_rate_num / 100), 2)
-            return round(price_without_vat, 2)
+            return total_from_base(price_without_vat, vat_rate_num)
 
         return round(cls._to_float(contract.get("price_input"), default=0.0), 2)
 

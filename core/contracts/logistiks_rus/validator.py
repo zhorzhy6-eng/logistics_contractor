@@ -37,6 +37,7 @@ from core.contract_data import ContractData
 from core.contracts.base_validator import BaseValidator
 from core.contracts.contract_types import ContractType
 from core.validator import ValidationReport
+from core.vat import is_vat_free, vat_rate_number
 
 logger = logging.getLogger("core.contracts.logistiks_rus.validator")
 
@@ -57,10 +58,13 @@ class LogistiksRusValidator(BaseValidator):
     NON_CARGO_VEHICLE_TYPES = ("Тягач", "Полуприцеп", "Прицеп")
 
     #: Поля суммы: любое положительное значение означает, что стоимость есть.
-    #: price_without_vat — поле вкладки «Стоимость», price_input — сумма из
-    #: распознанного документа, sum_wo_vat / sum_total — распознанные суммы
-    #: раздела 5 (у ИП единственная сумма лежит в sum_total).
+    #: Главная величина — итог (price_with_vat / sum_total): налог считается
+    #: «НДС в том числе» (core/vat.py). price_without_vat — поле вкладки
+    #: «Стоимость», price_input — сумма из распознанного документа,
+    #: sum_wo_vat — распознанная «Стоимость услуг» (у ИП единственная сумма
+    #: документа лежит в sum_total).
     PRICE_FIELDS = (
+        "price_with_vat",
         "price_without_vat",
         "price_input",
         "sum_wo_vat",
@@ -234,12 +238,13 @@ class LogistiksRusValidator(BaseValidator):
         raw_rate = cd.contract.get("vat_rate_num")
 
         if raw_rate is None or self._text(raw_rate) == "":
-            # Ставка может прийти строкой «22%» в поле vat_rate.
-            if not self._text(cd.contract.get("vat_rate")):
+            # Ставка может прийти строкой «22%» (или «Без НДС») в поле vat_rate.
+            raw_rate = cd.contract.get("vat_rate")
+            if not self._text(raw_rate):
                 report.warnings.append("Не указана ставка НДС")
-            return
+                return
 
-        if self._empty_to_float(raw_rate) == 0:
+        if vat_rate_number(raw_rate, default=0.0) == 0 and not is_vat_free(raw_rate):
             report.warnings.append("Ставка НДС = 0%, проверьте")
 
     def _check_cost_ip(self, cd: ContractData, report: ValidationReport) -> None:

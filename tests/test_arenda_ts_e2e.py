@@ -1713,37 +1713,34 @@ def test_recognized_sums_are_read_by_base_price(generator,
     assert form["sum_total"] == ip["sum_total"]
 
 
-def test_recognized_names_are_not_mapped_to_price_without_vat(generator,
-                                                             caplog, work_dir):
+def test_recognized_sum_total_is_read_as_the_total(generator, caplog, work_dir):
     """
-    EXPECTED CURRENT BEHAVIOUR (не баг этого шага).
+    Стык «распознавание → генератор»: sum_total — это ИТОГ договора.
 
-    Сборщик UI (3.1.D.B.1) должен класть арендную плату в понятное генератору
-    поле: _base_price читает sum_wo_vat / price_without_vat (а для ИП без
-    НДС — sum_total). Пока суммы приходят только в sum_total варианта с НДС,
-    генератор честно печатает 0,00 и предупреждает об этом WARNING'ом —
-    вместо того чтобы вывести сумму без НДС из суммы с НДС.
-
-    Тест ловит регресс: как только маппинг появится, ожидание 0,00 придётся
-    заменить на реальную сумму.
+    Единое правило «НДС в том числе»: главная величина — итог, база без НДС
+    вынимается из него (core/vat.py). Раньше генератор читал только базу
+    (sum_wo_vat / price_without_vat), и документ с одной суммой «Итого с НДС»
+    печатал 0,00 с предупреждением в лог.
     """
     payload = _recognized_payload("ООО")
     payload["contract"].pop("sum_wo_vat")
     assert "price_without_vat" not in payload["contract"]
 
     with caplog.at_level(logging.WARNING, logger="core.contract_generator"):
-        replacements = generator.build_replacements(payload)
+        replacements = _repl(generator.build_replacements(payload))
 
-    assert replacements["sum_wo_vat"] == "0,00"
-    assert replacements["sum_total"] == "0,00"
-    assert "в бланк уйдёт 0,00" in caplog.text
-    assert "TODO 3.1.D.B.1" in caplog.text
+    # 269 741,00 при 22% → 221 099,18 без НДС и 48 641,82 налога.
+    assert replacements["sum_wo_vat"] == OOO_BASE_TEXT
+    assert replacements["sum_vat"] == OOO_VAT_TEXT
+    assert replacements["sum_total"] == OOO_TOTAL_TEXT
+    assert "в бланк уйдёт 0,00" not in caplog.text
 
-    with _generate(generator, payload, work_dir, "e2e_unmapped_sums") as path:
+    with _generate(generator, payload, work_dir, "e2e_sum_total_as_total") as path:
         text = _document_text(Document(str(path)))
 
-        assert "– 0,00 руб." in text
-        assert OOO_TOTAL_TEXT not in text
+        assert f"– {OOO_BASE_TEXT} руб." in text
+        assert f"Итого с НДС: {OOO_TOTAL_TEXT} руб." in text
+        assert "– 0,00 руб." not in text
 
 
 # ─────────────────────────────────────────────────────────────

@@ -87,6 +87,12 @@ from core.contracts.base_generator import (
     ConvertNewlinesStep,
     PostprocessStep,
 )
+from core.vat import (
+    VAT_FREE,
+    compute_vat,
+    total_from_base,
+    vat_rate_number,
+)
 from core.contracts.contract_types import ContractType
 from core.num_to_words import amount_to_words
 
@@ -853,6 +859,18 @@ class ArendaTsGenerator(BaseContractGenerator):
         Раздел 4 «Арендная плата, НДС и порядок оплаты»: суммы п. 4.1 и срок
         оплаты п. 4.5.
 
+        Суммы считаются «НДС В ТОМ ЧИСЛЕ» — единым правилом ядра
+        (core/vat.py::compute_vat), тем же, что у перевозки, Логистикса и
+        Формики: главная величина — ИТОГ договора (`price_with_vat`), а база
+        без НДС и налог выводятся из него. Раньше главной была база: налог
+        считался СВЕРХУ и прибавлялся — из-за этого сумма в договоре
+        отличалась от той, что называл оператор.
+
+        Записи, сохранённые до перехода, хранят только базу без НДС: тогда
+        итог восстанавливается умножением на (1 + ставка/100) — тем же
+        множителем, каким он считался раньше, поэтому пересборка старого
+        договора даёт прежние суммы до копейки.
+
         Вариант ООО и ИП с НДС: три суммы — без НДС, НДС по ставке и итого,
         каждая цифрами и прописью. Вариант ИП без НДС: одна сумма, а
         sum_wo_vat / sum_vat / vat_rate в карту замен НЕ кладутся — в
@@ -868,23 +886,26 @@ class ArendaTsGenerator(BaseContractGenerator):
         self._fill_payment_days(replacements, contract)
 
         vat_rate_num = self._resolve_vat_rate_num(contract)
-        base = self._base_price(contract, is_ip_without_vat)
+        total = self._total_price(contract, is_ip_without_vat, vat_rate_num)
+        vat = compute_vat(total, VAT_FREE if is_ip_without_vat else vat_rate_num)
+        base = vat["sum_wo_nds"]
+        vat_amount = vat["sum_nds"]
+        total = vat["sum_total"]
 
         if is_ip_without_vat:
-            total = round(base, 2)
             replacements["sum_total"] = self._format_money(total)
             replacements["sum_total_words"] = amount_to_words(total)
         else:
-            vat_amount = round(base * vat_rate_num / 100, 2)
-            total = round(base + vat_amount, 2)
-
             replacements["sum_wo_vat"] = self._format_money(base)
             replacements["sum_wo_vat_words"] = amount_to_words(base)
             replacements["sum_vat"] = self._format_money(vat_amount)
             replacements["sum_vat_words"] = amount_to_words(vat_amount)
             replacements["sum_total"] = self._format_money(total)
             replacements["sum_total_words"] = amount_to_words(total)
-            replacements["vat_rate"] = f"{vat_rate_num:.0f}%"
+            # Ставка строкой: у «Без НДС» множитель единичный, и в бланк
+            # уходит «0%» — словами «НДС не облагается» бланк аренды не
+            # говорит (в ИП-бланке без НДС эта оговорка напечатана заранее).
+            replacements["vat_rate"] = self._vat_rate_text(contract, vat_rate_num)
 
         logger.info(
             f"{TITLE} [%s]: в бланк подставлено — "
@@ -897,20 +918,21 @@ class ArendaTsGenerator(BaseContractGenerator):
         )
 
         # Диагностика стыка «распознавание → генератор»: суммы в contract есть,
-        # а читать их генератору нечем — значит, в бланк уйдёт 0,00. У ООО и
-        # ИП с НДС база — сумма БЕЗ НДС (sum_wo_vat): если распознавание
-        # нашло только сумму с НДС (sum_total), арендная плата в бланке
-        # обнулится. Проверяем по фактически посчитанной базе, а не только по
-        # наличию ключей: сообщение обещает именно 0,00 в бланке.
+        # а читать их генератору нечем — значит, в бланк уйдёт 0,00. Главная
+        # величина теперь ИТОГ (price_with_vat / sum_total): если в contract
+        # есть только база без НДС, генератор восстановит из неё итог, а вот
+        # из одних лишь распознанных сумм без цены взять её негде. Проверяем
+        # по фактически посчитанному итогу, а не только по наличию ключей:
+        # сообщение обещает именно 0,00 в бланке.
         recognized_sums = (
             contract.get("sum_wo_vat")
             or contract.get("sum_total")
             or contract.get("sum_vat")
         )
-        if base <= 0 and self._to_float(recognized_sums, default=0.0) > 0:
+        if total <= 0 and self._to_float(recognized_sums, default=0.0) > 0:
             logger.warning(
                 f"{TITLE} [%s]: в contract есть распознанные суммы (sum_*), "
-                "но суммы без НДС среди них нет — в бланк уйдёт 0,00. "
+                "но ни итога, ни цены в нём нет — в бланк уйдёт 0,00. "
                 "Маппинг суммы — TODO 3.1.D.B.1",
                 "ИП без НДС" if is_ip_without_vat else "с НДС",
             )
@@ -1225,23 +1247,71 @@ class ArendaTsGenerator(BaseContractGenerator):
     @classmethod
     def _resolve_vat_rate_num(cls, contract: Dict[str, Any]) -> float:
         """
-        Ставка НДС числом для расчёта сумм.
+        Ставка НДС числом для расчёта сумм — правило ядра (core/vat.py).
 
-        Источники: vat_rate_num → разбор строки vat_rate («22%») →
-        DEFAULT_VAT_RATE. Явный ноль уважается: 0 — это «без НДС», а не
-        отсутствие ставки.
+        Источники: явное `vat_rate_num`, затем строка `vat_rate` («22%»,
+        «Без НДС», «не облагается»). Явный ноль уважается: 0 — это «без
+        НДС», а не отсутствие ставки. Непонятное значение даёт ставку по
+        умолчанию: подставлять ноль вместо неизвестной ставки нельзя —
+        в договоре появилась бы нулевая ставка вместо ошибки в данных.
         """
         number = contract.get("vat_rate_num")
-
-        if number is None:
-            raw = contract.get("vat_rate")
-            if raw:
-                number = cls._to_float(str(raw).replace("%", "").strip(), default=None)
-
-        if number is None:
+        if number in (None, ""):
+            number = contract.get("vat_rate")
+        if number in (None, ""):
             number = cls.DEFAULT_VAT_RATE
+        return vat_rate_number(number)
 
-        return float(number)
+    def _vat_rate_text(self, contract: Dict[str, Any], vat_rate_num: float) -> str:
+        """
+        Ставка строкой для плейсхолдера {{vat_rate}} бланка аренды.
+
+        В бланк уходит «22%», «5%», «0%»: у «Без НДС» (налогом не
+        облагается) множитель единичный, налог нулевой, и бланк печатает
+        нулевую ставку — словами «НДС не облагается» этот бланк не говорит
+        (в ИП-бланке без НДС оговорка напечатана заранее, и там места под
+        ставку нет).
+        """
+        return f"{vat_rate_num:.0f}%"
+
+    @classmethod
+    def _total_price(
+        cls,
+        contract: Dict[str, Any],
+        is_ip_without_vat: bool,
+        vat_rate_num: float,
+    ) -> float:
+        """
+        ИТОГ договора — главная величина («НДС в том числе»).
+
+        Порядок источников:
+
+          1. `price_with_vat` — итог, который называет оператор (его же
+             хранит колонка `price_with_vat` базы);
+          2. `sum_total` — распознанная сумма документа «Итого с НДС»;
+          3. база без НДС (`sum_wo_vat` / `price_without_vat`): итог
+             восстанавливается прежней формулой — база × (1 + ставка/100).
+             Так читаются записи, сохранённые до перехода на «НДС в том
+             числе»: в них итога нет, и пересборка даёт прежние суммы
+             до копейки.
+
+        Вариант «ИП без НДС» — налогом не облагается, поэтому итог равен
+        единственной сумме документа (её читает `_base_price`): если в старой
+        записи база и итог разошлись, верна база — иначе договор без налога
+        вырос бы на ставку.
+        """
+        if is_ip_without_vat:
+            return round(cls._base_price(contract, True), 2)
+
+        for key in ("price_with_vat", "sum_total"):
+            value = cls._to_float(contract.get(key), default=0.0)
+            if value > 0:
+                return round(value, 2)
+
+        base = cls._base_price(contract, False)
+        if base > 0:
+            return total_from_base(base, vat_rate_num)
+        return 0.0
 
     @classmethod
     def _base_price(cls, contract: Dict[str, Any], is_ip_without_vat: bool) -> float:

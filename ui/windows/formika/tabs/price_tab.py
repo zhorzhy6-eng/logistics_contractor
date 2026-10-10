@@ -4,18 +4,27 @@
 Вкладка «Стоимость» окна типа «Формика» (ЭТАП 3.1.B.2).
 
 Особенность Формики: в бланке одна сумма, и она уже включает НДС. Поэтому
-пользователь вводит только её — «Сумма с НДС», а «в том числе НДС» и
-«Сумма без НДС» вкладка считает сама:
+пользователь вводит только её — «Сумма с НДС» (ИТОГ), а «в том числе НДС» и
+«Сумма без НДС» вкладка считает сама — единым правилом ядра (core/vat.py),
+тем же, что в Аренде, Логистиксе и перевозке:
 
-    amount_with_vat    = amount
-    amount_without_vat = amount / (1 + ставка/100)
+    sum_total  = введённое число (ИТОГ);
+    sum_wo_nds = sum_total / (1 + ставка/100);
+    sum_nds    = sum_total − sum_wo_nds.
+
+Налог считается ВЫЧИТАНИЕМ из итога, а не умножением базы на ставку: только
+так `sum_wo_nds + sum_nds` даёт ровно `sum_total`.
+
+Ставки — из ядра: «Без НДС» / «0%» / «5%» / «7%» / «10%» / «22%», по
+умолчанию «22%». Локального списка ставок и локальных формул на вкладке нет.
 
 Сумма прописью считается через core.num_to_words.amount_to_words — тем же
 модулем, что и в генераторах договоров. Логика ContractTab здесь не
 копируется: там сумма может быть и с НДС, и без него, у Формики вариант один.
 
 Ключи get_data() — amount, amount_without_vat, amount_with_vat, vat_rate,
-vat_rate_num, payment_days, special_conditions — читает
+vat_rate_num, payment_days, special_conditions (единые price_with_vat /
+price_without_vat / vat_amount отдаются теми же числами) — читает
 ui/windows/formika/data.py::_build_price.
 """
 
@@ -29,15 +38,19 @@ from PyQt5.QtWidgets import (
 )
 
 from core.num_to_words import amount_to_words
+from core.vat import (
+    DEFAULT_VAT_RATE,
+    VAT_RATES,
+    compute_vat,
+    normalize_vat_rate,
+    total_from_base,
+    vat_rate_number,
+)
 from ui import theme
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import PasteableTextEdit, RecognitionPanel
 
 logger = logging.getLogger("ui.windows.formika.tabs.price_tab")
-
-#: Ставки НДС в выпадающем списке; по умолчанию — первая.
-VAT_RATES = ("22%", "20%", "10%", "0%")
-DEFAULT_VAT_RATE = "22%"
 
 #: Срок оплаты по умолчанию — как в бланке Формики.
 DEFAULT_PAYMENT_DAYS = 10
@@ -177,32 +190,38 @@ class PriceTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
 
     def vat_rate_num(self) -> float:
-        """Ставка НДС числом (22% → 22.0)."""
-        try:
-            return float(self.vat_rate.currentText().replace("%", "").strip())
-        except (ValueError, TypeError):
-            return 0.0
+        """Ставка НДС числом: «22%» → 22.0, «Без НДС» → 0.0."""
+        return vat_rate_number(self.vat_rate.currentText(), default=0.0)
+
+    def vat_values(self) -> Dict[str, float]:
+        """
+        Разбивка введённого итога по ставке — ОДНИМ вызовом ядра.
+
+        :return: словарь `sum_total`, `sum_wo_nds`, `sum_nds`.
+        """
+        return compute_vat(float(self.amount.value()), self.vat_rate.currentText())
 
     def amount_without_vat_value(self) -> float:
         """
-        Сумма без НДС: amount / (1 + ставка/100), округление до копеек.
+        Сумма без НДС: итог с выделенным налогом, округление до копеек.
 
-        При нулевой ставке без НДС равна сумме с НДС — делить не на что.
+        При нулевой ставке (и при «Без НДС») без НДС равна сумме с НДС —
+        делить не на что.
         """
-        rate = self.vat_rate_num()
-        amount = float(self.amount.value())
-        if rate <= 0:
-            return round(amount, 2)
-        return round(amount / (1 + rate / 100), 2)
+        return self.vat_values()["sum_wo_nds"]
+
+    def vat_amount_value(self) -> float:
+        """НДС из введённого итога: sum_total − sum_wo_nds, до копеек."""
+        return self.vat_values()["sum_nds"]
 
     def _recalculate(self) -> None:
         """Пересчитывает суммы и сумму прописью по текущей ставке НДС."""
-        amount = float(self.amount.value())
-        amount_without_vat = self.amount_without_vat_value()
+        vat = self.vat_values()
+        amount = vat["sum_total"]
 
         # Сумма в бланке одна и уже с НДС, поэтому «итог» — это введённая сумма.
         self.amount_with_vat.setText(f"{amount:.2f} ₽")
-        self.amount_without_vat.setText(f"{amount_without_vat:.2f} ₽")
+        self.amount_without_vat.setText(f"{vat['sum_wo_nds']:.2f} ₽")
 
         # Прописью — сумма с НДС: она и печатается в договоре-заявке.
         self.amount_words.setText(amount_to_words(amount))
@@ -212,12 +231,26 @@ class PriceTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
 
     def get_data(self) -> Dict[str, Any]:
-        """Стоимость и порядок оплаты (ключи — как ждёт сборка данных)."""
+        """
+        Стоимость и порядок оплаты (ключи — как ждёт сборка данных).
+
+        Единые ключи всех типов — `vat_rate`, `price_with_vat` (итог),
+        `price_without_vat` (база) и `vat_amount`; исторические имена Формики
+        (`amount`, `amount_without_vat`, `amount_with_vat`) отдаются теми же
+        числами — их читает `ui/windows/formika/data.py::_build_price`.
+        """
+        vat = self.vat_values()
+
         return {
-            "amount": float(self.amount.value()),
-            "amount_without_vat": self.amount_without_vat_value(),
-            "amount_with_vat": float(self.amount.value()),
+            # ── Единые ключи типа (как в Экспедиторстве) ──
             "vat_rate": self.vat_rate.currentText(),
+            "price_with_vat": vat["sum_total"],
+            "price_without_vat": vat["sum_wo_nds"],
+            "vat_amount": vat["sum_nds"],
+            # ── Исторические имена стоимости Формики ──
+            "amount": vat["sum_total"],
+            "amount_without_vat": vat["sum_wo_nds"],
+            "amount_with_vat": vat["sum_total"],
             "vat_rate_num": self.vat_rate_num(),
             "payment_days": int(self.payment_days.value()),
             "special_conditions": self.special_conditions.toPlainText().strip(),
@@ -227,31 +260,43 @@ class PriceTab(TabMixin, QWidget):
         """
         Заполняет стоимость.
 
-        Принимает как ключи вкладки (amount), так и ключи ContractData
-        (price_input, price_with_vat): распознавание отдаёт блок contract
-        целиком. Значения по умолчанию без данных не подставляются — иначе
-        распознавание без блока стоимости вернуло бы ставку НДС к 22%.
+        Принимает как ключи вкладки (amount), так и единые ключи типа
+        (price_with_vat) и ключи ContractData (price_input, price_without_vat):
+        распознавание отдаёт блок contract целиком. Значения по умолчанию без
+        данных не подставляются — иначе распознавание без блока стоимости
+        вернуло бы ставку НДС к 22%.
+
+        В поле суммы встаёт ИТОГ: у Формики сумма документа всегда с НДС.
+        Если в данных есть только база без НДС, итог восстанавливается
+        прежней формулой — `база × (1 + ставка/100)`.
         """
         if not data:
             return
 
-        amount = data.get("amount")
-        if amount in (None, ""):
-            amount = data.get("price_input")
-        if amount in (None, ""):
-            amount = data.get("price_with_vat")
-        if amount not in (None, ""):
+        rate = normalize_vat_rate(data.get("vat_rate")) or normalize_vat_rate(
+            data.get("vat_rate_num")
+        )
+
+        amount = self._first_amount(data, self.SUM_TOTAL_KEYS)
+        if amount is None:
+            base = self._first_amount(data, self.SUM_WITHOUT_VAT_KEYS)
+            if base is not None:
+                amount = total_from_base(
+                    base, rate if rate is not None else self.vat_rate_num()
+                )
+
+        if amount is not None:
+            self.amount.blockSignals(True)
             try:
                 self.amount.setValue(float(amount))
             except (ValueError, TypeError):
                 logger.warning("Формика: стоимость не распознана как число")
+            finally:
+                self.amount.blockSignals(False)
 
-        vat_rate = str(data.get("vat_rate") or "").strip()
-        if vat_rate:
-            if not vat_rate.endswith("%"):
-                vat_rate = f"{vat_rate}%"
-            index = self.vat_rate.findText(vat_rate)
-            if index >= 0:
+        if rate is not None:
+            index = self.vat_rate.findText(rate)
+            if index >= 0 and index != self.vat_rate.currentIndex():
                 self.vat_rate.setCurrentIndex(index)
 
         payment_days = data.get("payment_days")
@@ -268,6 +313,39 @@ class PriceTab(TabMixin, QWidget):
         self._recalculate()
 
         logger.info("Формика: данные стоимости заполнены")
+
+    #: Ключи ИТОГА (суммы с НДС): он и вводится оператором.
+    SUM_TOTAL_KEYS = (
+        "price_with_vat", "amount_with_vat", "sum_total", "amount",
+        "price_input",
+    )
+
+    #: Ключи суммы БЕЗ НДС: из неё итог восстанавливается прежней формулой.
+    SUM_WITHOUT_VAT_KEYS = ("price_without_vat", "amount_without_vat", "sum_wo_vat")
+
+    @staticmethod
+    def _first_amount(data: Dict[str, Any], keys) -> Any:
+        """
+        Первая непустая положительная сумма из ключей (иначе None).
+
+        Ноль и пустое значение пропускаются: у промпта 0.0 означает «суммы
+        в документе не было», и нулём нельзя ни заполнять вкладку, ни затирать
+        введённое вручную число.
+        """
+        for key in keys:
+            value = data.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                number = float(
+                    str(value).replace(" ", "").replace("\u00a0", "")
+                    .replace("₽", "").replace(",", ".")
+                )
+            except (ValueError, TypeError):
+                continue
+            if number > 0:
+                return number
+        return None
 
     def clear(self) -> None:
         """Сбрасывает стоимость и порядок оплаты к значениям по умолчанию."""

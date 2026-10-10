@@ -148,6 +148,13 @@ import re
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from core.contract_data import ContractData
+from core.vat import (
+    VAT_FREE,
+    compute_vat,
+    normalize_vat_rate,
+    total_from_base,
+    vat_rate_number,
+)
 
 logger = logging.getLogger("ui.windows.arenda_ts.data")
 
@@ -1036,54 +1043,65 @@ def _build_price(
     Арендная плата (п. 4.1) и порядок оплаты (п. 4.5): суммы, ставка НДС,
     срок оплаты в банковских днях и особые условия.
 
-    Суммы документа (sum_wo_vat / sum_vat / sum_total) раскладываются по виду
-    Арендатора — маппинг 3. Генератор считает плату от contract.price_without_vat
-    и берёт базу из sum_wo_vat (варианты с НДС) либо из sum_total (ИП без НДС),
-    поэтому обе формы заполняются согласованно.
+    Суммы считаются «НДС В ТОМ ЧИСЛЕ» — единым правилом ядра (core/vat.py),
+    тем же, что у перевозки, Логистикса и Формики: главная величина — ИТОГ
+    договора (`price_with_vat` / `sum_total`), а база без НДС и налог
+    выводятся из него. До этого шага главной была БАЗА: вкладка отдавала
+    сумму без НДС, а генератор считал налог сверху и прибавлял — из-за этого
+    сумма в договоре отличалась от той, что называл оператор.
 
-    Ставка НДС пишется только тогда, когда во вкладке есть данные о стоимости:
-    пустая вкладка не должна оставлять за собой «22%» — иначе пустой вход
-    перестал бы быть пустым.
+    Записи, сохранённые до перехода, хранят только базу без НДС: итог
+    восстанавливается умножением на (1 + ставка/100) — тем же множителем,
+    каким он считался раньше, поэтому пересборка старого договора даёт
+    прежние суммы до копейки (проверено: round(round(база × 1.22, 2) / 1.22, 2)
+    возвращает исходную базу).
+
+    Вариант «ИП без НДС» — налогом не облагается: в бланке одна сумма, и
+    плейсхолдеров sum_wo_vat / sum_vat там нет. Ставка в этом варианте
+    нулевая независимо от выбранного пункта списка: бланк говорит
+    «НДС не облагается», и ненулевая ставка ему противоречила бы.
     """
     contract: Dict[str, Any] = {}
 
     _is_ooo, _is_ip_with_vat, is_ip_without_vat = _variant_flags(carrier_type)
 
-    sum_wo_vat = _find_number(data, _CONTRACT_BLOCK, "sum_wo_vat")
-    sum_vat = _find_number(data, _CONTRACT_BLOCK, "sum_vat")
-    sum_total = _find_number(data, _CONTRACT_BLOCK, "sum_total")
-
+    # Ставка: строка «22%» / «Без НДС» важнее числа (в старых записях числа
+    # могло не быть вовсе), число — запасной источник, пусто — ставка ядра.
+    rate_text = normalize_vat_rate(_find_field(data, _CONTRACT_BLOCK, "vat_rate"))
     rate_num = _valid_rate_num(_find_number(data, _CONTRACT_BLOCK, "vat_rate_num"))
     if rate_num is None:
-        rate_num = _parse_vat_rate(_find_field(data, _CONTRACT_BLOCK, "vat_rate"))
+        rate_num = vat_rate_number(rate_text)
+    label = rate_text or _format_vat_rate(rate_num)
 
-    # База арендной платы и ставка НДС по виду Арендатора (маппинг 3).
+    # Итог — главная величина; база нужна только для записей, где итога нет.
+    total_in = _find_number(data, _CONTRACT_BLOCK, "price_with_vat", "sum_total")
+    base_in = _find_number(data, _CONTRACT_BLOCK, "price_without_vat", "sum_wo_vat")
+
     if is_ip_without_vat:
-        # НДС не облагается: в документе одна сумма, и она лежит в sum_total.
-        base = sum_total if sum_total is not None else sum_wo_vat
-        rate = 0.0
-    elif sum_wo_vat is not None and sum_wo_vat > 0:
-        base = sum_wo_vat
-        rate = rate_num if rate_num is not None else DEFAULT_VAT_RATE_NUM
-    elif sum_total is not None and sum_total > 0:
-        # В документе только итог: считаем его суммой без НДС, а ставку не
-        # выдумываем — считать НДС от чужой суммы нельзя. О расхождении
-        # скажет валидатор («Не указана ставка НДС»).
-        base = sum_total
-        rate = 0.0
+        # НДС не облагается: в документе одна сумма — она и есть итог.
+        total = total_in if total_in is not None else base_in
+        rate_num = 0.0
+        label = _format_vat_rate(0.0)
+    elif total_in is not None and total_in > 0:
+        total = total_in
+    elif base_in is not None and base_in > 0:
+        total = total_from_base(base_in, rate_num)
     else:
-        base = None
-        rate = rate_num if rate_num is not None else DEFAULT_VAT_RATE_NUM
+        total = None
 
-    if not is_ip_without_vat:
-        # В варианте без НДС плейсхолдеров sum_wo_vat / sum_vat в бланке нет.
-        _set_if_filled(contract, "sum_wo_vat", sum_wo_vat)
-        _set_if_filled(contract, "sum_vat", sum_vat)
-    _set_if_filled(contract, "sum_total", sum_total)
-    _set_if_filled(contract, "price_without_vat", base)
-    if not is_ip_without_vat:
-        _set_if_filled(contract, "price_with_vat", sum_total)
-        _set_if_filled(contract, "vat_amount", sum_vat)
+    if total is not None:
+        vat = compute_vat(total, VAT_FREE if is_ip_without_vat else rate_num)
+
+        # Единые ключи типа: по ним генератор считает суммы (и по ним же
+        # договор ложится в базу — там две колонки, база и итог).
+        _set_if_filled(contract, "price_without_vat", vat["sum_wo_nds"])
+        _set_if_filled(contract, "price_with_vat", vat["sum_total"])
+        _set_if_filled(contract, "vat_amount", vat["sum_nds"])
+        # Исторические имена сумм документа.
+        _set_if_filled(contract, "sum_total", vat["sum_total"])
+        if not is_ip_without_vat:
+            _set_if_filled(contract, "sum_wo_vat", vat["sum_wo_nds"])
+            _set_if_filled(contract, "sum_vat", vat["sum_nds"])
 
     _set_if_filled(
         contract, "special_conditions",
@@ -1101,8 +1119,8 @@ def _build_price(
     )
 
     if _has_any_value(data):
-        contract["vat_rate_num"] = rate
-        contract["vat_rate"] = _format_vat_rate(rate)
+        contract["vat_rate_num"] = rate_num
+        contract["vat_rate"] = label
 
     return contract
 

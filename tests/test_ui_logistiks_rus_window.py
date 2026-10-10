@@ -1385,35 +1385,36 @@ def test_vehicle_tab_data_tab_keys_win_over_prompt_keys():
     }
 
 
-def test_price_tab_data_uses_sum_wo_vat_then_sum_total():
-    """Сумма: сначала «Стоимость услуг» (sum_wo_vat), затем итог (sum_total)."""
+def test_price_tab_data_uses_sum_total_as_the_total():
+    """Сумма: главная величина — ИТОГ документа (sum_total / price_with_vat)."""
     assert LogistiksRusWindow._price_tab_data({
         "sum_wo_vat": 221099.18, "sum_vat": 48641.82, "sum_total": 269741.0,
         "vat_rate": "22%",
     }) == {
-        "amount_without_vat": 221099.18,
+        "price_with_vat": 269741.0,
         "vat_rate": "22%",
     }
 
-    # sum_wo_vat пуста (или нулевая) — берётся итог документа.
+    # Итога в данных нет — берётся база без НДС: вкладка восстановит из неё
+    # итог прежней формулой (база × (1 + ставка/100)).
     assert LogistiksRusWindow._price_tab_data({
-        "sum_wo_vat": 0.0, "sum_total": 269741.0, "vat_rate": "0%",
+        "sum_wo_vat": 0.0, "price_without_vat": 269741.0, "vat_rate": "0%",
         "vat_rate_num": 0.0,
     }) == {
-        "amount_without_vat": 269741.0,
+        "price_with_vat": 269741.0,
         "vat_rate": "0%",
         "vat_rate_num": 0.0,
     }
 
     # Запасное имя на случай, если модель ответила ключами ContractData.
     assert LogistiksRusWindow._price_tab_data({
-        "price_without_vat": 100000.0,
-    }) == {"amount_without_vat": 100000.0}
+        "price_with_vat": 100000.0,
+    }) == {"price_with_vat": 100000.0}
 
     # Сумма строкой с разделителями тысяч и запятой.
     assert LogistiksRusWindow._price_tab_data({
-        "sum_wo_vat": "221 099,18",
-    }) == {"amount_without_vat": 221099.18}
+        "sum_total": "221 099,18",
+    }) == {"price_with_vat": 221099.18}
 
 
 def test_price_tab_data_skips_empty_and_zero():
@@ -1439,7 +1440,7 @@ def test_price_tab_data_keeps_explicit_carrier_type():
         "carrier_type": "ИП", "sum_total": 100000.0, "vat_rate": "0%",
     }) == {
         "carrier_type": "ИП",
-        "amount_without_vat": 100000.0,
+        "price_with_vat": 100000.0,
         "vat_rate": "0%",
     }
 

@@ -619,10 +619,15 @@ def test_vehicle_clear_empties_both_blocks(qt_app):
 def test_price_keys(qt_app):
     data = PriceTab().get_data()
 
+    # Исторические имена Формики + единые ключи типа (vat_rate, price_with_vat,
+    # price_without_vat, vat_amount) — как в остальных типах договоров.
     assert set(data) == {
-        "amount", "amount_without_vat", "amount_with_vat",
+        "amount", "amount_without_vat", "amount_with_vat", "vat_amount",
         "vat_rate", "vat_rate_num", "payment_days", "special_conditions",
+        "price_with_vat", "price_without_vat",
     }
+    assert data["price_with_vat"] == data["amount_with_vat"] == data["amount"]
+    assert data["price_without_vat"] == data["amount_without_vat"]
 
 
 def test_price_default_vat_rate_is_22(qt_app):
@@ -675,11 +680,16 @@ def test_price_zero_vat_keeps_amount(qt_app):
 
 
 def test_price_vat_rates_available(qt_app):
+    """Список ставок — шесть пунктов ядра (локального списка у вкладки нет)."""
+    from core.vat import VAT_RATES
+
     tab = PriceTab()
 
     rates = [tab.vat_rate.itemText(i) for i in range(tab.vat_rate.count())]
 
-    assert rates == ["22%", "20%", "10%", "0%"]
+    assert rates == ["Без НДС", "0%", "5%", "7%", "10%", "22%"]
+    assert rates == list(VAT_RATES)
+    assert tab.vat_rate.currentText() == "22%"
 
 
 def test_price_words_updated_on_input(qt_app):
@@ -732,18 +742,21 @@ def test_price_fill_and_read_back(qt_app):
 
     tab.fill_data({
         "amount": 219966.0,
-        "vat_rate": "20%",
+        "vat_rate": "10%",
         "payment_days": 5,
         "special_conditions": "Оплата по оригиналам накладных.",
     })
 
     data = tab.get_data()
     assert data["amount"] == 219966.0
-    assert data["vat_rate"] == "20%"
-    assert data["vat_rate_num"] == 20.0
+    assert data["vat_rate"] == "10%"
+    assert data["vat_rate_num"] == 10.0
     assert data["payment_days"] == 5
     assert data["special_conditions"] == "Оплата по оригиналам накладных."
-    assert data["amount_without_vat"] == 183305.0
+    # «НДС в том числе»: 219 966,00 при 10% → база 199 969,09, налог 19 996,91.
+    assert data["amount_without_vat"] == 199969.09
+    assert data["vat_amount"] == 19996.91
+    assert round(data["amount_without_vat"] + data["vat_amount"], 2) == 219966.0
 
 
 def test_price_fill_accepts_contract_keys(qt_app):

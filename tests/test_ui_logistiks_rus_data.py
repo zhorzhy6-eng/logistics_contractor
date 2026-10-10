@@ -658,7 +658,7 @@ def test_ooo_recognized_sum_wo_vat_is_mapped():
 
 
 def test_ooo_falls_back_to_recognized_sum_total():
-    """У ООО в документе бывает только итог — тогда сумма берётся из него."""
+    """У ООО в документе бывает только итог — он и есть ИТОГ заявки."""
     cd = collect_logistiks_rus_data({"price": {
         "carrier_type": "ООО",
         "sum_wo_vat": 0.0,
@@ -666,7 +666,11 @@ def test_ooo_falls_back_to_recognized_sum_total():
         "vat_rate": "22%",
     }})
 
-    assert cd.contract["price_without_vat"] == RECOGNIZED_SUM_TOTAL
+    # «НДС в том числе»: база без НДС вынимается из итога —
+    # 269 741,00 при 22% дают 221 099,18 и 48 641,82.
+    assert cd.contract["price_with_vat"] == RECOGNIZED_SUM_TOTAL
+    assert cd.contract["price_without_vat"] == RECOGNIZED_SUM_WO_VAT
+    assert cd.contract["vat_amount"] == RECOGNIZED_SUM_VAT
 
 
 def test_ip_recognized_sum_total_is_mapped():

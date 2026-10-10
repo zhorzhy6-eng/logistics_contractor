@@ -67,6 +67,7 @@ from core.contracts.base_validator import BaseValidator
 from core.contracts.contract_types import ContractType
 from core.dates import parse_date
 from core.validator import ValidationReport
+from core.vat import base_from_total, vat_rate_number
 
 logger = logging.getLogger("core.contracts.arenda_ts.validator")
 
@@ -567,6 +568,10 @@ class ArendaTsValidator(BaseValidator):
         """
         База арендной платы: сумма без НДС (вариант с НДС) или единственная
         сумма документа (ИП без НДС). Ключи и порядок — как в генераторе.
+
+        Если базы в данных нет, а есть ИТОГ (`price_with_vat`), она вынимается
+        из него правилом ядра (core/vat.py::base_from_total): налог считается
+        «НДС в том числе», и по итогу база восстанавливается однозначно.
         """
         keys = (
             cls.BASE_PRICE_FIELDS_WITHOUT_VAT if is_ip_without_vat
@@ -576,12 +581,19 @@ class ArendaTsValidator(BaseValidator):
             value = cls._money(contract.get(key))
             if value > 0:
                 return value
+
+        if not is_ip_without_vat:
+            total = cls._money(contract.get("price_with_vat"))
+            if total > 0:
+                return base_from_total(total, cls._vat_rate_num(contract))
+
         return 0.0
 
     @classmethod
     def _vat_rate_num(cls, contract: Mapping[str, Any]) -> float:
         """
-        Ставка НДС числом: vat_rate_num → разбор строки vat_rate («22%») → 0.0.
+        Ставка НДС числом: vat_rate_num → разбор строки vat_rate («22%»,
+        «Без НДС») → 0.0. Разбор — правило ядра (core/vat.py).
 
         Пустое значение и явный ноль здесь не различаются: у ООО и ИП с НДС и
         то и другое означает «ставка не заполнена», а у ИП без НДС ставка и
@@ -590,7 +602,7 @@ class ArendaTsValidator(BaseValidator):
         number = contract.get("vat_rate_num")
         if cls._text(number) == "":
             number = contract.get("vat_rate")
-        return cls._money(number)
+        return vat_rate_number(number, default=0.0)
 
     # ─────────────────────────────────────────────────────────
     # Приведение значений

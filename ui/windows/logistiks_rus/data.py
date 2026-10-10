@@ -96,6 +96,13 @@ import logging
 from typing import Any, Dict, List, Mapping, Optional
 
 from core.contract_data import ContractData
+from core.vat import (
+    VAT_FREE,
+    compute_vat,
+    normalize_vat_rate,
+    total_from_base,
+    vat_rate_number,
+)
 
 logger = logging.getLogger("ui.windows.logistiks_rus.data")
 
@@ -115,6 +122,9 @@ DEFAULT_CARRIER_TYPE = "ООО"
 
 #: Ставка НДС, когда её не удалось ни ввести, ни разобрать («22%»).
 DEFAULT_VAT_RATE_NUM = 22.0
+
+#: Ставка ИП: в бланке одна сумма без НДС, ставка не применяется.
+ZERO_VAT_RATE = "0%"
 
 #: Сколько машин помещается в таблицу заявки (см. LogistiksRusGenerator).
 MAX_CARS = 12
@@ -589,62 +599,70 @@ def _resolve_price_contract(
     form_price: Mapping[str, Any],
 ) -> Dict[str, Any]:
     """
-    Стоимость: сумма без НДС, ставка НДС и особые условия.
+    Стоимость: итог, база без НДС, НДС и особые условия.
 
-    Сумма берётся из формы («Сумма без НДС»), а если поле пустое — из
-    распознанных сумм раздела 5 (sum_wo_vat / sum_total): раньше генератор
-    их не видел и печатал 0,00. У ИП сумма одна — без НДС, поэтому её место
-    занимает sum_total; у ООО — sum_wo_vat, а если её нет, то sum_total
-    (когда в документе указан только итог).
+    Суммы считаются «НДС В ТОМ ЧИСЛЕ» — единым правилом ядра (core/vat.py),
+    тем же, что в Аренде, Формике и перевозке: главная величина — ИТОГ
+    (`price_with_vat` / `sum_total`), а база без НДС и налог выводятся из
+    него. До этого шага главной была БАЗА, и налог считался сверху.
 
-    Ставка НДС разбирается из строки «22%» в vat_rate_num; у ИП ставка не
-    применяется — vat_rate_num = 0.0 и строка «0%».
+    Источники итога: поле вкладки «Стоимость (итог)» (`price_with_vat`),
+    затем распознанная сумма документа `sum_total` («Итого с НДС»), затем —
+    если итога нет — база («Стоимость услуг» / поле вкладки), из которой итог
+    восстанавливается прежней формулой `база × (1 + ставка/100)`: так
+    читаются записи, сохранённые до перехода.
+
+    Ставка НДС: поле вкладки (`vat_rate` строкой, `vat_rate_num` числом),
+    затем распознанная ставка; у ИП ставка не применяется — ноль и «0%».
     """
     contract: Dict[str, Any] = {}
 
-    carrier_field = _field(form_price, "carrier_type")
+    carrier_field = _field(form_price, "carrier_type") or _field(
+        form_price, "entity_type"
+    )
     carrier_is_ip = "ИП" in carrier_field
     carrier_type = "ИП" if carrier_is_ip else carrier_field
     if not carrier_type:
         carrier_type = DEFAULT_CARRIER_TYPE
 
-    # Сумма берётся из формы («Сумма без НДС»), а если её там нет — из
-    # распознанных сумм раздела 5. У ИП сумма одна — без НДС, поэтому её
-    # место занимает sum_total; у ООО — sum_wo_vat, а если её нет или она
-    # нулевая, то sum_total (когда в документе указан только итог).
-    form_amount = _to_float(form_price.get("price_without_vat"))
-    recognized_amount = _to_float(
-        recognized.get("sum_total" if carrier_is_ip else "sum_wo_vat")
-    )
-    total_amount = _to_float(recognized.get("sum_total"))
-    if form_amount is not None and form_amount > 0:
-        price_without_vat = form_amount
-    elif recognized_amount is not None and recognized_amount > 0:
-        price_without_vat = recognized_amount
-    elif total_amount is not None and total_amount > 0:
-        price_without_vat = total_amount
-    else:
-        # Суммы в документе не было (0.0 — это «пусто» у промпта): не
-        # подставляем ноль, оставляем поле незаполненным.
-        price_without_vat = None
-    _set_if_filled(contract, "price_without_vat", price_without_vat)
-
-    # Сумма с НДС из формы: её печатает только договор-заявка на перевозку,
-    # генератор Логистикс Рус считает итог сам, поэтому это справочное поле.
-    _set_if_filled(contract, "price_with_vat", _to_float(form_price.get("price_with_vat")))
-    _set_if_filled(contract, "price_input", _field(form_price, "price_input"))
-
-    rate_num: Optional[float] = None
     if carrier_is_ip:
         rate_num = 0.0
+        rate_text = ZERO_VAT_RATE
     else:
+        rate_text = (
+            normalize_vat_rate(form_price.get("vat_rate"))
+            or normalize_vat_rate(recognized.get("vat_rate"))
+        )
         rate_num = _valid_rate_num(form_price.get("vat_rate_num"))
         if rate_num is None:
-            rate_num = _parse_vat_rate(form_price.get("vat_rate"))
-        if rate_num is None:
-            rate_num = _parse_vat_rate(recognized.get("vat_rate"))
-        if rate_num is None:
-            rate_num = DEFAULT_VAT_RATE_NUM
+            rate_num = vat_rate_number(rate_text)
+        if not rate_text:
+            rate_text = _format_vat_rate(rate_num)
+
+    # ── Итог — главная величина; база нужна только там, где итога нет ──
+    total = _first_positive(
+        form_price.get("price_with_vat"),
+        recognized.get("price_with_vat"),
+        recognized.get("sum_total"),
+        recognized.get("amount_with_vat"),
+    )
+    base = _first_positive(
+        form_price.get("price_without_vat"),
+        recognized.get("amount_without_vat"),
+        recognized.get("sum_wo_vat"),
+        recognized.get("price_input"),
+    )
+    if total is None and base is not None:
+        total = total_from_base(base, rate_num)
+
+    if total is not None:
+        vat = compute_vat(total, VAT_FREE if carrier_is_ip else rate_num)
+        # Единые ключи типа: по ним генератор считает суммы, и по ним же
+        # заявка ложится в базу (там две колонки — база и итог).
+        _set_if_filled(contract, "price_without_vat", vat["sum_wo_nds"])
+        _set_if_filled(contract, "price_with_vat", vat["sum_total"])
+        _set_if_filled(contract, "vat_amount", vat["sum_nds"])
+    _set_if_filled(contract, "price_input", _field(form_price, "price_input"))
 
     # Тип экспедитора и ставка НДС пишутся только тогда, когда во вкладке
     # вообще есть данные о стоимости: по ним генератор выбирает вариант
@@ -655,18 +673,34 @@ def _resolve_price_contract(
     has_price_data = any(
         _filled(form_price.get(key)) or _filled(recognized.get(key))
         for key in (
-            "carrier_type", "price_without_vat", "price_with_vat", "price_input",
-            "vat_rate", "vat_rate_num", "special_conditions",
-            "sum_wo_vat", "sum_vat", "sum_total",
+            "carrier_type", "entity_type", "price_without_vat",
+            "price_with_vat", "vat_amount", "price_input", "amount",
+            "amount_without_vat", "amount_with_vat", "vat_rate",
+            "vat_rate_num", "special_conditions", "sum_wo_vat", "sum_vat",
+            "sum_total",
         )
     )
     if has_price_data:
         contract["carrier_type"] = carrier_type
         contract["vat_rate_num"] = rate_num
-        contract["vat_rate"] = _format_vat_rate(rate_num)
+        contract["vat_rate"] = rate_text
 
     _set_if_filled(contract, "special_conditions", _field(form_price, "special_conditions"))
     return contract
+
+
+def _first_positive(*values: Any) -> Optional[float]:
+    """
+    Первое положительное число из значений — источник для сумм.
+
+    Ноль и пустое значение пропускаются: у промпта 0.0 означает «суммы
+    в документе не было», и нулём нельзя затирать уже посчитанную сумму.
+    """
+    for value in values:
+        number = _to_float(value)
+        if number is not None and number > 0:
+            return number
+    return None
 
 
 def _build_price(tabs: Mapping[str, Any]) -> Dict[str, Any]:
@@ -674,8 +708,10 @@ def _build_price(tabs: Mapping[str, Any]) -> Dict[str, Any]:
     Стоимость (раздел 5): суммы, ставка НДС и особые условия.
 
     Ключи вкладки переводятся в ключи ContractData.contract; пустые значения
-    пропускаются. Распознанные суммы (sum_wo_vat / sum_vat / sum_total) при
-    этом не теряются — их читает _resolve_price_contract.
+    пропускаются. Единые ключи вкладки (price_with_vat / price_without_vat /
+    vat_amount / entity_type) читаются наравне с историческими
+    (amount_without_vat / amount): распознанные суммы (sum_wo_vat / sum_vat /
+    sum_total) при этом не теряются — их читает _resolve_price_contract.
     """
     data = _raw_data(tabs, "price")
 
@@ -684,8 +720,10 @@ def _build_price(tabs: Mapping[str, Any]) -> Dict[str, Any]:
     # поэтому None в словарь не попадает — пустая вкладка остаётся пустой.
     fields = {
         "carrier_type": "carrier_type",
-        "price_without_vat": "amount_without_vat",
-        "price_with_vat": "amount_with_vat",
+        "entity_type": "entity_type",
+        "price_without_vat": "price_without_vat",
+        "price_with_vat": "price_with_vat",
+        "vat_amount": "vat_amount",
         "price_input": "amount",
         "vat_rate": "vat_rate",
         "vat_rate_num": "vat_rate_num",

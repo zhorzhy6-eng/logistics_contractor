@@ -218,11 +218,11 @@ class LogistiksRusWindow(BaseContractWindow):
         "loading_time_to",
     )
 
-    #: Суммы раздела 5 в порядке приоритета: у ООО сумма без НДС — это
-    #: «Стоимость услуг» (sum_wo_vat), у ИП единственная сумма документа
-    #: лежит в sum_total. price_without_vat — запасное имя на случай, если
-    #: модель ответила ключами ContractData.
-    _AMOUNT_KEYS = ("sum_wo_vat", "price_without_vat", "sum_total")
+    #: Суммы раздела 5 в порядке приоритета: главная величина — ИТОГ
+    #: документа «Итого» (sum_total), затем готовый price_with_vat; база
+    #: («Стоимость услуг» → sum_wo_vat) идёт последней — из неё вкладка сама
+    #: восстановит итог прежней формулой, как для старых записей.
+    _AMOUNT_KEYS = ("sum_total", "price_with_vat", "sum_wo_vat", "price_without_vat")
 
     #: Поля блока «contract», которые читает вкладка «Стоимость».
     #: carrier_type здесь нет: см. _price_tab_data.
@@ -925,11 +925,12 @@ class LogistiksRusWindow(BaseContractWindow):
         """
         Блок «contract» → поля вкладки «Стоимость».
 
-        Суммы промпта (sum_wo_vat / sum_vat / sum_total) вкладка не знает:
-        у неё одно поле ввода — amount_without_vat. У ООО его место занимает
-        «Стоимость услуг» (sum_wo_vat), у ИП — единственная сумма документа
-        (sum_total); если sum_wo_vat пуста (в документе указан только итог),
-        берётся sum_total.
+        Суммы промпта (sum_wo_vat / sum_vat / sum_total) вкладка знает под
+        единым ключом итога: у неё одно поле ввода — «Стоимость (итог)».
+        Приоритет — ИТОГ документа («Итого» → sum_total), затем
+        price_with_vat; база (sum_wo_vat / price_without_vat) идёт последней:
+        налог считается «в том числе», и из базы вкладка восстановит итог
+        прежней формулой.
 
         Тип экспедитора (carrier_type) в схеме промпта отсутствует — блок
         «carrier» запрещён. Если модель всё же его вернула, значение уходит
@@ -950,7 +951,8 @@ class LogistiksRusWindow(BaseContractWindow):
         for key in cls._AMOUNT_KEYS:
             amount = cls._amount_value(filled.get(key))
             if amount is not None:
-                data["amount_without_vat"] = amount
+                # Единый ключ итога: вкладка считает НДС «в том числе».
+                data["price_with_vat"] = amount
                 break
 
         for key in cls._PRICE_KEYS:

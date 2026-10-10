@@ -798,21 +798,22 @@ def test_cost_missing_is_zero_not_invented(generator):
     assert replacements["vat_rate"] == "22%"
 
 
-def test_vat_only_sum_total_warns_about_zero(generator, caplog):
+def test_vat_only_sum_total_is_the_total(generator):
     """
-    Только сумма с НДС (sum_total) — арендная плата в бланке обнуляется.
+    Только сумма с НДС (sum_total) — это ИТОГ договора.
 
-    Сумма без НДС из суммы с НДС не выводится (не выдумываем данные), но о
-    стыке сообщается предупреждением.
+    Единое правило «НДС в том числе»: оператор называет итог, а база без НДС
+    вынимается из него (sum_total / (1 + ставка/100)) — в бланк уходят обе
+    суммы, и они сходятся: 221 099,18 + 48 641,82 = 269 741,00.
     """
     payload = _payload("ООО")
     payload["contract"].pop("sum_wo_vat")
 
-    with caplog.at_level(logging.WARNING, logger="core.contract_generator"):
-        replacements = generator._build_replacements_map(payload)
+    replacements = generator._build_replacements_map(payload)
 
-    assert replacements["sum_wo_vat"] == "0,00"
-    assert "в бланк уйдёт 0,00" in caplog.text
+    assert replacements["sum_wo_vat"] == "221\u00a0099,18"
+    assert replacements["sum_vat"] == "48\u00a0641,82"
+    assert replacements["sum_total"] == "269\u00a0741,00"
 
 
 # ─────────────────────────────────────────────────────────────

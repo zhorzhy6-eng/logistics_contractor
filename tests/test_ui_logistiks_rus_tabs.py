@@ -96,8 +96,11 @@ EXPECTED_KEYS = {
         "tractor_brand", "tractor_plate", "trailer_brand", "trailer_plate",
     },
     PriceTab: {
-        "carrier_type", "amount_mode", "amount_without_vat", "amount_with_vat",
-        "vat_amount", "vat_rate", "vat_rate_num", "special_conditions",
+        # Единые ключи типа (как в Экспедиторстве) + исторические имена
+        # стоимости Логистикса; особые условия.
+        "entity_type", "carrier_type", "vat_rate",
+        "price_with_vat", "price_without_vat", "vat_amount",
+        "amount_without_vat", "amount", "vat_rate_num", "special_conditions",
     },
 }
 
@@ -140,7 +143,8 @@ SAMPLE_DATA = {
     },
     PriceTab: {
         "carrier_type": "ООО",
-        "amount_without_vat": AMOUNT_WITHOUT_VAT,
+        # Единый ключ итога: его и вводит оператор («НДС в том числе»).
+        "price_with_vat": AMOUNT_WITH_VAT,
         "vat_rate": "22%",
         "special_conditions": "Простой не более 24 часов",
     },
@@ -148,13 +152,13 @@ SAMPLE_DATA = {
 
 #: Поля-значения по умолчанию: их clear() не обнуляет, а возвращает к норме.
 #: Даты показывают сегодняшний день (выгрузка — с запасом в несколько дней),
-#: время — окно из бланка, ставка НДС — 22%, режим ввода суммы — «Без НДС»,
+#: время — окно из бланка, ставка НДС — 22%, тип экспедитора — ООО,
 #: грузоотправитель — постоянный контрагент этого типа заявки.
 DEFAULT_VALUE_KEYS = {
     "date", "name", "shipper_name", "loading_date", "unloading_date",
     "loading_time_from", "loading_time_to",
     "unloading_time_from", "unloading_time_to",
-    "carrier_type", "amount_mode", "vat_rate", "vat_rate_num",
+    "carrier_type", "entity_type", "vat_rate", "vat_rate_num",
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -1363,11 +1367,11 @@ def test_vehicle_empty_value_keeps_manual_input(qt_app):
 
 
 # ─────────────────────────────────────────────────────────────
-# «Стоимость»
+# «Стоимость»: единое правило НДС — «в том числе»
 # ─────────────────────────────────────────────────────────────
 
 def test_price_defaults(qt_app):
-    """По умолчанию — ООО и ставка 22%."""
+    """По умолчанию — ООО и ставка 22% (ставки — пункты списка ядра)."""
     tab = PriceTab()
 
     assert isinstance(tab.carrier_type, QComboBox)
@@ -1375,104 +1379,129 @@ def test_price_defaults(qt_app):
         "ООО", "ИП",
     ]
     assert tab.carrier_type.currentText() == "ООО"
+    assert tab.entity_type() == "ООО"
     assert isinstance(tab.vat_rate, QComboBox)
     assert [tab.vat_rate.itemText(i) for i in range(tab.vat_rate.count())] == [
-        "22%", "20%", "10%", "0%",
+        "Без НДС", "0%", "5%", "7%", "10%", "22%",
     ]
     assert tab.vat_rate.currentText() == "22%"
     assert tab.get_data()["vat_rate_num"] == 22.0
-    assert isinstance(tab.amount_without_vat, QDoubleSpinBox)
-    assert tab.amount_without_vat.isEnabled()
+    assert isinstance(tab.amount_total, QDoubleSpinBox)
+    assert tab.amount_total.isEnabled()
 
 
 def test_price_calculated_fields_are_readonly(qt_app):
-    """
-    Режим «Без НДС» (по умолчанию): ввод — в базе, итог и НДС расчётные.
-
-    Шаг FIX-3: сумма с НДС перестала быть строкой только для чтения — она
-    редактируемая в режиме «С НДС» (см. test_amount_with_vat_is_input_in_vat_mode).
-    """
+    """Вводит оператор только ИТОГ; база и НДС — расчётные поля."""
     tab = PriceTab()
 
-    assert tab.amount_mode.currentText() == price_tab_module.MODE_WITHOUT_VAT
-    assert tab.amount_without_vat.isReadOnly() is False
-    assert tab.amount_with_vat.isReadOnly() is True
-    # НДС — расчётное поле в любом режиме.
+    assert tab.amount_total.isReadOnly() is False
+    assert tab.amount_without_vat.isReadOnly() is True
     assert tab.vat_amount.isReadOnly() is True
 
     readonly = _readonly_spin_boxes(tab)
-    assert tab.amount_with_vat in readonly
+    assert tab.amount_without_vat in readonly
     assert tab.vat_amount in readonly
-    assert tab.amount_without_vat not in readonly
+    assert tab.amount_total not in readonly
 
 
-def test_price_amounts_are_calculated_for_ooo(qt_app):
-    """ООО: 221 099,18 + 22% = 48 641,82 → 269 741,00."""
+def test_price_amounts_are_calculated_from_the_total(qt_app):
+    """ООО: итог 269 741,00 при 22% → база 221 099,18 и НДС 48 641,82."""
     tab = PriceTab()
 
-    tab.amount_without_vat.setValue(AMOUNT_WITHOUT_VAT)
+    tab.amount_total.setValue(AMOUNT_WITH_VAT)
 
-    assert tab.get_data()["amount_with_vat"] == pytest.approx(AMOUNT_WITH_VAT)
+    data = tab.get_data()
+    assert data["price_with_vat"] == pytest.approx(AMOUNT_WITH_VAT)
+    assert data["price_without_vat"] == pytest.approx(AMOUNT_WITHOUT_VAT)
     assert tab.vat_amount_value() == pytest.approx(VAT_AMOUNT)
-    # В поле — сумма в формате бланка: разделители разрядов и знак рубля.
-    assert "269" in tab.amount_with_vat.text()
-    assert "741,00" in tab.amount_with_vat.text()
-    assert "48" in tab.vat_amount.text()
-    assert "641,82" in tab.vat_amount.text()
+    # В поле — база в формате бланка: разделители разрядов и знак рубля.
+    assert "221" in tab.amount_without_vat.text()
+    assert "099,18" in tab.amount_without_vat.text()
 
 
 def test_price_recalculates_on_amount_change(qt_app):
     tab = PriceTab()
-    tab.amount_without_vat.setValue(100000)
+    tab.amount_total.setValue(122000)
 
-    assert tab.get_data()["amount_with_vat"] == pytest.approx(122000.0)
+    assert tab.get_data()["price_without_vat"] == pytest.approx(100000.0)
     assert tab.vat_amount_value() == pytest.approx(22000.0)
 
-    tab.amount_without_vat.setValue(200000)
+    tab.amount_total.setValue(244000)
 
-    assert tab.get_data()["amount_with_vat"] == pytest.approx(244000.0)
+    assert tab.get_data()["price_without_vat"] == pytest.approx(200000.0)
     assert tab.vat_amount_value() == pytest.approx(44000.0)
 
 
 def test_price_recalculates_on_vat_rate_change(qt_app):
     tab = PriceTab()
-    tab.amount_without_vat.setValue(100000)
-
-    tab.vat_rate.setCurrentText("20%")
-    assert tab.get_data()["amount_with_vat"] == pytest.approx(120000.0)
-    assert tab.vat_amount_value() == pytest.approx(20000.0)
+    tab.amount_total.setValue(120000)
 
     tab.vat_rate.setCurrentText("10%")
-    assert tab.get_data()["amount_with_vat"] == pytest.approx(110000.0)
-    assert tab.vat_amount_value() == pytest.approx(10000.0)
+    assert tab.get_data()["price_without_vat"] == pytest.approx(109090.91)
+    assert tab.vat_amount_value() == pytest.approx(10909.09)
+
+    tab.vat_rate.setCurrentText("5%")
+    assert tab.get_data()["price_without_vat"] == pytest.approx(114285.71)
+    assert tab.vat_amount_value() == pytest.approx(5714.29)
+
+
+def test_price_task_examples(qt_app):
+    """Примеры задания: 250 000 при 22% и при 5%."""
+    tab = PriceTab()
+    tab.amount_total.setValue(250000.0)
+
+    data = tab.get_data()
+    assert data["price_without_vat"] == 204918.03
+    assert data["vat_amount"] == 45081.97
+
+    tab.vat_rate.setCurrentText("5%")
+    data = tab.get_data()
+    assert data["price_without_vat"] == 238095.24
+    assert data["vat_amount"] == 11904.76
+    assert data["price_with_vat"] == 250000.0
+
+
+@pytest.mark.parametrize("rate", ["Без НДС", "0%", "5%", "7%", "10%", "22%"])
+def test_price_base_plus_vat_equals_total(qt_app, rate):
+    """При любой ставке база + НДС = итог, а итог не уходит от введённого."""
+    tab = PriceTab()
+    tab.vat_rate.setCurrentText(rate)
+    tab.amount_total.setValue(250000.0)
+
+    data = tab.get_data()
+
+    assert data["price_with_vat"] == pytest.approx(250000.0)
+    assert round(data["price_without_vat"] + data["vat_amount"], 2) \
+        == pytest.approx(data["price_with_vat"])
 
 
 def test_price_ip_disables_vat_rate_and_zeroes_it(qt_app):
     """ИП: стоимость без НДС — ставка заблокирована и равна «0%»."""
     tab = PriceTab()
-    tab.amount_without_vat.setValue(AMOUNT_WITHOUT_VAT)
+    tab.amount_total.setValue(135833.0)
 
     tab.carrier_type.setCurrentText("ИП")
 
     assert tab.vat_rate.currentText() == "0%"
     assert not tab.vat_rate.isEnabled()
     assert tab.carrier_type.currentText() == "ИП"
-    # Сумма без НДС остаётся редактируемой — её и вводит пользователь.
-    assert tab.amount_without_vat.isEnabled()
+    # Итог остаётся редактируемым — его и вводит пользователь.
+    assert tab.amount_total.isEnabled()
 
 
-def test_price_ip_has_no_amounts_with_vat(qt_app):
+def test_price_ip_has_single_sum_without_vat(qt_app):
+    """У ИП налога нет: единственная сумма — она же итог, налог нулевой."""
     tab = PriceTab()
-    tab.amount_without_vat.setValue(AMOUNT_WITHOUT_VAT)
+    tab.amount_total.setValue(135833.0)
 
     tab.carrier_type.setCurrentText("ИП")
     data = tab.get_data()
 
-    assert data["amount_with_vat"] == ""
-    assert tab.amount_with_vat.text() == ""
-    assert tab.vat_amount.text() == ""
-    assert tab.amount_with_vat_value() is None
-    assert tab.vat_amount_value() is None
+    assert data["price_without_vat"] == pytest.approx(135833.0)
+    assert data["price_with_vat"] == pytest.approx(135833.0)
+    assert data["vat_amount"] == 0.0
+    assert data["entity_type"] == "ИП"
+
 
 def test_price_ip_get_data_gives_zero_vat_rate(qt_app):
     tab = PriceTab()
@@ -1487,14 +1516,14 @@ def test_price_ip_get_data_gives_zero_vat_rate(qt_app):
 def test_price_back_to_ooo_enables_vat_rate_and_restores_default(qt_app):
     """Возврат к ООО: ставка снова доступна, нулевая сменяется на 22%."""
     tab = PriceTab()
-    tab.amount_without_vat.setValue(AMOUNT_WITHOUT_VAT)
+    tab.amount_total.setValue(AMOUNT_WITH_VAT)
     tab.carrier_type.setCurrentText("ИП")
 
     tab.carrier_type.setCurrentText("ООО")
 
     assert tab.vat_rate.isEnabled()
     assert tab.vat_rate.currentText() == "22%"
-    assert tab.get_data()["amount_with_vat"] == pytest.approx(AMOUNT_WITH_VAT)
+    assert tab.get_data()["price_without_vat"] == pytest.approx(AMOUNT_WITHOUT_VAT)
     assert tab.vat_amount_value() == pytest.approx(VAT_AMOUNT)
 
 
@@ -1502,36 +1531,82 @@ def test_price_fill_data_maps_contract_keys(qt_app):
     """Распознавание отдаёт суммы ключами ContractData — они тоже принимаются."""
     tab = PriceTab()
 
-    tab.fill_data({"price_without_vat": 150000.0, "vat_rate": "20%"})
+    tab.fill_data({"price_without_vat": 150000.0, "vat_rate": "10%"})
 
     data = tab.get_data()
-    assert data["amount_without_vat"] == pytest.approx(150000.0)
-    assert data["vat_rate"] == "20%"
-    assert data["amount_with_vat"] == pytest.approx(180000.0)
+    # База без НДС от старой формы: итог восстанавливается прежней формулой.
+    assert data["price_without_vat"] == pytest.approx(150000.0)
+    assert data["vat_rate"] == "10%"
+    assert data["price_with_vat"] == pytest.approx(165000.0)
+
+
+def test_price_fill_data_reads_the_total(qt_app):
+    """Единый ключ итога: price_with_vat — главная величина."""
+    tab = PriceTab()
+
+    tab.fill_data({"price_with_vat": 165000.0, "vat_rate": "10%"})
+
+    data = tab.get_data()
+    assert data["price_with_vat"] == pytest.approx(165000.0)
+    assert data["price_without_vat"] == pytest.approx(150000.0)
 
 
 def test_price_fill_data_switches_to_ip(qt_app):
     tab = PriceTab()
-    tab.amount_without_vat.setValue(100000)
+    tab.amount_total.setValue(100000)
 
-    tab.fill_data({"carrier_type": "ИП", "amount_without_vat": 135833.0})
+    tab.fill_data({"carrier_type": "ИП", "price_with_vat": 135833.0})
 
     data = tab.get_data()
     assert data["carrier_type"] == "ИП"
-    assert data["amount_without_vat"] == pytest.approx(135833.0)
+    assert data["price_without_vat"] == pytest.approx(135833.0)
+    assert data["price_with_vat"] == pytest.approx(135833.0)
     assert data["vat_rate_num"] == 0
-    assert data["amount_with_vat"] == ""
     assert not tab.vat_rate.isEnabled()
+
+
+def test_price_fill_data_ip_document_amount_is_the_single_sum(qt_app):
+    """ИП: единственная сумма документа (sum_total) — она же итог и база."""
+    tab = PriceTab()
+
+    tab.fill_data({"carrier_type": "ИП", "sum_total": 135833.0, "vat_rate": "0%"})
+
+    data = tab.get_data()
+    assert data["price_without_vat"] == pytest.approx(135833.0)
+    assert data["price_with_vat"] == pytest.approx(135833.0)
+    assert data["vat_amount"] == 0.0
 
 
 def test_price_zero_amount_does_not_erase_manual_input(qt_app):
     """Ноль у промпта — «суммы в документе не было»: введённое не стираем."""
     tab = PriceTab()
-    tab.amount_without_vat.setValue(100000)
+    tab.amount_total.setValue(100000)
 
-    tab.fill_data({"amount_without_vat": 0, "sum_total": 0.0})
+    tab.fill_data({"price_with_vat": 0, "sum_total": 0.0})
 
-    assert tab.get_data()["amount_without_vat"] == pytest.approx(100000.0)
+    assert tab.get_data()["price_with_vat"] == pytest.approx(100000.0)
+
+
+def test_price_get_data_has_unified_keys(qt_app):
+    """Единые ключи типа отдаются наравне с историческими именами."""
+    tab = PriceTab()
+    tab.amount_total.setValue(AMOUNT_WITH_VAT)
+
+    data = tab.get_data()
+
+    assert {"entity_type", "vat_rate", "price_with_vat", "price_without_vat",
+            "vat_amount"} <= set(data)
+    assert data["amount_without_vat"] == data["price_without_vat"]
+    assert data["amount"] == data["price_with_vat"]
+
+
+def test_price_has_no_amount_mode_switch(qt_app):
+    """Переключателя «Считать от» нет: формула НДС одна на все типы."""
+    tab = PriceTab()
+
+    assert not hasattr(tab, "amount_mode")
+    assert tab.amount_mode_text() == "С НДС"
+    assert tab.calculates_from_total() is True
 
 
 def test_price_special_conditions_round_trip(qt_app):
@@ -1548,7 +1623,7 @@ def test_price_clear_resets_to_ooo_22(qt_app):
     tab = PriceTab()
     tab.fill_data({
         "carrier_type": "ИП",
-        "amount_without_vat": AMOUNT_WITHOUT_VAT,
+        "price_with_vat": AMOUNT_WITH_VAT,
         "special_conditions": "Простой не более 24 часов",
     })
 
@@ -1558,239 +1633,11 @@ def test_price_clear_resets_to_ooo_22(qt_app):
     assert data["carrier_type"] == "ООО"
     assert data["vat_rate"] == "22%"
     assert data["vat_rate_num"] == 22.0
-    assert data["amount_without_vat"] == 0
+    assert data["price_with_vat"] == 0
+    assert data["price_without_vat"] == 0
+    assert data["vat_amount"] == 0
     assert data["special_conditions"] == ""
     assert tab.vat_rate.isEnabled()
-
-
-# ─────────────────────────────────────────────────────────────
-# «Стоимость»: переключатель «Считать от» (шаг FIX-3)
-# ─────────────────────────────────────────────────────────────
-
-def test_price_default_mode_without_vat(qt_app):
-    """Вкладка открывается в режиме «Без НДС» — так было до FIX-3."""
-    tab = PriceTab()
-
-    assert isinstance(tab.amount_mode, QComboBox)
-    assert [tab.amount_mode.itemText(i)
-            for i in range(tab.amount_mode.count())] == ["Без НДС", "С НДС"]
-    assert tab.amount_mode.currentText() == price_tab_module.MODE_WITHOUT_VAT
-    assert tab.amount_mode_text() == price_tab_module.DEFAULT_AMOUNT_MODE
-    assert tab.get_data()["amount_mode"] == price_tab_module.MODE_WITHOUT_VAT
-    assert tab.calculates_from_total() is False
-
-
-def test_switch_to_amount_with_vat_mode(qt_app):
-    """Переключение на «С НДС» меняет смысл вводимого числа."""
-    tab = PriceTab()
-
-    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
-
-    assert tab.amount_mode_text() == price_tab_module.MODE_WITH_VAT
-    assert tab.calculates_from_total() is True
-    assert tab.get_data()["amount_mode"] == price_tab_module.MODE_WITH_VAT
-
-
-def test_amount_with_vat_is_input_in_vat_mode(qt_app):
-    """В режиме «С НДС» редактируемое поле — сумма с НДС."""
-    tab = PriceTab()
-    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
-
-    assert tab.amount_with_vat.isReadOnly() is False
-    assert tab.amount_without_vat.isReadOnly() is True
-    assert tab.vat_amount.isReadOnly() is True
-
-
-def test_amount_without_vat_is_readonly_in_vat_mode(qt_app):
-    """И обратно: в «С НДС» база становится расчётной."""
-    tab = PriceTab()
-    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
-
-    readonly = _readonly_spin_boxes(tab)
-
-    assert tab.amount_without_vat in readonly
-    assert tab.vat_amount in readonly
-    assert tab.amount_with_vat not in readonly
-
-
-def test_recalculation_on_mode_switch(qt_app):
-    """
-    Смена режима не сбрасывает суммы, а пересчитывает их.
-
-    Итог остаётся прежним: 100 000 без НДС и 122 000 с НДС при ставке 22% —
-    это один и тот же договор, названный с двух сторон.
-    """
-    tab = PriceTab()
-    tab.amount_without_vat.setValue(100000)
-
-    assert tab.amount_with_vat_value() == pytest.approx(122000.0)
-
-    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
-
-    data = tab.get_data()
-    assert data["amount_without_vat"] == pytest.approx(100000.0)
-    assert data["amount_with_vat"] == pytest.approx(122000.0)
-    assert data["vat_amount"] == pytest.approx(22000.0)
-
-
-def test_amounts_correct_in_both_modes(qt_app):
-    """
-    Математика режимов: 221 099,18 + 22% ↔ 269 741,00.
-
-    Проверяются обе стороны: ввод базы даёт итог, ввод итога даёт ту же базу.
-    """
-    tab = PriceTab()
-
-    tab.amount_without_vat.setValue(AMOUNT_WITHOUT_VAT)
-    assert tab.amount_with_vat_value() == pytest.approx(AMOUNT_WITH_VAT)
-    assert tab.vat_amount_value() == pytest.approx(VAT_AMOUNT)
-
-    tab = PriceTab()
-    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
-    tab.amount_with_vat.setValue(AMOUNT_WITH_VAT)
-
-    data = tab.get_data()
-    assert data["amount_without_vat"] == pytest.approx(AMOUNT_WITHOUT_VAT)
-    assert data["amount_with_vat"] == pytest.approx(AMOUNT_WITH_VAT)
-    assert data["vat_amount"] == pytest.approx(VAT_AMOUNT)
-
-
-def test_vat_mode_input_is_kept_exactly(qt_app):
-    """
-    Введённый итог не сдвигается округлением.
-
-    База — расчётная величина (может дать копейку при делении), а сумма,
-    которую назвал пользователь, печатается ровно как введена.
-    """
-    tab = PriceTab()
-    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
-    tab.amount_with_vat.setValue(100000.0)
-
-    data = tab.get_data()
-
-    assert data["amount_with_vat"] == pytest.approx(100000.0)
-    # 100 000 / 1.22 = 81 967,21 (округление до копеек) — итог остаётся 100 000.
-    assert data["amount_without_vat"] == pytest.approx(81967.21)
-    assert data["vat_amount"] == pytest.approx(18032.79)
-    assert data["amount_without_vat"] + data["vat_amount"] == \
-        pytest.approx(data["amount_with_vat"])
-
-
-def test_zero_vat_rate_keeps_amounts_equal(qt_app):
-    """При ставке «0%» НДС не начисляется, итог равен базе в обоих режимах."""
-    tab = PriceTab()
-    tab.vat_rate.setCurrentText("0%")
-    tab.amount_without_vat.setValue(50000)
-
-    assert tab.amount_with_vat_value() == pytest.approx(50000.0)
-    assert tab.vat_amount_value() == pytest.approx(0.0)
-
-    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
-
-    assert tab.amount_without_vat_value() == pytest.approx(50000.0)
-    assert tab.vat_amount_value() == pytest.approx(0.0)
-
-
-def test_get_data_returns_amount_mode(qt_app):
-    """get_data() отдаёт режим вместе с суммами."""
-    tab = PriceTab()
-
-    data = tab.get_data()
-
-    assert data["amount_mode"] == price_tab_module.MODE_WITHOUT_VAT
-    assert set(data) >= {"amount_mode", "amount_without_vat", "amount_with_vat",
-                         "vat_amount", "vat_rate", "vat_rate_num",
-                         "special_conditions"}
-
-
-def test_fill_data_restores_mode(qt_app):
-    """Режим из данных восстанавливается: сохранённое «С НДС» так и откроется."""
-    tab = PriceTab()
-
-    tab.fill_data({
-        "amount_mode": price_tab_module.MODE_WITH_VAT,
-        "amount_with_vat": AMOUNT_WITH_VAT,
-        "vat_rate": "22%",
-    })
-
-    data = tab.get_data()
-    assert tab.amount_mode_text() == price_tab_module.MODE_WITH_VAT
-    assert data["amount_with_vat"] == pytest.approx(AMOUNT_WITH_VAT)
-    assert data["amount_without_vat"] == pytest.approx(AMOUNT_WITHOUT_VAT)
-    assert tab.amount_with_vat.isReadOnly() is False
-
-
-def test_fill_data_without_mode_guesses_from_amounts(qt_app):
-    """
-    Ключа amount_mode нет — режим выводится по самим суммам.
-
-    Сумма с НДС без базы означает «С НДС»: единственная сумма документа не
-    должна получить налог сверху. Пара «база + итог» от старой формы
-    читается как «Без НДС» — так работали до FIX-3.
-    """
-    tab = PriceTab()
-    tab.fill_data({"amount_with_vat": AMOUNT_WITH_VAT, "vat_rate": "22%"})
-    assert tab.amount_mode_text() == price_tab_module.MODE_WITH_VAT
-    assert tab.get_data()["amount_without_vat"] == pytest.approx(AMOUNT_WITHOUT_VAT)
-
-    tab = PriceTab()
-    tab.fill_data({"amount_without_vat": AMOUNT_WITHOUT_VAT, "vat_rate": "22%"})
-    assert tab.amount_mode_text() == price_tab_module.MODE_WITHOUT_VAT
-    assert tab.get_data()["amount_with_vat"] == pytest.approx(AMOUNT_WITH_VAT)
-
-
-def test_fill_data_keeps_old_keys_working(qt_app):
-    """Старые ключи (price_without_vat, sum_wo_vat, sum_total) читаются как раньше."""
-    tab = PriceTab()
-
-    tab.fill_data({"price_without_vat": 150000.0, "vat_rate": "20%"})
-
-    assert tab.get_data()["amount_without_vat"] == pytest.approx(150000.0)
-    assert tab.get_data()["amount_with_vat"] == pytest.approx(180000.0)
-
-
-def test_fill_data_ip_document_amount_goes_to_base(qt_app):
-    """ИП: единственная сумма документа (sum_total) — это база, режим «Без НДС»."""
-    tab = PriceTab()
-
-    tab.fill_data({"carrier_type": "ИП", "sum_total": 135833.0,
-                   "vat_rate": "0%"})
-
-    data = tab.get_data()
-    assert data["amount_without_vat"] == pytest.approx(135833.0)
-    assert data["amount_with_vat"] == ""
-    assert tab.amount_mode_text() == price_tab_module.MODE_WITHOUT_VAT
-
-
-def test_clear_resets_mode(qt_app):
-    """«Очистить форму» возвращает режим «Без НДС» и обнуляет обе суммы."""
-    tab = PriceTab()
-    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
-    tab.amount_with_vat.setValue(AMOUNT_WITH_VAT)
-
-    tab.clear()
-
-    data = tab.get_data()
-    assert tab.amount_mode_text() == price_tab_module.MODE_WITHOUT_VAT
-    assert data["amount_mode"] == price_tab_module.MODE_WITHOUT_VAT
-    assert data["amount_without_vat"] == 0
-    assert data["amount_with_vat"] == 0
-    assert data["vat_amount"] == 0
-    assert data["vat_rate"] == "22%"
-
-
-def test_ip_has_single_sum_in_both_modes(qt_app):
-    """У ИП суммы с НДС нет — в любом режиме вкладка отдаёт одну сумму."""
-    tab = PriceTab()
-    tab.carrier_type.setCurrentText("ИП")
-    tab.amount_without_vat.setValue(135833.0)
-
-    assert tab.get_data()["amount_with_vat"] == ""
-
-    tab.amount_mode.setCurrentText(price_tab_module.MODE_WITH_VAT)
-
-    assert tab.get_data()["amount_with_vat"] == ""
-    assert tab.amount_without_vat.isReadOnly() is False
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1851,8 +1698,11 @@ def test_tabs_data_ip_variant_passes_validator(filled_tabs):
 
     assert cd.contract["carrier_type"] == "ИП"
     assert cd.contract["vat_rate_num"] == 0.0
-    assert "price_with_vat" not in cd.contract
-    assert cd.contract["price_without_vat"] == pytest.approx(AMOUNT_WITHOUT_VAT)
+    # Итог пишется всегда: у ИП он равен единственной сумме заявки, и ставка
+    # к ней не применяется — введённое число не растёт.
+    assert cd.contract["price_with_vat"] == pytest.approx(AMOUNT_WITH_VAT)
+    assert cd.contract["vat_amount"] == 0.0
+    assert cd.contract["price_without_vat"] == pytest.approx(AMOUNT_WITH_VAT)
 
     report = LogistiksRusValidator().check(cd)
     assert report.errors == [], report.errors

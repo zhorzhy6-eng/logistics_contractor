@@ -484,12 +484,13 @@ def test_logs_contain_amounts_are_substituted(caplog, generator,
 def test_logs_warn_when_recognized_sums_are_not_mapped(caplog, generator,
                                                        work_dir):
     """
-    Распознанная стоимость не замаплена — об этом есть WARNING.
+    Распознанная стоимость читается генератором — предупреждений нет.
 
-    Суммы распознавания лежат в contract.sum_total, а генератор читает
-    price_without_vat / price_input (TODO 3.1.C.B.1), поэтому в бланк уйдёт
-    0,00. Лог обязан сказать это явно: иначе расхождение видно только
-    в готовом документе — см. test_recognition_names_are_not_read_by_generator.
+    Суммы распознавания лежат в contract.sum_total («Итого»), и это ГЛАВНАЯ
+    величина единого правила «НДС в том числе» (core/vat.py): база без НДС и
+    налог выводятся из итога. Раньше имена не совпадали (генератор читал
+    price_without_vat / price_input) и в бланк уходило 0,00 — этот стык
+    закрыт, и WARNING'а о нуле быть не должно.
     """
     data = ContractData(contract={
         "number": "ЛР-2026-19",
@@ -502,7 +503,7 @@ def test_logs_warn_when_recognized_sums_are_not_mapped(caplog, generator,
     assert "price_input" not in data.contract
 
     with caplog.at_level(logging.WARNING, logger="core.contract_generator"):
-        path = _generate(generator, data, work_dir, "e2e_logs_unmapped_sums")
+        path = _generate(generator, data, work_dir, "e2e_logs_mapped_sums")
 
     try:
         warnings = [
@@ -510,16 +511,13 @@ def test_logs_warn_when_recognized_sums_are_not_mapped(caplog, generator,
             if record.name == "core.contract_generator"
             and record.levelno == logging.WARNING
         ]
-        assert any("в бланк уйдёт 0,00" in text for text in warnings), warnings
-        assert any(
-            "price_without_vat / price_input отсутствуют" in text
-            for text in warnings
-        ), warnings
-        assert any("Логистикс Рус [ООО]" in text for text in warnings), warnings
-        assert any("TODO 3.1.C.B.1" in text for text in warnings), warnings
+        assert not [t for t in warnings if "в бланк уйдёт 0,00" in t], warnings
 
-        # Предупреждение не врёт: в бланке действительно 0,00.
-        assert "Стоимость услуг: 0,00 руб." in _document_text(Document(str(path)))
+        # Суммы посчитаны из итога: 269 741,00 → 221 099,18 + 48 641,82.
+        text = _document_text(Document(str(path)))
+        assert f"Стоимость услуг: {OOO_SUM_WO_VAT_TEXT} руб." in text
+        assert f"НДС 22%: {OOO_SUM_VAT_TEXT} руб." in text
+        assert f"Итого: {OOO_SUM_TOTAL_TEXT} руб." in text
     finally:
         _cleanup(path)
 
@@ -853,34 +851,25 @@ def _recognized_payload() -> dict:
     }
 
 
-def test_recognition_names_are_not_read_by_generator(generator, work_dir):
+def test_recognition_sums_are_read_by_generator(generator, work_dir):
     """
-    EXPECTED CURRENT BEHAVIOUR (не баг этого шага).
+    Стык «промпт → генератор» РАБОТАЕТ: sum_* читаются как ИТОГ заявки.
 
-    Стык «промпт → генератор» сейчас НЕ РАБОТАЕТ: распознавание кладёт суммы
-    в contract.sum_wo_vat / sum_vat / sum_total, а генератор читает
-    price_without_vat / price_input (LogistiksRusGenerator._price_without_vat).
-    Имена не совпадают — в бланк уходит 0,00, хотя суммы в данных есть.
-    Валидатор при этом ошибки не выдаёт: sum_* перечислены в его PRICE_FIELDS
-    (LogistiksRusValidator.PRICE_FIELDS), то есть стоимость «есть» — и
-    расхождение видно только в готовом документе.
-
-    TODO(3.1.C.B.1): этот стык чинится в 3.1.C.B.1 — data builder окна
-    «Логистикс Рус» маппит sum_total → price_without_vat (и разбирает
-    vat_rate строкой «22%»). Сейчас тест ловит регресс: как только маппинг
-    появится, ожидание 0,00 придётся заменить на реальную сумму.
+    Распознавание кладёт суммы в contract.sum_wo_vat / sum_vat / sum_total,
+    а генератор берёт главную величину — ИТОГ (`sum_total`), из которого
+    единым правилом (core/vat.py) вынимает базу без НДС и налог. Раньше
+    имена не совпадали, и в бланк уходило 0,00.
     """
     payload = _recognized_payload()
     assert ContractData.coerce(payload).contract["sum_total"] == RECOGNIZED_SUM_TOTAL
 
     replacements = generator.build_replacements(payload)
 
-    # Суммы из распознавания генератор не видит: он читает другие имена полей.
     assert "price_without_vat" not in payload["contract"]
-    assert replacements["sum_wo_vat"] == "0,00"
-    assert replacements["sum_vat"] == "0,00"
-    assert replacements["sum_total"] == "0,00"
-    # Ставка берётся из строки vat_rate — этот стык работает.
+    assert replacements["sum_wo_vat"] == OOO_SUM_WO_VAT_TEXT
+    assert replacements["sum_vat"] == OOO_SUM_VAT_TEXT
+    assert replacements["sum_total"] == OOO_SUM_TOTAL_TEXT
+    # Ставка берётся из строки vat_rate — этот стык тоже работает.
     assert replacements["vat_rate"] == "22%"
 
     # То же самое видно в готовом документе, а не только в карте замен.
@@ -888,9 +877,9 @@ def test_recognition_names_are_not_read_by_generator(generator, work_dir):
     try:
         text = _document_text(Document(str(path)))
 
-        assert "Стоимость услуг: 0,00 руб." in text
-        assert "Итого: 0,00 руб." in text
-        assert OOO_SUM_TOTAL_TEXT not in text
+        assert f"Стоимость услуг: {OOO_SUM_WO_VAT_TEXT} руб." in text
+        assert f"Итого: {OOO_SUM_TOTAL_TEXT} руб." in text
+        assert "0,00 руб." not in text
     finally:
         _cleanup(path)
 

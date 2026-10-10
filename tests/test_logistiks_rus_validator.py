@@ -32,7 +32,10 @@ from core.contracts.logistiks_rus.validator import LogistiksRusValidator
 from core.contracts.registry import ContractTypeRegistry
 
 #: Поля стоимости заявки — те же, что проверяет валидатор (см. PRICE_FIELDS).
+#: Главная величина — итог (price_with_vat / sum_total): налог считается
+#: «НДС в том числе» (core/vat.py).
 PRICE_FIELDS = (
+    "price_with_vat",
     "price_without_vat",
     "price_input",
     "sum_wo_vat",

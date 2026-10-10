@@ -75,6 +75,7 @@ from core.contracts.logistiks_rus.postprocess import (
 )
 from core.contracts.logistiks_rus.validator import LogistiksRusValidator
 from core.num_to_words import amount_to_words
+from core.vat import VAT_FREE, compute_vat, total_from_base, vat_rate_number
 
 logger = logging.getLogger("core.contract_generator")
 
@@ -595,6 +596,12 @@ class LogistiksRusGenerator(BaseContractGenerator):
         """
         Раздел 5 «Стоимость».
 
+        Суммы считаются «НДС В ТОМ ЧИСЛЕ» — единым правилом ядра
+        (core/vat.py::compute_vat), тем же, что у перевозки, аренды и
+        Формики: главная величина — ИТОГ заявки (`price_with_vat`), а база
+        без НДС и налог выводятся из него. Раньше главной была база: налог
+        считался СВЕРХУ и прибавлялся.
+
         Вариант ООО: три суммы — без НДС, НДС по ставке и итого, каждая
         цифрами и прописью. Вариант ИП: одна сумма «Без НДС», ставка НДС
         считается нулевой, а sum_wo_vat / sum_vat в карту замен НЕ кладутся:
@@ -608,18 +615,22 @@ class LogistiksRusGenerator(BaseContractGenerator):
         """
         carrier_type = "ИП" if is_ip else "ООО"
         vat_rate_num = self._resolve_vat_rate_num(contract)
-        price_wo_vat = self._price_without_vat(contract)
+        total = self._total_price(contract, vat_rate_num, is_ip)
+        if is_ip:
+            # У ИП налога нет: единственная сумма заявки — она же итог.
+            vat = compute_vat(total, VAT_FREE)
+        else:
+            vat = compute_vat(total, vat_rate_num)
+        base = vat["sum_wo_nds"]
+        vat_amount = vat["sum_nds"]
+        total = vat["sum_total"]
 
         if is_ip:
-            total = round(price_wo_vat, 2)
             replacements["sum_total"] = self._format_money(total)
             replacements["sum_total_words"] = amount_to_words(total)
         else:
-            vat_amount = round(price_wo_vat * vat_rate_num / 100, 2)
-            total = round(price_wo_vat + vat_amount, 2)
-
-            replacements["sum_wo_vat"] = self._format_money(price_wo_vat)
-            replacements["sum_wo_vat_words"] = amount_to_words(price_wo_vat)
+            replacements["sum_wo_vat"] = self._format_money(base)
+            replacements["sum_wo_vat_words"] = amount_to_words(base)
             replacements["sum_vat"] = self._format_money(vat_amount)
             replacements["sum_vat_words"] = amount_to_words(vat_amount)
             replacements["sum_total"] = self._format_money(total)
@@ -637,15 +648,16 @@ class LogistiksRusGenerator(BaseContractGenerator):
         )
 
         # Диагностика стыка «распознавание → генератор»: суммы в contract есть,
-        # а читать их генератору нечем (он читает price_without_vat /
-        # price_input) — значит, в бланк уйдёт 0,00. Проверяем по фактически
-        # посчитанной цене, а не только по наличию ключей: сообщение обещает
-        # именно 0,00 в бланке. Чинится в 3.1.C.B.1 (data builder).
+        # а читать их генератору нечем (главная величина — итог:
+        # price_with_vat / sum_total) — значит, в бланк уйдёт 0,00. Проверяем
+        # по фактически посчитанному итогу, а не только по наличию ключей:
+        # сообщение обещает именно 0,00 в бланке. Чинится в 3.1.C.B.1
+        # (data builder).
         recognized_sums = contract.get("sum_total") or contract.get("sum_wo_vat")
-        if recognized_sums and price_wo_vat <= 0:
+        if recognized_sums and total <= 0:
             logger.warning(
                 f"{TITLE} [%s]: в contract есть распознанные суммы (sum_*), "
-                "но price_without_vat / price_input отсутствуют — "
+                "но ни итога, ни цены в нём нет — "
                 "в бланк уйдёт 0,00. Маппинг — TODO 3.1.C.B.1",
                 carrier_type,
             )
@@ -818,37 +830,69 @@ class LogistiksRusGenerator(BaseContractGenerator):
     @classmethod
     def _resolve_vat_rate_num(cls, contract: Dict[str, Any]) -> float:
         """
-        Ставка НДС числом для расчёта сумм.
+        Ставка НДС числом для расчёта сумм — правило ядра (core/vat.py).
 
-        Источники: vat_rate_num → разбор строки vat_rate («22%») →
-        DEFAULT_VAT_RATE. Явный ноль уважается: 0 — это «без НДС», а не
-        отсутствие ставки.
+        Источники: явное `vat_rate_num`, затем строка `vat_rate` («22%»,
+        «Без НДС», «не облагается»). Явный ноль уважается: 0 — это «без
+        НДС», а не отсутствие ставки. Непонятное значение даёт ставку по
+        умолчанию: подставлять ноль вместо неизвестной ставки нельзя —
+        в заявке появилась бы нулевая ставка вместо ошибки в данных.
         """
         number = contract.get("vat_rate_num")
-
-        if number is None:
-            raw = contract.get("vat_rate")
-            if raw:
-                number = cls._to_float(str(raw).replace("%", "").strip(), default=None)
-
-        if number is None:
+        if number in (None, ""):
+            number = contract.get("vat_rate")
+        if number in (None, ""):
             number = cls.DEFAULT_VAT_RATE
-
-        return float(number)
+        return vat_rate_number(number)
 
     @classmethod
     def _price_without_vat(cls, contract: Dict[str, Any]) -> float:
         """
         Сумма без НДС (у ИП — единственная сумма заявки).
 
-        Источники: price_without_vat (поле вкладки «Стоимость»), затем
-        price_input — сумма из распознанного документа. Отсутствующие данные
+        Источники: `price_without_vat` (поле вкладки «Стоимость»), затем
+        `price_input` — сумма из распознанного документа. Отсутствующие данные
         дают 0.00: суммы не выдумываются.
         """
         price = cls._to_float(contract.get("price_without_vat"), default=0.0)
         if price <= 0:
             price = cls._to_float(contract.get("price_input"), default=0.0)
         return round(price, 2)
+
+    @classmethod
+    def _total_price(
+        cls, contract: Dict[str, Any], vat_rate_num: float, is_ip: bool = False
+    ) -> float:
+        """
+        ИТОГ заявки — главная величина («НДС в том числе»).
+
+        Порядок источников:
+
+          1. `price_with_vat` — итог, который называет оператор (его же
+             хранит колонка `price_with_vat` базы);
+          2. `sum_total` — распознанная сумма документа «Итого»;
+          3. база без НДС (`price_without_vat` / `price_input`): итог
+             восстанавливается прежней формулой — база × (1 + ставка/100).
+             Так читаются заявки, сохранённые до перехода на «НДС в том
+             числе»: в них итога нет, и пересборка даёт прежние суммы
+             до копейки.
+
+        У ИП налога нет вовсе: единственная сумма заявки — она же итог,
+        поэтому ставка к ней не применяется (в старых записях рядом с базой
+        мог лежать посчитанный «сверху» итог — он бы вырастил заявку).
+        """
+        if is_ip:
+            return cls._price_without_vat(contract)
+
+        for key in ("price_with_vat", "sum_total"):
+            value = cls._to_float(contract.get(key), default=0.0)
+            if value > 0:
+                return round(value, 2)
+
+        base = cls._price_without_vat(contract)
+        if base > 0:
+            return total_from_base(base, vat_rate_num)
+        return 0.0
 
     @staticmethod
     def _to_float(value: Any, default: float = 0.0) -> Optional[float]:
