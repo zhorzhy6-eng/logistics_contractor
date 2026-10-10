@@ -56,6 +56,10 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
     состав полей не менялись, адреса вынесены из «Общих сведений» отдельным
     блоком — так видно, что заполнять в первую очередь.
 
+    Блок «Тип перевозчика» СКРЫТ (не удалён): вид стороны и ставку НДС
+    выбирают на вкладке «Договор» полями «Форма» и «Ставка НДС». Значения
+    скрытых полей живые — их отдают `get_data()` и `apply_entity_type()`.
+
     Кнопки «🔎» из DaData: у поля ИНН — реквизиты организации
     (DadataFillMixin), у поля БИК — банк и корр. счёт (DadataBankMixin).
     Обе срабатывают только по явному нажатию, без автозаполнения при вводе.
@@ -102,8 +106,15 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
         self.recognition_panel.recognize_requested.connect(self._on_recognize_requested)
         layout.addWidget(self.recognition_panel)
 
-        # ── Блок 1. Тип перевозчика ──
+        # ── Блок 1. Тип перевозчика (СКРЫТ, не удалён) ──
+        # Вид стороны и ставку НДС оператор выбирает на вкладке «Договор»
+        # (поля «Форма» и «Ставка НДС»), поэтому здесь блок только мешал:
+        # два переключателя одного и того же расходились между собой.
+        # Поля оставлены в форме и заполняются как раньше: из них собираются
+        # `carrier_type` и `vat_rate` (get_data), их читают справочник,
+        # распознавание и вкладка «Договор» при загрузке перевозчика.
         type_group, type_layout = theme.section_box("Тип перевозчика")
+        self.type_group = type_group
 
         self.carrier_type = QComboBox()
         self.carrier_type.addItems([
@@ -123,6 +134,9 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
         type_layout.addRow(theme.make_label("Ставка НДС, %"), self.vat_rate)
 
         layout.addWidget(type_group)
+        # Скрывается ИМЕННО БЛОК целиком: так уходят и подписи «Тип» /
+        # «Ставка НДС, %», и сами поля, а значение в них остаётся живым.
+        type_group.setVisible(False)
 
         # ── Блок 2. Общие сведения ──
         general_group, general_layout = theme.section_box("Общие сведения")
@@ -329,11 +343,25 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
         return True
 
     def _carrier_type_title(self, entity_type: str) -> str:
-        """Название пункта списка «Тип» по виду стороны из справочника."""
+        """
+        Название пункта списка «Тип» по виду стороны из справочника.
+
+        Принимается и короткий вид: в базе вид хранится как «ООО» / «ИП»
+        (так его пишет карточка справочника), а в списке пункты называются
+        «ООО (с НДС)», «ИП с НДС», «ИП без НДС». Без этого «ИП» из базы не
+        находил пункт, и в скрытом поле оставалось прежнее «ООО (с НДС)» —
+        а вкладка «Договор» берёт форму именно отсюда. Ставка НДС коротким
+        видом не задаётся: из справочника её не видно, поэтому у ИП берётся
+        пункт «с НДС» — первый подходящий (ставку оператор выбирает сам).
+        """
         base = entity_type.split(" (")[0].strip().upper()
+        if not base:
+            return ""
+
         for index in range(self.carrier_type.count()):
             title = self.carrier_type.itemText(index)
-            if title.split(" (")[0].strip().upper() == base:
+            word = title.split(" (")[0].strip().upper()
+            if word == base or word.startswith(base + " "):
                 return title
         return ""
 
@@ -344,6 +372,10 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
         Числовые реквизиты (ИНН, КПП, ОГРН, счета, БИК) уходят ТОЛЬКО
         цифрами: пробелы и дефисы оператор ставит для читаемости, а в
         договор и в проверку «9 цифр» они попадать не должны.
+
+        Ключи `carrier_type` и `vat_rate` отдаются как раньше, хотя их поля
+        скрыты: по ним вкладка «Договор» выставляет форму и ставку, а
+        генератор выбирает бланк.
         """
         data = {
             "full_name": self.full_name.text().strip(),

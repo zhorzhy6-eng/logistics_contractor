@@ -153,16 +153,17 @@ def test_contract_tab_keeps_manual_values(qt_app):
     tab = ContractTab()
     tab.number.setText("23092026-77")
     tab.route.setText("Москва - Тверь")
-    tab.vat_rate.setText("20")
+    tab.entity_type.setCurrentText("ИП")
+    tab.vat_rate.setCurrentText("10%")
     tab.payment_days.setText("5")
-    tab.radio_without_vat.setChecked(True)
 
     # именно так выглядел старый баг: пустой dict → значения по умолчанию
     tab.fill_data({})
 
     assert tab.number.text() == "23092026-77"
     assert tab.route.text() == "Москва - Тверь"
-    assert tab.vat_rate.text() == "20"
+    assert tab.entity_type.currentText() == "ИП"
+    assert tab.vat_rate.currentText() == "10%"
     assert tab.payment_days.text() == "5"
 
 
