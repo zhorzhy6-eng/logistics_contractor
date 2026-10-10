@@ -606,7 +606,8 @@ def test_point_name_round_trip_through_database(tab, isolated_db):
 
 # ─────────────────────────────────────────────────────────────
 # Блок «Стоимость услуг»: форма, ставка НДС и расчётные поля
-# (шаг «Ставки НДС в UI + форма ООО/ИП»)
+# (шаг «Ставки НДС в UI + форма ООО/ИП»; обновлён шагом
+#  «Калькулятор „НДС в том числе“»)
 # ─────────────────────────────────────────────────────────────
 
 #: Порядок полей блока «Стоимость услуг» — как в задании шага.
@@ -614,16 +615,25 @@ EXPECTED_PRICE_ROWS = (
     "Форма",
     "Ставка НДС",
     "Стоимость *",
-    "Ставка НДС, %",
     "НДС",
-    "Стоимость (с НДС)",
+    "Стоимость без НДС",
     "Срок оплаты (дней) *",
     "Предоплата, ₽",
-    "Предоплата (%)",
+    "Предоплата, %",
 )
 
 #: Требуемый список ставок (с 01.01.2026, ФЗ от 28.11.2025 № 425-ФЗ).
 EXPECTED_VAT_RATES = ("Без НДС", "0%", "5%", "7%", "10%", "22%")
+
+#: Итог 250 000 и ожидаемые (база без НДС, НДС) для каждой ставки.
+VAT_INCLUSIVE_250K = (
+    ("22%", 204918.03, 45081.97),
+    ("10%", 227272.73, 22727.27),
+    ("7%", 233644.86, 16355.14),
+    ("5%", 238095.24, 11904.76),
+    ("0%", 250000.00, 0.00),
+    ("Без НДС", 250000.00, 0.00),
+)
 
 
 def _price_rows(tab: ContractTab):
@@ -671,36 +681,81 @@ def test_entity_type_list_is_ooo_and_ip(tab):
     assert tab.entity_type.currentText() == "ООО"
 
 
-def test_price_is_base_without_vat(tab):
-    """«Стоимость» — база без НДС: НДС и итог вкладка считает сама."""
+def test_price_is_the_contract_total(tab):
+    """«Стоимость» — ИТОГ договора: НДС вынимается из него, а не сверху."""
     tab.price_input.setValue(1000)
 
-    assert tab.vat_amount.text() == "220.00 ₽"
-    assert tab.price_with_vat.text() == "1220.00 ₽"
+    assert tab.vat_amount.text() == "180.33 ₽"
+    assert tab.price_without_vat.text() == "819.67 ₽"
+
+
+@pytest.mark.parametrize("rate, base, nds", VAT_INCLUSIVE_250K)
+def test_price_recalculates_for_every_rate(tab, rate, base, nds):
+    """250 000 ₽ — итог: база и налог для каждой из шести ставок."""
+    tab.vat_rate.setCurrentText(rate)
+    tab.price_input.setValue(250000)
+
+    assert tab.vat_amount.text() == f"{nds:.2f} ₽"
+    assert tab.price_without_vat.text() == f"{base:.2f} ₽"
+
+
+def test_price_recalculates_when_rate_changes(tab):
+    """Смена ставки пересчитывает расчётные поля от того же итога."""
+    tab.price_input.setValue(250000)
+
+    assert tab.vat_amount.text() == "45081.97 ₽"
+    assert tab.price_without_vat.text() == "204918.03 ₽"
+
+    tab.vat_rate.setCurrentText("10%")
+
+    assert tab.vat_amount.text() == "22727.27 ₽"
+    assert tab.price_without_vat.text() == "227272.73 ₽"
+
+
+def test_price_recalculates_when_cost_changes(tab):
+    """Смена стоимости пересчитывает расчётные поля по той же ставке."""
+    tab.vat_rate.setCurrentText("22%")
+    tab.price_input.setValue(250000)
+    assert tab.vat_amount.text() == "45081.97 ₽"
+
+    tab.price_input.setValue(122000)
+
+    assert tab.vat_amount.text() == "22000.00 ₽"
+    assert tab.price_without_vat.text() == "100000.00 ₽"
 
 
 def test_computed_fields_are_read_only(tab):
-    """Расчётные поля («Ставка НДС, %», «НДС», «Стоимость (с НДС)») не правятся."""
-    for field in (tab.vat_rate_display, tab.vat_amount, tab.price_with_vat):
+    """Расчётные поля («НДС», «Стоимость без НДС») оператор не правит."""
+    for field in (tab.vat_amount, tab.price_without_vat):
         assert field.isReadOnly() is True, field.text()
 
 
 def test_vat_amount_field_shows_the_tax(tab):
     """Поле «НДС» показывает сумму налога и обнуляется для «Без НДС»."""
     tab.price_input.setValue(1000)
-    assert tab.vat_amount.text() == "220.00 ₽"
+    assert tab.vat_amount.text() == "180.33 ₽"
 
     tab.vat_rate.setCurrentText("Без НДС")
 
     assert tab.vat_amount.text() == "0.00 ₽"
-    assert tab.price_with_vat.text() == "1000.00 ₽"
+    assert tab.price_without_vat.text() == "1000.00 ₽"
 
 
 def test_old_widgets_are_gone(tab):
-    """Прежних полей «Тип перевозчика» и радиокнопок «Тип стоимости» больше нет."""
+    """Прежних полей «Тип перевозчика», радиокнопок и дублей больше нет."""
     for name in ("carrier_type", "radio_with_vat", "radio_without_vat",
-                 "vat_type_label", "price_without_vat"):
+                 "vat_type_label", "vat_rate_display",
+                 "price_with_vat"):
         assert not hasattr(tab, name), name
+
+
+def test_no_duplicate_fields_in_price_block(tab):
+    """«Ставка НДС, %» и «Стоимость (с НДС)» убраны: это были дубли."""
+    rows = _price_rows(tab)
+
+    assert "Ставка НДС, %" not in rows
+    assert "Стоимость (с НДС)" not in rows
+    assert "Стоимость без НДС" in rows
 
 
 def test_no_radio_buttons_left_in_price_block(tab):

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Тесты ставок НДС (шаг «Ставки НДС в UI + форма ООО/ИП»).
+Тесты ставок НДС (шаг «Ставки НДС в UI + форма ООО/ИП»; суммы пересчитаны
+шагом «Калькулятор „НДС в том числе“»).
 
 Что проверяется:
 
   * список ставок — «Без НДС», «0%», «5%», «7%», «10%», «22%», по умолчанию
     базовая 22 %;
-  * пересчёт сумм от базы без НДС для КАЖДОЙ ставки (1000 ₽: 22 % → 220 и
-    1220, 5 % → 50 и 1050, «Без НДС» и «0%» → 0 и 1000);
+  * пересчёт сумм «НДС В ТОМ ЧИСЛЕ» для КАЖДОЙ ставки: оператор вводит ИТОГ
+    (1000 ₽: 22 % → база 819.67 и налог 180.33, «Без НДС» и «0%» → база 1000
+    и налог 0);
+  * обратный переход для старых записей: база → итог → выемка налога даёт
+    прежние суммы до копейки;
   * `compute_carrier_type`: форма и ставка → вид перевозчика для бланка;
   * загрузка старых записей: есть только `carrier_type` (без `entity_type`
     и `vat_rate`) — форма и ставка восстанавливаются из него;
@@ -31,8 +35,9 @@ import pytest
 
 from core.vat import (
     DEFAULT_VAT_RATE, ENTITY_TYPES, VAT_FREE, VAT_RATES,
-    compute_carrier_type, compute_vat, is_vat_free, normalize_entity_type,
-    normalize_vat_rate, split_carrier_type, vat_rate_label, vat_rate_number,
+    base_from_total, compute_carrier_type, compute_vat, is_vat_free,
+    normalize_entity_type, normalize_vat_rate, split_carrier_type,
+    total_from_base, vat_rate_label, vat_rate_number,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -40,14 +45,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 #: Требуемый набор и порядок пунктов списка ставок.
 EXPECTED_RATES = ("Без НДС", "0%", "5%", "7%", "10%", "22%")
 
-#: 1000 ₽ без НДС и ожидаемые (НДС, итог) для каждой ставки.
+#: ИТОГ 1000 ₽ и ожидаемые (база без НДС, НДС) для каждой ставки.
 VAT_CASES = (
-    (VAT_FREE, 0.0, 1000.0),
-    ("0%", 0.0, 1000.0),
-    ("5%", 50.0, 1050.0),
-    ("7%", 70.0, 1070.0),
-    ("10%", 100.0, 1100.0),
-    ("22%", 220.0, 1220.0),
+    (VAT_FREE, 1000.0, 0.0),
+    ("0%", 1000.0, 0.0),
+    ("5%", 952.38, 47.62),
+    ("7%", 934.58, 65.42),
+    ("10%", 909.09, 90.91),
+    ("22%", 819.67, 180.33),
+)
+
+#: ИТОГ 250 000 ₽ — числа из задания шага.
+VAT_CASES_250K = (
+    (VAT_FREE, 250000.0, 0.0),
+    ("0%", 250000.0, 0.0),
+    ("5%", 238095.24, 11904.76),
+    ("7%", 233644.86, 16355.14),
+    ("10%", 227272.73, 22727.27),
+    ("22%", 204918.03, 45081.97),
 )
 
 
@@ -67,10 +82,54 @@ def test_default_rate_is_base_22():
     assert DEFAULT_VAT_RATE in VAT_RATES
 
 
-@pytest.mark.parametrize("rate, nds, total", VAT_CASES)
-def test_compute_vat_for_every_rate(rate, nds, total):
-    """1000 ₽ без НДС: налог и итог для каждой ставки списка."""
-    assert compute_vat(1000, rate) == (nds, total)
+@pytest.mark.parametrize("rate, base, nds", VAT_CASES)
+def test_compute_vat_for_every_rate(rate, base, nds):
+    """1000 ₽ ИТОГА: база без НДС и налог для каждой ставки списка."""
+    result = compute_vat(1000, rate)
+
+    assert result == {"sum_total": 1000.0, "sum_wo_nds": base, "sum_nds": nds}
+    assert round(result["sum_wo_nds"] + result["sum_nds"], 2) == 1000.0
+
+
+@pytest.mark.parametrize("rate, base, nds", VAT_CASES_250K)
+def test_compute_vat_for_250k(rate, base, nds):
+    """250 000 ₽ ИТОГА — примеры из задания шага, для всех шести ставок."""
+    result = compute_vat(250000, rate)
+
+    assert result["sum_total"] == 250000.0
+    assert result["sum_wo_nds"] == base
+    assert result["sum_nds"] == nds
+
+
+def test_compute_vat_is_inclusive_not_additive():
+    """«НДС в том числе»: налог ВЫНИМАЕТСЯ из итога, а не прибавляется к нему."""
+    # Было «сверху»: 250 000 + 22 % = 305 000. Стало: 250 000 уже с налогом.
+    assert compute_vat(250000, "22%")["sum_total"] == 250000.0
+    assert compute_vat(250000, "22%")["sum_nds"] == 45081.97
+    assert compute_vat(250000, "22%")["sum_nds"] != 55000.0
+
+
+def test_base_from_total_and_back_are_consistent():
+    """База из итога и итог из базы — взаимно обратные переходы."""
+    for rate in ("5%", "7%", "10%", "22%"):
+        total = total_from_base(1000, rate)
+        assert base_from_total(total, rate) == 1000.0
+
+
+@pytest.mark.parametrize("rate", ["5%", "7%", "10%", "22%"])
+def test_old_record_sums_survive_the_new_formula(rate):
+    """
+    Старая запись (база 1000 ₽) пересобирается в ТЕ ЖЕ суммы.
+
+    Раньше налог считался сверху: 1000 → налог 220 → итог 1220. Теперь итог
+    восстанавливается из базы (1000 × 1.22) и налог вынимается обратно —
+    база и налог совпадают с напечатанными до шага.
+    """
+    total = total_from_base(1000, rate)
+    result = compute_vat(total, rate)
+
+    assert result["sum_wo_nds"] == 1000.0
+    assert result["sum_nds"] == round(total - 1000.0, 2)
 
 
 def test_vat_free_is_not_zero_rate():
@@ -215,14 +274,14 @@ def test_tab_defaults_are_ooo_and_22(tab):
     assert tab.vat_rate.currentText() == DEFAULT_VAT_RATE
 
 
-@pytest.mark.parametrize("rate, nds, total", VAT_CASES)
-def test_tab_recalculates_for_every_rate(tab, rate, nds, total):
-    """Смена ставки пересчитывает НДС и итог (база — 1000 ₽)."""
+@pytest.mark.parametrize("rate, base, nds", VAT_CASES)
+def test_tab_recalculates_for_every_rate(tab, rate, base, nds):
+    """Смена ставки пересчитывает базу и налог (итог — 1000 ₽)."""
     tab.price_input.setValue(1000)
     tab.vat_rate.setCurrentText(rate)
 
     assert tab.vat_amount.text() == f"{nds:.2f} ₽"
-    assert tab.price_with_vat.text() == f"{total:.2f} ₽"
+    assert tab.price_without_vat.text() == f"{base:.2f} ₽"
 
 
 def test_tab_get_data_carries_form_rate_and_computed_type(tab):
@@ -270,15 +329,40 @@ def test_tab_explicit_fields_win_over_legacy(tab):
     assert tab.get_data()["carrier_type"] == "ООО (с НДС)"
 
 
-def test_tab_stores_price_without_vat(tab):
-    """«Стоимость» — база без НДС: в данных она равна введённому числу."""
+def test_tab_stores_the_entered_total(tab):
+    """«Стоимость» — итог: в данных он как введён, а база и налог посчитаны."""
     tab.price_input.setValue(1000)
 
     data = tab.get_data()
 
-    assert data["price_without_vat"] == 1000.0
-    assert data["price_with_vat"] == 1220.0
-    assert data["vat_amount"] == 220.0
+    assert data["price_with_vat"] == 1000.0
+    assert data["price_without_vat"] == 819.67
+    assert data["vat_amount"] == 180.33
+    assert data["price_input"] == 1000.0
+
+
+def test_tab_restores_old_record_from_base(tab):
+    """
+    Старая запись (только база) → итог восстанавливается умножением.
+
+    Так выглядит договор, сохранённый до перехода на «НДС в том числе»:
+    база 1000 ₽ при ставке 22 % → итог 1220 ₽, и в форме он же — итогом.
+    """
+    tab.fill_data({"price_without_vat": 1000.0, "vat_rate": "22%"})
+
+    assert tab.price_input.value() == 1220.0
+    assert tab.get_data()["price_without_vat"] == 1000.0
+    assert tab.get_data()["vat_amount"] == 220.0
+
+
+def test_tab_takes_stored_total_as_is(tab):
+    """Есть сохранённый итог — он берётся как есть, база из него вынимается."""
+    tab.fill_data({"price_with_vat": 250000.0, "price_without_vat": 204918.03,
+                   "vat_rate": "22%"})
+
+    assert tab.price_input.value() == 250000.0
+    assert tab.get_data()["price_without_vat"] == 204918.03
+    assert tab.get_data()["vat_amount"] == 45081.97
 
 
 def test_tab_clear_returns_defaults(tab):
@@ -355,23 +439,48 @@ def test_template_follows_carrier_type(generator, carrier_type, rate, filename):
     ).endswith(filename)
 
 
-@pytest.mark.parametrize("rate, nds, total", VAT_CASES)
-def test_replacements_match_the_form(generator, rate, nds, total):
+@pytest.mark.parametrize("rate, base, nds", VAT_CASES)
+def test_replacements_match_the_form(generator, rate, base, nds):
     """Суммы в карте замен — те же, что считает вкладка для этой ставки."""
     payload = _payload(
         carrier_type=compute_carrier_type("ООО", rate), vat_rate=rate,
+        price_with_vat=1000.0, price_without_vat=base,
     )
 
     replacements = generator._build_replacements_map(payload)
 
-    assert replacements["sum_wo_nds"] == "1000.00"
-    assert replacements["sum_total"] == f"{total:.2f}"
+    assert replacements["sum_total"] == "1000.00"
+    assert replacements["sum_wo_nds"] == f"{base:.2f}"
     if nds:
         assert replacements["sum_nds"] == f"{nds:.2f}"
         assert replacements["vat_rate"] == rate
         assert replacements["is_vat_free"] is False
     else:
         assert replacements["sum_total"] == replacements["sum_wo_nds"]
+
+
+@pytest.mark.parametrize("rate, nds, total", [
+    ("5%", 50.0, 1050.0),
+    ("7%", 70.0, 1070.0),
+    ("10%", 100.0, 1100.0),
+    ("22%", 220.0, 1220.0),
+])
+def test_replacements_keep_old_record_sums(generator, rate, nds, total):
+    """
+    Старая запись (только база 1000 ₽) печатает ПРЕЖНИЕ суммы.
+
+    Это проверка совместимости: до шага налог считался сверху, и договоры
+    из базы напечатаны как «1000.00 без НДС, 220.00 НДС, 1220.00 итого».
+    Пересборка обязана дать ровно то же.
+    """
+    payload = _payload(carrier_type=compute_carrier_type("ООО", rate),
+                       vat_rate=rate)
+
+    replacements = generator._build_replacements_map(payload)
+
+    assert replacements["sum_wo_nds"] == "1000.00"
+    assert replacements["sum_nds"] == f"{nds:.2f}"
+    assert replacements["sum_total"] == f"{total:.2f}"
 
 
 def test_replacements_mark_vat_free_only_for_the_free_rate(generator):
