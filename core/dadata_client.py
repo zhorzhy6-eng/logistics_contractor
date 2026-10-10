@@ -91,6 +91,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from core.secrets_store import MISSING_DADATA_KEY_MESSAGE, get_dadata_key
+from core.text_normalize import normalize_position as _normalize_position
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,28 @@ def normalize_fms_code(code: str) -> str:
         return f"{digits[:3]}-{digits[3:]}"
 
     return text
+
+
+def normalize_position(value: Any) -> str:
+    """
+    Должность из DaData в общепринятый регистр (п. 2 задания шага).
+
+    DaData отдаёт `data.management.post` капсом («ГЕНЕРАЛЬНЫЙ ДИРЕКТОР»):
+    это их формат хранения, а не общепринятый. В документах принято
+    «Директор», «Генеральный директор».
+
+    Правила — в `core/text_normalize.normalize_position` (общие для
+    DaData, справочника и склонения должности, чтобы копии правил не
+    разъехались):
+
+      * пустое значение → пустая строка;
+      * капс длиннее 3 символов → заглавная у первого содержательного
+        слова, остальные строчные, служебные слова («и», «в», «на», «по»,
+        «с», «у», «для», «из», «о», «об») — строчными;
+      * капс длиной не больше 3 символов («ИП», «ООО», «АО») и любое
+        другое значение → как есть.
+    """
+    return _normalize_position(value)
 
 
 def _first_value(items: Any) -> str:
@@ -450,6 +473,13 @@ class DadataClient:
 
         Для ИП (data.type == "INDIVIDUAL") КПП не существует, должность —
         «Индивидуальный предприниматель», а ФИО собирается из data.fio.
+
+        Нормализуется ТОЛЬКО должность (`normalize_position`): у DaData она
+        лежит капсом («ГЕНЕРАЛЬНЫЙ ДИРЕКТОР»). Остальные поля отдаются как
+        есть — `full_name`, `short_name`, `director_name`, `legal_address`,
+        `bank_name`. Для наименования DaData авторитетный источник (данные
+        ЕГРЮЛ): «ООО "АВАТЭК"» капсом — это реестр, а не формат источника,
+        и «ООО "Аватэк"» было бы уже другим наименованием.
         """
         data = suggestion.get("data")
         if not isinstance(data, dict):
@@ -481,7 +511,10 @@ class DadataClient:
             if not isinstance(management, dict):
                 management = {}
             director_name = _clean(management.get("name"))
-            director_position = _clean(management.get("post"))
+            # DaData отдаёт должность капсом («ГЕНЕРАЛЬНЫЙ ДИРЕКТОР») — это
+            # формат источника, а не общепринятый. В договоре нужно
+            # «Генеральный директор»; сокращения («ИП», «ООО») не трогаются.
+            director_position = _normalize_position(management.get("post"))
             kpp = _clean(data.get("kpp"))
 
         address = data.get("address")
@@ -579,6 +612,8 @@ __all__: List[str] = [
     "find_bank_by_bic",
     "find_party_by_inn",
     "normalize_fms_code",
+    "normalize_position",
     "status_warning",
     "suggest_fms_unit",
+    "_normalize_position",
 ]

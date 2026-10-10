@@ -153,7 +153,9 @@ def test_legal_entity_all_fields_filled(post_stub):
     assert data["ogrn"] == "1157746078984"
     assert data["legal_address"] == ADDRESS
     assert data["director_name"] == DIRECTOR
-    assert data["director_position"] == "ГЕНЕРАЛЬНЫЙ ДИРЕКТОР"
+    # Должность — единственное поле, которое нормализуется: DaData отдаёт
+    # её капсом («ГЕНЕРАЛЬНЫЙ ДИРЕКТОР»), это формат источника, а не документа.
+    assert data["director_position"] == "Генеральный директор"
     assert data["entity_type"] == "LEGAL"
     assert data["status"] == "ACTIVE"
     assert data["phone"] == "+7 495 123-45-67"
@@ -175,6 +177,68 @@ def test_individual_entrepreneur_has_no_kpp(post_stub):
     assert data["short_name"] == data["full_name"]
     # У ИП тоже есть ОГРНИП — он должен попасть в поле ОГРН
     assert data["ogrn"] == "304500116000157"
+
+
+# ─────────────────────────────────────────────────────────────
+# Нормализация: только должность, наименования — как из DaData
+# ─────────────────────────────────────────────────────────────
+
+def test_organization_names_come_from_dadata_unchanged(post_stub):
+    """
+    Наименования отдаются КАК ИЗ DADATA — капс не трогается.
+
+    DaData для наименования авторитетный источник (данные ЕГРЮЛ): «АВАТЭК»
+    капсом — это запись реестра, а «Аватэк» было бы уже другим наименованием.
+    """
+    payload = legal_payload()
+    data_block = payload["suggestions"][0]["data"]
+    data_block["name"]["full_with_opf"] = \
+        'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "АВАТЭК"'
+    data_block["name"]["short_with_opf"] = 'ООО "АВАТЭК"'
+    data_block["address"]["value"] = "Г МОСКВА, УЛ ТЕСТОВАЯ, Д 1"
+    post_stub["response"] = FakeResponse(200, payload)
+
+    data = make_client().find_party_by_inn(INN_LEGAL)
+
+    assert data["full_name"] == \
+        'ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ "АВАТЭК"'
+    assert data["short_name"] == 'ООО "АВАТЭК"'
+    # Адрес и ФИО — тоже не наше дело: регистр в них значим.
+    assert data["legal_address"] == "Г МОСКВА, УЛ ТЕСТОВАЯ, Д 1"
+    assert data["director_name"] == DIRECTOR
+
+
+def test_director_position_is_normalized(post_stub):
+    """Должность — единственное поле, которое приводится к обычному регистру."""
+    post_stub["response"] = FakeResponse(200, legal_payload())
+
+    data = make_client().find_party_by_inn(INN_LEGAL)
+
+    assert data["director_position"] == "Генеральный директор"
+
+
+@pytest.mark.parametrize("post,expected", [
+    ("ДИРЕКТОР", "Директор"),
+    ("ГЕНЕРАЛЬНЫЙ ДИРЕКТОР", "Генеральный директор"),
+    ("ДИРЕКТОР ПО РАЗВИТИЮ", "Директор по развитию"),
+    ("ИП", "ИП"),
+    ("ООО", "ООО"),
+    ("Директор", "Директор"),
+    ("", ""),
+])
+def test_normalize_position_rules(post, expected):
+    """Правило регистра должности: капс → обычный, сокращения не трогаются."""
+    assert dadata_client.normalize_position(post) == expected
+
+
+def test_ip_director_position_constant_is_kept(post_stub):
+    """У ИП должность — константа IP_DIRECTOR_POSITION, нормализация её не трогает."""
+    post_stub["response"] = FakeResponse(200, individual_payload())
+
+    data = make_client().find_party_by_inn(INN_IP)
+
+    assert data["director_position"] == dadata_client.IP_DIRECTOR_POSITION
+    assert dadata_client.IP_DIRECTOR_POSITION == "Индивидуальный предприниматель"
 
 
 def test_request_uses_expected_url_headers_and_payload(post_stub):
