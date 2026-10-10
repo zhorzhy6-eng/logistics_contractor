@@ -4,10 +4,13 @@
 > шага. Архитектура — в [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **Обновлено:** 2026-10-10
-**HEAD:** `ac65b97` — «Стресс-тест: STATE.md — шаг закрыт (5836 passed, 0 failed,
-3 skipped)». HEAD кода этого шага появится своим коммитом (STATE.md идёт
-ОТДЕЛЬНЫМ коммитом после кода: хеш внутри файла не может равняться хешу
-коммита, в который он же входит — правка меняет хеш; см. `AGENTS.md` § 5.3).
+**HEAD:** `ab5c9a4` — «GigaChat Vision — основной путь для фото в UI»: код этого
+шага (`core/document_import_service.py`, `ui/document_import_dialog.py`,
+`core/import_entities.py`, `tests/test_import_vision_priority.py`).
+Перед шагом: `ac65b97` — STATE.md прошлого шага, `0e8c0b6` — его код.
+STATE.md идёт ОТДЕЛЬНЫМ коммитом ПОСЛЕ кода: хеш самого коммита STATE.md
+внутри файла стоять не может — правка меняет хеш (см. `AGENTS.md` § 5.3).
+Поэтому здесь HEAD КОДА шага, а не HEAD коммита этого файла.
 Актуальный HEAD — `git rev-parse HEAD`.
 **Тестов:** 5858 collected → 5855 passed, 0 failed, 3 skipped
 (ПОЛНЫЙ прогон 10.10.2026 четырьмя группами файлов:
