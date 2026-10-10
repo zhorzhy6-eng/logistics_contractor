@@ -4,11 +4,15 @@
 > шага. Архитектура — в [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **Обновлено:** 2026-10-10
-**HEAD:** `5167cb6` — STATE.md прошлого шага («Замер recall + прерываемая пауза +
-точная индикация»). Код ТЕКУЩЕГО шага («Нормализация DaData — откат
-наименований») — отдельный коммит ниже; здесь HEAD, на котором шаг начат.
+**HEAD:** `20998f2` — «Нормализация DaData: только должность + откат
+наименований»: код шага (`core/text_normalize.py`, `core/dadata_client.py`,
+`db/crud/organizations.py`, `core/contracts/ru_morphology.py`,
+`tools/normalize_organizations.py`, `tools/restore_organization_names.py`,
+`tests/test_normalize_organizations.py`, `tests/test_dadata_client.py`).
+Перед шагом: `5167cb6` — STATE.md прошлого шага.
 STATE.md идёт ОТДЕЛЬНЫМ коммитом ПОСЛЕ кода: хеш самого коммита STATE.md
 внутри файла стоять не может — правка меняет хеш (см. `AGENTS.md` § 5.3).
+Поэтому здесь HEAD КОДА шага, а не HEAD коммита этого файла.
 Актуальный HEAD — `git rev-parse HEAD`.
 **Тестов:** 5945 passed, 0 failed, 3 skipped (5948 collected)
 (ПОЛНЫЙ прогон 10.10.2026 четырьмя группами файлов, логи
