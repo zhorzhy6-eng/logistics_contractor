@@ -48,21 +48,29 @@ def test_price_fields_do_not_change_on_wheel_and_use_normal_style():
     app = QApplication.instance() or QApplication([])
     tab = ContractTab()
 
-    assert tab.carrier_type.styleSheet() == ""
+    # Поля стоимости: форма и ставка НДС — выпадающие списки, стоимость —
+    # спинбокс. Ни одно не должно менять значение от прокрутки формы.
+    assert tab.entity_type.styleSheet() == ""
     assert tab.vat_rate.styleSheet() == ""
-    original_type = tab.carrier_type.currentIndex()
+    original_type = tab.entity_type.currentIndex()
+    original_rate = tab.vat_rate.currentIndex()
     original_price = tab.price_input.value()
 
-    for field in (tab.carrier_type, tab.price_input):
+    for field in (tab.entity_type, tab.vat_rate, tab.price_input):
         event = wheel_event()
         field.wheelEvent(event)
         assert not event.isAccepted()
 
-    assert tab.carrier_type.currentIndex() == original_type
+    assert tab.entity_type.currentIndex() == original_type
+    assert tab.vat_rate.currentIndex() == original_rate
     assert tab.price_input.value() == original_price
 
-    tab.carrier_type.setCurrentIndex(2)
-    tab.carrier_type.setCurrentIndex(0)
+    # Переключение формы и ставки не навешивает на них «заблокированный» стиль.
+    tab.entity_type.setCurrentIndex(1)
+    tab.entity_type.setCurrentIndex(0)
+    tab.vat_rate.setCurrentIndex(tab.vat_rate.count() - 1)
+    tab.vat_rate.setCurrentIndex(0)
+    assert tab.entity_type.styleSheet() == ""
     assert tab.vat_rate.styleSheet() == ""
     assert app is not None
 

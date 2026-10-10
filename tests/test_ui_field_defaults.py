@@ -164,7 +164,7 @@ def test_dates_are_still_defaulted(contract):
 
 def test_vat_rate_is_still_22(contract):
     """Ставка НДС по умолчанию — 22 %."""
-    assert contract.vat_rate.text() == "22"
+    assert contract.vat_rate.currentText() == "22%"
 
 
 def test_payment_days_is_still_10(contract):
@@ -189,7 +189,7 @@ def test_clear_keeps_reasonable_defaults(contract):
     assert contract.date.date() == QDate.currentDate()
     assert contract.loading_plan_date.date() == QDate.currentDate()
     assert contract.unloading_plan_date.date() == QDate.currentDate().addDays(3)
-    assert contract.vat_rate.text() == "22"
+    assert contract.vat_rate.currentText() == "22%"
     assert contract.payment_days.text() == "10"
     assert contract.price_input.value() == 0
 

@@ -46,6 +46,12 @@ from core.contracts.ru_morphology import (
 )
 from core.dates import to_iso
 from core.num_to_words import amount_to_words
+from core.vat import (
+    compute_carrier_type,
+    is_vat_free,
+    vat_rate_label,
+    vat_rate_number,
+)
 
 logger = logging.getLogger("core.contract_generator")
 
@@ -61,10 +67,16 @@ class PerevozkaGenerator(BaseContractGenerator):
     """
     Договор-заявка на перевозку.
 
-    Выбирает шаблон по типу перевозчика:
+    Выбирает шаблон по виду перевозчика:
       - ООО (с НДС)     → templates/shablon_ooo.docx
+      - ООО (без НДС)   → templates/shablon_ooo.docx (условный блок п. 4.1)
       - ИП с НДС        → templates/shablon_ip_with_vat.docx
       - ИП без НДС      → templates/shablon_ip_without_vat.docx
+
+    Вид перевозчика приходит из вкладки «Договор» (там он вычисляется из
+    формы и ставки НДС, см. core/vat.py). Если поля нет — выводится здесь
+    из `entity_type` и `vat_rate`: так работают данные распознавания,
+    справочников и старых записей.
 
     Поддерживает несколько мест погрузки и выгрузки (до 10), привязку
     каждой машины к точке через loading_index / unloading_index, таблицы
@@ -75,7 +87,10 @@ class PerevozkaGenerator(BaseContractGenerator):
     CONTRACT_TYPE = ContractType.PEREVOZKA.value
 
     TEMPLATE_NAMES = {
+        # У ООО бланк ОДИН: «без НДС» отличается не бланком, а условным
+        # блоком в п. 4.1 ({{%p if is_vat_free %}}).
         "ООО": "shablon_ooo.docx",
+        "ООО (без НДС)": "shablon_ooo.docx",
         "ИП с НДС": "shablon_ip_with_vat.docx",
         "ИП без НДС": "shablon_ip_without_vat.docx",
     }
@@ -126,12 +141,40 @@ class PerevozkaGenerator(BaseContractGenerator):
     # ─────────────────────────────────────────────────────────
 
     def _get_template_path(self, carrier_type: str) -> str:
-        if "ИП без НДС" in carrier_type:
-            return self.templates["ИП без НДС"]
-        elif "ИП с НДС" in carrier_type:
-            return self.templates["ИП с НДС"]
-        else:
-            return self.templates["ООО"]
+        """
+        Бланк по виду перевозчика.
+
+        У ИП бланков два — с НДС и без НДС (в них по-разному написан п. 4.1).
+        У ООО бланк один: ветвь «без НДС» выбирается внутри него условным
+        блоком `is_vat_free`.
+        """
+        text = str(carrier_type or "")
+        if "ИП" in text:
+            return self.templates["ИП без НДС" if "без НДС" in text else "ИП с НДС"]
+        return self.templates["ООО"]
+
+    @staticmethod
+    def _carrier_type_of(data: ContractData) -> str:
+        """
+        Вид перевозчика для бланка и замен.
+
+        Порядок: явное поле `carrier_type` (его ставит вкладка «Договор» и
+        старые записи) → вывод из формы стороны и ставки НДС → значение по
+        умолчанию. Вывод нужен данным распознавания и справочников: там
+        `carrier_type` не приходит, зато есть `entity_type` и `vat_rate`.
+        """
+        contract = data.contract
+        carrier = data.carrier
+
+        explicit = contract.get("carrier_type") or carrier.get("carrier_type")
+        if explicit:
+            return str(explicit)
+
+        computed = compute_carrier_type(
+            contract.get("entity_type") or carrier.get("entity_type"),
+            contract.get("vat_rate"),
+        )
+        return computed or "ООО (с НДС)"
 
     # ─────────────────────────────────────────────────────────
     # КОНВЕЙЕР ПОСТОБРАБОТКИ
@@ -856,6 +899,24 @@ class PerevozkaGenerator(BaseContractGenerator):
         return form + " "
 
     @staticmethod
+    def _carrier_type_from_party(
+        contract: Dict[str, Any], carrier: Dict[str, Any]
+    ) -> str:
+        """
+        Вид перевозчика из формы стороны и ставки НДС — или пустая строка.
+
+        Так приходят данные распознавания, справочника и старых записей:
+        отдельного поля `carrier_type` в них нет, зато есть `entity_type`
+        и/или `vat_rate`. Пустая строка означает «в данных нет ни того, ни
+        другого» — тогда вызывающий код берёт своё значение по умолчанию.
+        """
+        entity_type = contract.get("entity_type") or carrier.get("entity_type")
+        vat_rate = contract.get("vat_rate")
+        if not entity_type and not vat_rate:
+            return ""
+        return compute_carrier_type(entity_type, vat_rate)
+
+    @staticmethod
     def _resolve_carrier_type(carrier_type: Any, is_carrier_ip_hint: bool) -> str:
         """
         Вид перевозчика: «ООО (с НДС)» / «ИП с НДС» / «ИП без НДС».
@@ -980,18 +1041,28 @@ class PerevozkaGenerator(BaseContractGenerator):
 
         carrier_type_ui = self._resolve_carrier_type(
             contract.get("carrier_type")
+            or self._carrier_type_from_party(contract, carrier)
             or carrier.get("carrier_type")
             or ("ИП с НДС" if is_carrier_ip_hint else "ООО (с НДС)"),
             is_carrier_ip_hint,
         )
 
+        # ── Ставка НДС ──
+        # «Без НДС» — не ставка, а её отсутствие: в бланке она печатается
+        # словами «НДС не облагается» (условный блок is_vat_free в п. 4.1),
+        # числом такая ставка не выражается, поэтому в расчёт идёт ноль.
+        # «0%» — ставка ЕСТЬ (экспорт, международные перевозки), налог при
+        # ней нулевой, и в договоре печатается «в настоящее время 0%».
+        vat_rate_raw = contract.get("vat_rate")
+        vat_rate_is_free = is_vat_free(vat_rate_raw)
         vat_rate_num = contract.get("vat_rate_num")
-        if vat_rate_num is None:
-            vat_rate_str = contract.get("vat_rate", "22%")
+        if vat_rate_num is None or vat_rate_is_free:
+            vat_rate_num = vat_rate_number(vat_rate_raw)
+        else:
             try:
-                vat_rate_num = float(str(vat_rate_str).replace("%", "").strip())
-            except (ValueError, TypeError):
-                vat_rate_num = 22.0
+                vat_rate_num = float(vat_rate_num)
+            except (TypeError, ValueError):
+                vat_rate_num = vat_rate_number(vat_rate_raw)
 
         is_ip_type = "ИП" in carrier_type_ui
         # Вид ООО/ИП считается по ФАКТУ (приставка в наименовании или
@@ -1003,6 +1074,10 @@ class PerevozkaGenerator(BaseContractGenerator):
         is_ooo = not is_carrier_ip
         is_ip_with_vat = is_carrier_ip and "без НДС" not in carrier_type_ui
         is_ip_without_vat = is_carrier_ip and "без НДС" in carrier_type_ui
+
+        # Налогом не облагается: «Без НДС» в ставке ЛИБО вид «ИП без НДС»
+        # (так помечены старые записи, где ставку не выбирали отдельно).
+        is_vat_free_flag = vat_rate_is_free or is_ip_without_vat
 
         carrier_gender = detect_gender(carrier_full_raw)
         # Приставку «Индивидуальный предприниматель» печатает сам бланк
@@ -1037,8 +1112,6 @@ class PerevozkaGenerator(BaseContractGenerator):
             director_position_short = carrier_position
             kpp = self._digits_only(carrier.get("kpp"))
             ogrn_label = "ОГРН"
-            nds_status_text = ("Перевозчик подтверждает, что применяет общую систему "
-                               "налогообложения и является плательщиком НДС.")
         else:
             legal_form = "Индивидуальный предприниматель"
             pronoun = pronoun_by_gender(carrier_gender)
@@ -1046,13 +1119,19 @@ class PerevozkaGenerator(BaseContractGenerator):
             director_position_short = "Индивидуальный предприниматель"
             kpp = ""
             ogrn_label = "ОГРНИП"
-            if is_ip_without_vat:
-                vat_rate_num = 0.0
-                nds_status_text = ("Перевозчик подтверждает, что применяет упрощённую "
-                                   "систему налогообложения и не является плательщиком НДС.")
-            else:
-                nds_status_text = ("Перевозчик подтверждает, что применяет общую систему "
-                                   "налогообложения и является плательщиком НДС.")
+
+        # ── Оговорка о налоге (п. 4.2) ──
+        # Она обязана совпадать с п. 4.1: «НДС не облагается» в стоимости и
+        # «является плательщиком НДС» в статусе — противоречие в одном
+        # договоре. Поэтому признак один — is_vat_free_flag, а не форма:
+        # у ООО на УСН (доход до 20 млн ₽) налога тоже нет.
+        if is_vat_free_flag:
+            vat_rate_num = 0.0
+            nds_status_text = ("Перевозчик подтверждает, что применяет упрощённую "
+                               "систему налогообложения и не является плательщиком НДС.")
+        else:
+            nds_status_text = ("Перевозчик подтверждает, что применяет общую систему "
+                               "налогообложения и является плательщиком НДС.")
 
         logger.info(
             f"ContractGenerator: тип={carrier_type_ui}, "
@@ -1460,7 +1539,11 @@ class PerevozkaGenerator(BaseContractGenerator):
         # ── Стоимость и НДС ──
         price_without_vat = float(contract.get("price_without_vat", 0) or 0)
 
-        if is_ip_without_vat or vat_rate_num <= 0:
+        # Ветвь «НДС не облагается» — только для ставки «Без НДС» и вида
+        # «ИП без НДС». Ставка «0%» (экспорт) налогом не облагается по
+        # сумме, но ставкой остаётся: в договоре печатается «в настоящее
+        # время 0%» и нулевой НДС, а не «НДС не облагается».
+        if is_vat_free_flag:
             nds_amount = 0.0
             total_amount = price_without_vat
             replacements["sum_wo_nds"] = f"{price_without_vat:.2f}"
@@ -1501,7 +1584,12 @@ class PerevozkaGenerator(BaseContractGenerator):
         replacements["price_with_vat_words"] = replacements["sum_total_words"]
 
         replacements["nds_status_text"] = nds_status_text
-        replacements["vat_rate"] = f"{vat_rate_num:.0f}%"
+        # В бланк уходит выбранная ставка как есть: «22%», «10%», «7%»,
+        # «5%», «0%». Для «Без НДС» ключ не печатается — в п. 4.1 работает
+        # условный блок is_vat_free.
+        replacements["vat_rate"] = vat_rate_label(vat_rate_raw)
+        # Флаг условного блока п. 4.1: True — печатается «НДС не облагается».
+        replacements["is_vat_free"] = bool(is_vat_free_flag)
 
         # ── Предоплата: разбивка оплаты на предоплату и окончательный расчёт ──
         # База процента — итог договора (`total_amount`, сумма с НДС):

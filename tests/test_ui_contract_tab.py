@@ -602,3 +602,114 @@ def test_point_name_round_trip_through_database(tab, isolated_db):
         )
     finally:
         restored.deleteLater()
+
+
+# ─────────────────────────────────────────────────────────────
+# Блок «Стоимость услуг»: форма, ставка НДС и расчётные поля
+# (шаг «Ставки НДС в UI + форма ООО/ИП»)
+# ─────────────────────────────────────────────────────────────
+
+#: Порядок полей блока «Стоимость услуг» — как в задании шага.
+EXPECTED_PRICE_ROWS = (
+    "Форма",
+    "Ставка НДС",
+    "Стоимость *",
+    "Ставка НДС, %",
+    "НДС",
+    "Стоимость (с НДС)",
+    "Срок оплаты (дней) *",
+    "Предоплата, ₽",
+    "Предоплата (%)",
+)
+
+#: Требуемый список ставок (с 01.01.2026, ФЗ от 28.11.2025 № 425-ФЗ).
+EXPECTED_VAT_RATES = ("Без НДС", "0%", "5%", "7%", "10%", "22%")
+
+
+def _price_rows(tab: ContractTab):
+    """Подписи полей блока «Стоимость услуг» по порядку."""
+    from PyQt5.QtWidgets import QFormLayout, QGroupBox
+
+    group = next(
+        box for box in tab.findChildren(QGroupBox)
+        if box.title() == "Стоимость услуг"
+    )
+    layout = group.layout()
+    assert isinstance(layout, QFormLayout)
+
+    labels = []
+    for row in range(layout.rowCount()):
+        item = layout.itemAt(row, QFormLayout.LabelRole)
+        widget = layout.itemAt(row, QFormLayout.FieldRole)
+        if widget is None or widget.widget() is None:
+            # Строка без поля (например, layout радиокнопок) — это уже не
+            # форма из одних полей: пропускать её нельзя.
+            labels.append("")
+            continue
+        labels.append(item.widget().text() if item and item.widget() else "")
+    return [text for text in labels if text]
+
+
+def test_price_block_field_order(tab):
+    """Порядок полей блока — форма, ставка, стоимость, расчётные, оплата."""
+    assert tuple(_price_rows(tab)) == EXPECTED_PRICE_ROWS
+
+
+def test_vat_rate_list_is_the_new_one(tab):
+    """Список ставок — шесть значений нового закона, по умолчанию 22 %."""
+    rates = [tab.vat_rate.itemText(i) for i in range(tab.vat_rate.count())]
+
+    assert tuple(rates) == EXPECTED_VAT_RATES
+    assert tab.vat_rate.currentText() == "22%"
+
+
+def test_entity_type_list_is_ooo_and_ip(tab):
+    """Форма — ровно два значения, по умолчанию ООО."""
+    types = [tab.entity_type.itemText(i) for i in range(tab.entity_type.count())]
+
+    assert tuple(types) == ("ООО", "ИП")
+    assert tab.entity_type.currentText() == "ООО"
+
+
+def test_price_is_base_without_vat(tab):
+    """«Стоимость» — база без НДС: НДС и итог вкладка считает сама."""
+    tab.price_input.setValue(1000)
+
+    assert tab.vat_amount.text() == "220.00 ₽"
+    assert tab.price_with_vat.text() == "1220.00 ₽"
+
+
+def test_computed_fields_are_read_only(tab):
+    """Расчётные поля («Ставка НДС, %», «НДС», «Стоимость (с НДС)») не правятся."""
+    for field in (tab.vat_rate_display, tab.vat_amount, tab.price_with_vat):
+        assert field.isReadOnly() is True, field.text()
+
+
+def test_vat_amount_field_shows_the_tax(tab):
+    """Поле «НДС» показывает сумму налога и обнуляется для «Без НДС»."""
+    tab.price_input.setValue(1000)
+    assert tab.vat_amount.text() == "220.00 ₽"
+
+    tab.vat_rate.setCurrentText("Без НДС")
+
+    assert tab.vat_amount.text() == "0.00 ₽"
+    assert tab.price_with_vat.text() == "1000.00 ₽"
+
+
+def test_old_widgets_are_gone(tab):
+    """Прежних полей «Тип перевозчика» и радиокнопок «Тип стоимости» больше нет."""
+    for name in ("carrier_type", "radio_with_vat", "radio_without_vat",
+                 "vat_type_label", "price_without_vat"):
+        assert not hasattr(tab, name), name
+
+
+def test_no_radio_buttons_left_in_price_block(tab):
+    """В блоке стоимости не осталось радиокнопок (переключатель убран)."""
+    from PyQt5.QtWidgets import QGroupBox, QRadioButton
+
+    group = next(
+        box for box in tab.findChildren(QGroupBox)
+        if box.title() == "Стоимость услуг"
+    )
+
+    assert group.findChildren(QRadioButton) == []

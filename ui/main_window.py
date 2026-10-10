@@ -36,6 +36,7 @@ from core.secrets_store import MISSING_KEY_MESSAGE
 from core.settings_service import get_settings_service
 from core.trace import filled_fields_summary
 from core.validator import ValidationReport
+from core.vat import split_carrier_type
 
 from ui import theme
 from ui import system_theme
@@ -1746,6 +1747,7 @@ class MainWindow(QMainWindow):
                     if carrier:
                         self.carrier_tab.clear()
                         self.carrier_tab.fill_data(carrier)
+                        self._sync_contract_form_type()
                         logger.info(
                             f"Перевозчик подтянут из водителя: ID={carrier_id}"
                         )
@@ -1802,6 +1804,7 @@ class MainWindow(QMainWindow):
             self.carrier_tab.clear()
             self.carrier_tab.fill_data(carrier)
             self._apply_party_type(self.carrier_tab, carrier)
+            self._sync_contract_form_type()
             self.tabs.setCurrentWidget(self.carrier_tab)
             self.statusBar().showMessage(
                 f"Загружен перевозчик: {carrier.get('full_name', '')}", 5000
@@ -1842,6 +1845,22 @@ class MainWindow(QMainWindow):
 
         setter(entity_type)
         logger.info(f"Вид стороны из справочника: {entity_type}")
+
+    def _sync_contract_form_type(self) -> None:
+        """
+        Форма перевозчика с вкладки «Перевозчик» — в поле «Форма» договора.
+
+        Бланк договора выбирается по вкладке «Договор» (поля «Форма» и
+        «Ставка НДС»), поэтому её «Форма» должна совпадать с видом
+        загруженного перевозчика: у ИП из справочника оператор должен видеть
+        ИП, а не оставшееся от прошлой загрузки ООО. Ставка НДС не трогается
+        — в справочнике её нет, а угадывать её по виду стороны нельзя.
+        """
+        entity_type, _rate = split_carrier_type(
+            self.carrier_tab.carrier_type.currentText()
+        )
+        if entity_type:
+            self.contract_tab.apply_entity_type(entity_type)
 
     @staticmethod
     def _party_entity_type(tab, record: Dict[str, Any]) -> str:

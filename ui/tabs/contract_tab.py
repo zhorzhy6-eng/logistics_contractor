@@ -3,8 +3,8 @@
 """
 Вкладка «Условия договора».
 Содержит:
-  - тип перевозчика (единый источник истины)
-  - ставку НДС
+  - форму перевозчика (ООО / ИП) и ставку НДС — из них вычисляется
+    «тип перевозчика», по которому выбирается бланк
   - маршрут
   - места погрузки/выгрузки (таблицы «Наименование | Адрес | Дата | Время»)
   - ПЛАНОВЫЕ даты подачи ТС и завершения выгрузки (для шаблона)
@@ -27,12 +27,17 @@ from typing import Dict, Any, List, Optional
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QLineEdit,
     QDateEdit, QTimeEdit, QDoubleSpinBox, QComboBox, QTextEdit,
-    QLabel, QGroupBox, QHBoxLayout, QScrollArea, QRadioButton,
+    QLabel, QGroupBox, QHBoxLayout, QScrollArea,
     QMessageBox, QTableWidget, QTableWidgetItem,
     QAbstractItemView,
 )
 from PyQt5.QtCore import QDate, QTime, QTimer, pyqtSignal, Qt
 
+from core.vat import (
+    DEFAULT_ENTITY_TYPE, DEFAULT_VAT_RATE, ENTITY_TYPES, VAT_RATES,
+    compute_carrier_type, compute_vat, normalize_entity_type,
+    normalize_vat_rate, split_carrier_type, vat_rate_number,
+)
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
 from ui.widgets.table_helpers import (
@@ -277,27 +282,30 @@ class ContractTab(TabMixin, QWidget):
         # ═══════════════════════════════════════════════════════════
         # ── СТОИМОСТЬ УСЛУГ ──
         # ═══════════════════════════════════════════════════════════
+        # Форма стороны и ставка НДС выбираются ЗДЕСЬ (шаг «Ставки НДС»):
+        # раньше форма была переключателем «Тип перевозчика», а «с НДС или
+        # без» — радиокнопками, и это расходилось с видом перевозчика из
+        # справочника. Теперь форма и ставка — один источник истины, а
+        # `carrier_type` вкладка вычисляет из них (core/vat.py).
         price_group = QGroupBox("Стоимость услуг")
         price_layout = QFormLayout(price_group)
 
-        self.carrier_type = NoWheelComboBox()
-        self.carrier_type.addItems([
-            "ООО (с НДС)",
-            "ИП с НДС",
-            "ИП без НДС",
-        ])
-        self.carrier_type.setCurrentIndex(0)
-        price_layout.addRow("Тип перевозчика *", self.carrier_type)
+        self.entity_type = NoWheelComboBox()
+        self.entity_type.addItems(list(ENTITY_TYPES))
+        self.entity_type.setCurrentText(DEFAULT_ENTITY_TYPE)
+        self.entity_type.setToolTip(
+            "Форма перевозчика: ООО или ИП. От неё зависит бланк договора."
+        )
+        price_layout.addRow("Форма", self.entity_type)
 
-        self.vat_type_label = QLabel("Тип стоимости:")
-        self.vat_type_layout = QHBoxLayout()
-        self.radio_with_vat = QRadioButton("С НДС")
-        self.radio_without_vat = QRadioButton("Без НДС")
-        self.radio_without_vat.setChecked(True)
-        self.vat_type_layout.addWidget(self.radio_with_vat)
-        self.vat_type_layout.addWidget(self.radio_without_vat)
-        self.vat_type_layout.addStretch()
-        price_layout.addRow(self.vat_type_label, self.vat_type_layout)
+        self.vat_rate = NoWheelComboBox()
+        self.vat_rate.addItems(list(VAT_RATES))
+        self.vat_rate.setCurrentText(DEFAULT_VAT_RATE)
+        self.vat_rate.setToolTip(
+            "Ставка НДС. «Без НДС» — перевозчик не плательщик налога "
+            "(УСН до 20 млн ₽), «0%» — ставка есть, налог нулевой."
+        )
+        price_layout.addRow("Ставка НДС", self.vat_rate)
 
         self.price_input = NoWheelDoubleSpinBox()
         self.price_input.setRange(0, 100000000)
@@ -307,28 +315,32 @@ class ContractTab(TabMixin, QWidget):
         # стоимости скажет валидатор. Раньше здесь стояло 400 000 ₽ —
         # число выглядело как введённое оператором (ШАГ FIX-6, часть C).
         self.price_input.setValue(0)
+        self.price_input.setToolTip(
+            "Стоимость услуг без НДС. НДС и итог вкладка считает сама."
+        )
         price_layout.addRow("Стоимость *", self.price_input)
 
-        self.vat_rate = QLineEdit()
-        self.vat_rate.setPlaceholderText("22")
-        self.vat_rate.setMaxLength(2)
-        self.vat_rate.setText("22")
-        price_layout.addRow("Ставка НДС (%)", self.vat_rate)
-
-        self.price_with_vat = QLineEdit()
-        self.price_with_vat.setReadOnly(True)
+        # ── Расчётные поля: только для чтения ──
         # Оформление «только для чтения» берётся из темы (ui/theme.py):
         # локальный стиль нужен потому, что Qt не пересчитывает QSS при
         # изменении свойства readOnly у уже отрисованного поля.
+        self.vat_rate_display = QLineEdit()
+        self.vat_rate_display.setReadOnly(True)
+        self.vat_rate_display.setProperty("readonlyField", True)
+        self.vat_rate_display.setStyleSheet(theme.readonly_field_qss())
+        price_layout.addRow("Ставка НДС, %", self.vat_rate_display)
+
+        self.vat_amount = QLineEdit()
+        self.vat_amount.setReadOnly(True)
+        self.vat_amount.setProperty("readonlyField", True)
+        self.vat_amount.setStyleSheet(theme.readonly_field_qss())
+        price_layout.addRow("НДС", self.vat_amount)
+
+        self.price_with_vat = QLineEdit()
+        self.price_with_vat.setReadOnly(True)
         self.price_with_vat.setProperty("readonlyField", True)
         self.price_with_vat.setStyleSheet(theme.readonly_field_qss())
         price_layout.addRow("Стоимость (с НДС)", self.price_with_vat)
-
-        self.price_without_vat = QLineEdit()
-        self.price_without_vat.setReadOnly(True)
-        self.price_without_vat.setProperty("readonlyField", True)
-        self.price_without_vat.setStyleSheet(theme.readonly_field_qss())
-        price_layout.addRow("Стоимость (без НДС)", self.price_without_vat)
 
         self.payment_days = QLineEdit()
         self.payment_days.setPlaceholderText("10")
@@ -392,9 +404,7 @@ class ContractTab(TabMixin, QWidget):
 
         # ── Сигналы расчёта ──
         self.price_input.valueChanged.connect(self._calculate_price)
-        self.vat_rate.textChanged.connect(self._calculate_price)
-        self.radio_with_vat.toggled.connect(self._calculate_price)
-        self.radio_without_vat.toggled.connect(self._calculate_price)
+        self.vat_rate.currentIndexChanged.connect(self._on_vat_rate_changed)
         # Предоплата двусторонняя: ввод суммы считает процент, ввод процента
         # считает сумму. Слоты защищены флагом _prepayment_syncing, иначе
         # setValue одного поля вызывал бы слот второго и так по кругу.
@@ -402,9 +412,6 @@ class ContractTab(TabMixin, QWidget):
         self.prepayment_percent.valueChanged.connect(
             self._on_prepayment_percent_changed
         )
-
-        # ── Автоподстановка ставки НДС ──
-        self.carrier_type.currentIndexChanged.connect(self._on_carrier_type_changed)
 
         # ── Сигналы изменения таблиц погрузок/выгрузок ──
         self.loadings_table.itemChanged.connect(self._on_table_item_changed)
@@ -598,29 +605,78 @@ class ContractTab(TabMixin, QWidget):
         return self._read_table(self.unloadings_table)
 
     # ─────────────────────────────────────────────────────────
-    # Тип перевозчика → автоподстановка ставки НДС
+    # Форма и ставка НДС → пересчёт стоимости
     # ─────────────────────────────────────────────────────────
 
-    def _on_carrier_type_changed(self, index: int) -> None:
-        """При выборе типа перевозчика автоподставляет ставку НДС."""
-        carrier_type = self.carrier_type.currentText()
+    def current_vat_rate(self) -> str:
+        """Ставка НДС из списка: «22%», «10%», «5%», «7%», «0%», «Без НДС»."""
+        return self.vat_rate.currentText()
 
-        if "без НДС" in carrier_type:
-            self.vat_rate.setText("0")
-            self.vat_rate.setReadOnly(True)
-            # Заблокированное поле оформляет тема (цвета — из активной палитры)
-            self.vat_rate.setProperty("readonlyField", True)
-            self.vat_rate.setStyleSheet(theme.readonly_field_qss())
-            self.radio_without_vat.setChecked(True)
-        else:
-            self.vat_rate.setReadOnly(False)
-            self.vat_rate.setProperty("readonlyField", False)
-            self.vat_rate.setStyleSheet("")
-            if not self.vat_rate.text().strip() or self.vat_rate.text().strip() == "0":
-                self.vat_rate.setText("22")
+    def current_vat_rate_number(self) -> float:
+        """Ставка НДС числом: «22%» → 22.0, «Без НДС» и «0%» → 0.0."""
+        return vat_rate_number(self.current_vat_rate())
 
+    def current_entity_type(self) -> str:
+        """Форма перевозчика: «ООО» или «ИП»."""
+        return self.entity_type.currentText()
+
+    def computed_carrier_type(self) -> str:
+        """
+        Вид перевозчика — из формы и ставки (его читает генератор).
+
+        Отдельным методом, а не строкой в get_data(): то же значение нужно
+        и при загрузке записи, и в тестах стыка «вкладка → бланк».
+        """
+        return compute_carrier_type(
+            self.current_entity_type(), self.current_vat_rate()
+        )
+
+    def _on_vat_rate_changed(self, index: int) -> None:
+        """Смена ставки НДС: суммы пересчитываются, в лог — только ставка."""
         self._calculate_price()
-        logger.info(f"Тип перевозчика: {carrier_type}, ставка НДС: {self.vat_rate.text()}%")
+        logger.info(f"Ставка НДС: {self.current_vat_rate()}")
+
+    def apply_entity_type(self, entity_type: Any) -> bool:
+        """
+        Форма перевозчика из справочника — в поле «Форма».
+
+        Нужна при загрузке перевозчика из базы: по форме выбирается бланк
+        (ООО или ИП). Ставка НДС не трогается — в справочнике её нет, а
+        угадывать её по виду стороны нельзя: ООО бывает и на ОСН, и на УСН.
+
+        :return: True, если форма установлена.
+        """
+        normalized = normalize_entity_type(entity_type)
+        if not normalized:
+            logger.debug("Форма стороны из справочника не распознана — пропущена")
+            return False
+
+        self.entity_type.setCurrentText(normalized)
+        logger.info(f"Форма перевозчика из справочника: {normalized}")
+        return True
+
+    def _apply_party_and_rate(self, data: Dict[str, Any]) -> None:
+        """
+        Форма и ставка НДС из данных (распознавание, база, старые записи).
+
+        Сначала берутся явные поля `entity_type` и `vat_rate`. Если их нет,
+        вид восстанавливается из `carrier_type` — так он хранился до этого
+        шага: «ООО (с НДС)» → ООО и 22 %, «ИП без НДС» → ИП и «Без НДС».
+        Ничего не пришло — поля не трогаются: распознавание без блока
+        стоимости не должно сбрасывать выбор оператора.
+        """
+        entity_type = normalize_entity_type(data.get("entity_type"))
+        vat_rate = normalize_vat_rate(data.get("vat_rate"))
+
+        if not entity_type or not vat_rate:
+            legacy_entity, legacy_rate = split_carrier_type(data.get("carrier_type"))
+            entity_type = entity_type or legacy_entity
+            vat_rate = vat_rate or legacy_rate
+
+        if entity_type:
+            self.entity_type.setCurrentText(entity_type)
+        if vat_rate:
+            self.vat_rate.setCurrentText(vat_rate)
 
     # ─────────────────────────────────────────────────────────
     # Кнопки +/- таблиц
@@ -827,29 +883,28 @@ class ContractTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
 
     def _calculate_price(self) -> None:
+        """
+        Пересчитывает НДС и итог от введённой стоимости.
+
+        «Стоимость» — это ВСЕГДА база без НДС (так поле и подписано):
+        оператор вводит сумму услуг, а налог и итог вкладка считает сама.
+        Раньше смысл поля зависел от радиокнопок «С НДС / Без НДС», и одно
+        и то же число означало то базу, то итог — из-за этого итог в форме
+        расходился с договором.
+
+        «Без НДС» и «0%» дают нулевой налог: в первом случае перевозчик не
+        плательщик, во втором ставка есть, а налог нулевой.
+        """
         try:
-            input_price = self.price_input.value()
-
-            carrier_type = self.carrier_type.currentText()
-            if "без НДС" in carrier_type:
-                vat_rate = 0.0
-                self.vat_rate.setText("0")
-            else:
-                vat_rate = float(self.vat_rate.text().strip() or 0)
+            price_without_vat = float(self.price_input.value())
         except (ValueError, TypeError):
-            vat_rate = 0
-            input_price = 0
+            price_without_vat = 0.0
 
-        vat_multiplier = 1 + vat_rate / 100
+        rate_text = self.current_vat_rate()
+        nds_amount, price_with_vat = compute_vat(price_without_vat, rate_text)
 
-        if self.radio_without_vat.isChecked():
-            price_without_vat = input_price
-            price_with_vat = round(input_price * vat_multiplier, 2)
-        else:
-            price_with_vat = input_price
-            price_without_vat = round(input_price / vat_multiplier, 2) if vat_multiplier else input_price
-
-        self.price_without_vat.setText(f"{price_without_vat:.2f} ₽")
+        self.vat_rate_display.setText(f"{self.current_vat_rate_number():.0f}")
+        self.vat_amount.setText(f"{nds_amount:.2f} ₽")
         self.price_with_vat.setText(f"{price_with_vat:.2f} ₽")
 
         self._sync_prepayment_percent_from_amount()
@@ -1009,28 +1064,32 @@ class ContractTab(TabMixin, QWidget):
     # ─────────────────────────────────────────────────────────
 
     def get_data(self) -> Dict[str, Any]:
-        try:
-            vat_rate = float(self.vat_rate.text().strip() or 0)
-        except (ValueError, TypeError):
-            vat_rate = 0
+        """
+        Условия договора одним словарём.
+
+        Форма и ставка НДС уходят как есть (`entity_type`, `vat_rate`), а
+        `carrier_type` ВЫЧИСЛЯЕТСЯ из них: по нему генератор выбирает бланк
+        (ООО → shablon_ooo.docx, ИП с НДС → shablon_ip_with_vat.docx,
+        ИП без НДС → shablon_ip_without_vat.docx).
+
+        «Стоимость» — база без НДС, поэтому `price_without_vat` — это ровно
+        введённое число, а `price_with_vat` и `vat_rate_num` согласованы с
+        ним до копейки (тем же расчётом, что и в генераторе).
+        """
+        vat_rate_text = self.current_vat_rate()
+        vat_rate_num = self.current_vat_rate_number()
 
         try:
             payment_days = int(self.payment_days.text().strip() or 0)
         except (ValueError, TypeError):
             payment_days = 0
 
-        price_without_vat_text = self.price_without_vat.text().replace("₽", "").strip()
-        price_with_vat_text = self.price_with_vat.text().replace("₽", "").strip()
-
         try:
-            price_without_vat = float(price_without_vat_text.replace(",", "."))
-        except ValueError:
+            price_without_vat = round(float(self.price_input.value() or 0), 2)
+        except (ValueError, TypeError):
             price_without_vat = 0.0
 
-        try:
-            price_with_vat = float(price_with_vat_text.replace(",", "."))
-        except ValueError:
-            price_with_vat = 0.0
+        vat_amount, price_with_vat = compute_vat(price_without_vat, vat_rate_text)
 
         loadings = self._read_table(self.loadings_table)
         unloadings = self._read_table(self.unloadings_table)
@@ -1067,13 +1126,14 @@ class ContractTab(TabMixin, QWidget):
             "unloading_address_2": unloading_address_2,
             "unloading_date": unloading_date,
             "unloading_time_window": unloading_time_window,
-            "carrier_type": self.carrier_type.currentText(),
-            "vat_rate": f"{vat_rate:.0f}%",
-            "vat_rate_num": vat_rate,
+            "entity_type": self.current_entity_type(),
+            "carrier_type": self.computed_carrier_type(),
+            "vat_rate": vat_rate_text,
+            "vat_rate_num": vat_rate_num,
             "price_input": self.price_input.value(),
             "price_without_vat": price_without_vat,
+            "vat_amount": vat_amount,
             "price_with_vat": price_with_vat,
-            "vat_type": "with_vat" if self.radio_with_vat.isChecked() else "without_vat",
             "payment_days": payment_days,
             "prepayment_amount": prepay_amount,
             "prepayment_percent": getattr(self, "_prepayment_percent", 0.0),
@@ -1143,31 +1203,22 @@ class ContractTab(TabMixin, QWidget):
         if unloadings:
             self._fill_table(self.unloadings_table, unloadings, self._init_unloading_row)
 
-        # ── Тип перевозчика ──
-        carrier_type = data.get("carrier_type", "")
-        if carrier_type:
-            idx = self.carrier_type.findText(carrier_type)
-            if idx >= 0:
-                self.carrier_type.setCurrentIndex(idx)
+        # ── Форма и ставка НДС ──
+        self._apply_party_and_rate(data)
 
         # ── Стоимость ──
         # Значения по умолчанию здесь не подставляются: иначе распознавание
         # без блока «contract» вернуло бы НДС и срок оплаты к 22% и 10 дням.
-        vat_type = data.get("vat_type", "")
-        if vat_type == "with_vat":
-            self.radio_with_vat.setChecked(True)
-        elif vat_type == "without_vat":
-            self.radio_without_vat.setChecked(True)
-
-        price_input = data.get("price_input", 0)
-        if price_input:
-            self.price_input.setValue(float(price_input))
-
-        vat_rate = data.get("vat_rate", "")
-        if vat_rate:
-            vat_rate_clean = str(vat_rate).replace("%", "").strip()
-            if vat_rate_clean:
-                self.vat_rate.setText(vat_rate_clean)
+        # Сумма принимается и как `price_input` (поле вкладки/распознавание),
+        # и как `price_without_vat` (так её хранит база).
+        price_input = data.get("price_input")
+        if price_input in (None, ""):
+            price_input = data.get("price_without_vat")
+        if price_input not in (None, ""):
+            try:
+                self.price_input.setValue(float(price_input))
+            except (ValueError, TypeError):
+                logger.warning("Стоимость в данных не число — поле не тронуто")
 
         payment_days = data.get("payment_days", "")
         if payment_days:
@@ -1256,9 +1307,8 @@ class ContractTab(TabMixin, QWidget):
         self.loading_plan_time_to.setTime(QTime(20, 0))
         self.unloading_plan_date.setDate(QDate.currentDate().addDays(3))
 
-        self.carrier_type.setCurrentIndex(0)
-        self.vat_rate.setReadOnly(False)
-        self.vat_rate.setText("22")
+        self.entity_type.setCurrentText(DEFAULT_ENTITY_TYPE)
+        self.vat_rate.setCurrentText(DEFAULT_VAT_RATE)
 
         # Стоимость возвращается к ПУСТОМУ значению (0), а не к 400 000 ₽:
         # подстановка выглядела как ввод оператора (ШАГ FIX-6, часть C).
@@ -1274,7 +1324,6 @@ class ContractTab(TabMixin, QWidget):
             self._prepayment_syncing = False
         self._prepayment_percent = 0.0
         self.special_conditions.clear()
-        self.radio_without_vat.setChecked(True)
 
         self._calculate_price()
         self.recognition_panel.clear()
