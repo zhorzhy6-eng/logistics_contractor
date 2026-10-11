@@ -77,6 +77,64 @@ def test_passport_multiline_labels():
     assert "passport_number" not in data
 
 
+def test_birth_place_stops_at_the_next_passport_label():
+    """
+    Место рождения НЕ забирает следующую подпись (шаг «Четыре бага», баг C).
+
+    У страницы паспорта OCR часто отдаёт одной строкой «Место рождения …»,
+    а следующей — «Паспорт выдан …» без двоеточия. Раньше значение бралось
+    вслепую (до трёх строк подряд), и в место рождения попадали выдача, дата
+    выдачи и код подразделения — 210 случаев из 1000 в стресс-тесте.
+    """
+    data = extract_local_fields("""РОССИЙСКАЯ ФЕДЕРАЦИЯ
+45 12 345678
+ПАСПОРТ
+Фамилия ПРИМЕРОВ
+Имя Тест
+Отчество Тестович
+Пол МУЖ. Дата рождения 03.04.1990
+Место рождения г. Пример, ул. Тестовая
+Паспорт выдан Отделом УФМС России по г. Примеру
+Дата выдачи 01.02.2020 Код подразделения 123-456""")["driver"][0]
+
+    assert data["birth_place"] == "г. Пример, ул. Тестовая"
+    assert data["passport_issuer"] == "Отделом УФМС России по г. Примеру"
+    assert data["passport_issue_date"] == "01.02.2020"
+    assert data["passport_code"] == "123-456"
+
+
+def test_birth_place_keeps_multiline_value_until_the_next_label():
+    """Многострочное место рождения берётся ЦЕЛИКОМ — до следующей метки."""
+    data = extract_local_fields("""Фамилия ПРИМЕРОВ
+Имя Тест
+Отчество Тестович
+Место рождения г. Москва,
+Ленинградский р-н
+Паспорт выдан Отделом УФМС России по г. Москве""")["driver"][0]
+
+    assert data["birth_place"] == "г. Москва, Ленинградский р-н"
+
+
+def test_birth_place_at_the_end_of_the_document():
+    """Метки после места рождения нет — значение берётся до конца текста."""
+    data = extract_local_fields("""Фамилия ПРИМЕРОВ
+Имя Тест
+Место рождения г. Пример, ул. Последняя""")["driver"][0]
+
+    assert data["birth_place"] == "г. Пример, ул. Последняя"
+
+
+def test_birth_place_does_not_swallow_the_registration_address():
+    """Следующая метка «Адрес регистрации» тоже обрывает значение."""
+    data = extract_local_fields("""Водитель: Примеров Тест Тестович
+дата рождения: 03.04.1990
+место рождения: г. Пример, ул. Тестовая
+Адрес регистрации: г. Пример, ул. Другая, д. 1""")["driver"][0]
+
+    assert data["birth_place"] == "г. Пример, ул. Тестовая"
+    assert data["registration_address"].startswith("г. Пример, ул. Другая")
+
+
 def test_passport_faded_labels_keep_observed_name_without_completing_it():
     data = extract_local_fields("""МВД ПО ТЕСТОВОЙ ОБЛАСТИ
 01.02.2020 123-456
