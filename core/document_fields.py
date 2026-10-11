@@ -56,7 +56,12 @@ def _bank(lines, text):
         "bank_account": r"номер\s+сч[её]та\s+получателя\s*[:|]?\s*([0-9 ]{20,30})\b",
         "bik": r"БИК(?:\s+банка)?(?:\s+получателя)?\s*[:|]?\s*([0-9]{9})\b",
         "correspondent_account": r"[КK]\s*[/\\]\s*[СC](?:\s+банка)?(?:\s+получателя)?\s*[:|]?\s*([0-9 ]{20,30})\b",
-        "bank_name": r"^банк\s+получателя\s*[:|]\s*(.+)$",
+        # Двоеточие НЕ обязательно: на карточке реквизитов его нет вовсе
+        # («Банк получателя ПАО Сбербанк»), а на бланке оно при OCR часто
+        # теряется или читается точкой («Банк получателя. АО «Газпромбанк»»).
+        # С обязательным двоеточием значение терялось в 197 случаях из 1000
+        # (шаг «Четыре бага», баг D).
+        "bank_name": r"^банк\s+получателя\s*[.:|]?\s*(.+)$",
     }
     for key, pattern in patterns.items():
         fields[key] = _one(pattern, text, re.I | re.M)
@@ -79,6 +84,16 @@ def _bank(lines, text):
     # Employer/recipient are different roles. Only an explicit business name is a carrier candidate.
     if not fields.get("full_name"):
         fields["full_name"] = _one(r"^\s*(ИП\s+[А-ЯЁ][а-яёА-ЯЁ-]+\s+[А-ЯЁ][а-яёА-ЯЁ-]+\s+[А-ЯЁ][а-яёА-ЯЁ-]+)\s*$", text, re.M)
+    # Метки банка, кроме «Банк получателя»: так подписан банк в карточке
+    # контрагента и в выписках. Берётся, только если основная метка не дала
+    # значения, — иначе одно поле получило бы два кандидата и `_one` вернул
+    # бы пустую строку («неоднозначно»).
+    if not fields.get("bank_name"):
+        fields["bank_name"] = _one(
+            r"(?m)^\s*наименование\s+банка\s*[:|]?\s*(.+)$", text, re.I)
+    if not fields.get("bank_name"):
+        fields["bank_name"] = _one(
+            r"(?m)^\s*банк\s*[:|]\s*(.+)$", text, re.I)
     # Deliberately do not extract "ИНН банка получателя" as the carrier's INN.
     fields["_note"] = "Банковские реквизиты: проверьте получателя и назначение счёта; ИНН банка не является ИНН перевозчика."
     return _record("carrier", "bank", fields)
