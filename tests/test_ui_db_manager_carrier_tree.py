@@ -589,6 +589,69 @@ def test_picker_driver_node_with_driver_handler_gives_both(
         dialog.close()
 
 
+def test_picker_driver_node_carries_his_vehicle(
+    qt_app, isolated_db, quiet_dialogs, carrier_a
+):
+    """
+    Вместе с водителем уходит и его ТС: tractor / trailer в записи.
+
+    Так «Тягач и полуприцеп» аренды получает марку и госномер, не заставляя
+    оператора искать их в справочнике второй раз. Формат тот же, что у записи
+    из таблицы «Водители» (см. _load_driver_record → _load_driver_vehicle_into).
+    """
+    driver_id = _add_driver(isolated_db, DRIVER_NAME, carrier_a)
+    isolated_db.save_driver_vehicle(driver_id, {
+        "tractor_brand": "DAF XF 95.430",
+        "tractor_plate": "М342СА761",
+        "tractor_color": "белый",
+        "tractor_year": "2019",
+        "trailer_brand": "KRONE SD",
+        "trailer_plate": "ВК123478",
+        "trailer_color": "серый",
+        "trailer_year": "2020",
+    })
+
+    drivers = []
+    dialog = _picker_dialog_with_carriers(
+        isolated_db, lambda record: None, drivers.append
+    )
+    try:
+        top = dialog.carriers_tree.topLevelItem(0)
+        _double_click(dialog, top.child(0))
+
+        assert len(drivers) == 1
+        record = drivers[0]
+        assert record["tractor"]["brand_model"] == "DAF XF 95.430"
+        assert record["tractor"]["plate_number"] == "М342СА761"
+        assert record["trailer"]["brand_model"] == "KRONE SD"
+        assert record["trailer"]["plate_number"] == "ВК123478"
+        assert record["tractor"]["color"] == "белый"
+        assert record["trailer"]["year"] == "2020"
+    finally:
+        dialog.close()
+
+
+def test_picker_driver_without_vehicle_has_empty_tractor(
+    qt_app, isolated_db, quiet_dialogs, carrier_a
+):
+    """У водителя без ТС запись остаётся без tractor / trailer — без ошибок."""
+    _add_driver(isolated_db, DRIVER_NAME, carrier_a)
+
+    drivers = []
+    dialog = _picker_dialog_with_carriers(
+        isolated_db, lambda record: None, drivers.append
+    )
+    try:
+        top = dialog.carriers_tree.topLevelItem(0)
+        _double_click(dialog, top.child(0))
+
+        assert len(drivers) == 1
+        assert "tractor" not in drivers[0]
+        assert "trailer" not in drivers[0]
+    finally:
+        dialog.close()
+
+
 def test_picker_carrier_node_never_calls_driver_handler(
     qt_app, isolated_db, quiet_dialogs, carrier_a
 ):

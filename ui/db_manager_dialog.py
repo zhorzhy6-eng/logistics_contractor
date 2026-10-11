@@ -2324,16 +2324,68 @@ class DbManagerDialog(QDialog):
         «Экипаж»), вторым вызовом уходит и САМ водитель: оператор дважды не
         выбирает одно и то же. Без этого обработчика — прежнее поведение:
         только перевозчик (Экспедиторство и все прочие вызовы не меняются).
+
+        Перед передачей в запись подмешивается ТС водителя
+        (_load_driver_vehicle_into): принимающая вкладка заполняет по нему
+        «Тягач и полуприцеп» — ровно так же, как водитель приходит из
+        таблицы «Водители» (там это делает _load_driver_record).
         """
         if self.picker_tab == OPEN_TAB_CARRIERS:
             parent = self._node_record(item.parent() if item is not None else None)
             if parent:
                 self._load_carrier_record(parent)
+                self._load_driver_vehicle_into(driver)
                 self._pick_driver_record(driver)
                 return
             logger.warning("Узел водителя без перевозчика — загружаем водителя")
 
         self._load_driver_record(driver)
+
+    def _load_driver_vehicle_into(self, driver: Dict[str, Any]) -> None:
+        """
+        Подмешивает в запись водителя его тягач и прицеп.
+
+        Источник — driver_vehicles (load_driver_vehicle): справочник хранит
+        марку, госномер, цвет и год тягача и прицепа. Складывается в
+        driver["tractor"] / driver["trailer"] тем же форматом, что в
+        _load_driver_record, поэтому принимающая сторона (MainWindow в
+        «Экспедиторстве», «Арендодатель» в аренде) читает запись одинаково —
+        из таблицы «Водители» и из дерева перевозчиков.
+
+        Ничего не возвращает и не поднимает исключений: у водителя может не
+        быть ТС, а запись может прийти не словарём — водитель всё равно
+        полезен, о неудаче пишем предупреждение в лог (без значений).
+        """
+        if not isinstance(driver, dict):
+            return
+
+        driver_id = driver.get("id")
+        if not driver_id:
+            return
+
+        try:
+            vehicle = load_driver_vehicle(driver_id)
+        except Exception as e:  # noqa: BLE001 — ТС не критичны для загрузки
+            logger.warning(
+                f"Тягач/прицеп водителя ID={driver_id} не прочитан: {e}"
+            )
+            return
+
+        if not vehicle:
+            return
+
+        driver["tractor"] = {
+            "brand_model": vehicle.get("tractor_brand", "") or "",
+            "plate_number": vehicle.get("tractor_plate", "") or "",
+            "color": vehicle.get("tractor_color", "") or "",
+            "year": vehicle.get("tractor_year", "") or "",
+        }
+        driver["trailer"] = {
+            "brand_model": vehicle.get("trailer_brand", "") or "",
+            "plate_number": vehicle.get("trailer_plate", "") or "",
+            "color": vehicle.get("trailer_color", "") or "",
+            "year": vehicle.get("trailer_year", "") or "",
+        }
 
     def _pick_driver_record(self, driver: Dict[str, Any]) -> bool:
         """
@@ -2389,30 +2441,14 @@ class DbManagerDialog(QDialog):
         """
         Отдаёт водителя в форму — общий путь таблицы и дерева.
 
-        Тягач/прицеп подмешиваются в запись здесь же: MainWindow заполняет
-        ими вкладку «Тягач и полуприцеп», и из дерева перевозчиков водитель
-        должен прийти с тем же набором полей, что из таблицы «Водители».
+        Тягач/прицеп подмешиваются в запись здесь же
+        (_load_driver_vehicle_into): MainWindow заполняет ими вкладку
+        «Тягач и полуприцеп», и из дерева перевозчиков водитель должен
+        прийти с тем же набором полей, что из таблицы «Водители».
         """
         try:
             # Подгружаем тягач/прицеп и подмешиваем в данные водителя
-            if driver.get("id"):
-                try:
-                    vehicle = load_driver_vehicle(driver["id"])
-                    if vehicle:
-                        driver["tractor"] = {
-                            "brand_model": vehicle.get("tractor_brand", ""),
-                            "plate_number": vehicle.get("tractor_plate", ""),
-                            "color": vehicle.get("tractor_color", ""),
-                            "year": vehicle.get("tractor_year", ""),
-                        }
-                        driver["trailer"] = {
-                            "brand_model": vehicle.get("trailer_brand", ""),
-                            "plate_number": vehicle.get("trailer_plate", ""),
-                            "color": vehicle.get("trailer_color", ""),
-                            "year": vehicle.get("trailer_year", ""),
-                        }
-                except Exception as e:
-                    logger.warning(f"Не удалось подгрузить ТС водителя: {e}")
+            self._load_driver_vehicle_into(driver)
 
             if self._picker_load(False, driver):
                 self.accept()
