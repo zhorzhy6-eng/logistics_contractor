@@ -524,6 +524,112 @@ def test_double_click_driver_under_carrier_loads_both(
     assert form_stub.carrier["inn"] == "7707654321"
 
 
+# ── Второй обработчик выбора: on_pick_driver (аренда) ──
+
+def _picker_dialog_with_carriers(isolated_db, on_pick, on_pick_driver=None):
+    """Диалог в режиме выбора вкладки «Перевозчики» (как у аренды)."""
+    from ui.db_manager_dialog import DbManagerDialog
+
+    return DbManagerDialog(
+        None,
+        open_tab="carriers",
+        on_pick=on_pick,
+        on_pick_driver=on_pick_driver,
+    )
+
+
+def test_picker_driver_node_without_driver_handler_gives_only_carrier(
+    qt_app, isolated_db, quiet_dialogs, carrier_a
+):
+    """
+    Без on_pick_driver поведение прежнее: клик по водителю даёт перевозчика.
+
+    Это обратная совместимость: Экспедиторство и прочие вызовы обработчик
+    водителя не задают, и для них ничего не меняется.
+    """
+    _add_driver(isolated_db, DRIVER_NAME, carrier_a)
+    picked = []
+    dialog = _picker_dialog_with_carriers(isolated_db, picked.append)
+    try:
+        tree = dialog.carriers_tree
+        top = tree.topLevelItem(0)
+        _double_click(dialog, top.child(0))
+
+        assert [record["full_name"] for record in picked] == [CARRIER_A_NAME]
+        assert dialog.result() == QDialog.Accepted
+    finally:
+        dialog.close()
+
+
+def test_picker_driver_node_with_driver_handler_gives_both(
+    qt_app, isolated_db, quiet_dialogs, carrier_a
+):
+    """
+    С on_pick_driver клик по водителю отдаёт ОБА уровня.
+
+    Перевозчик уходит в on_pick (в аренде — «Арендодатель»), водитель — в
+    on_pick_driver (в аренде — «Экипаж»).
+    """
+    _add_driver(isolated_db, DRIVER_NAME, carrier_a)
+    picked = []
+    drivers = []
+    dialog = _picker_dialog_with_carriers(
+        isolated_db, picked.append, drivers.append
+    )
+    try:
+        tree = dialog.carriers_tree
+        top = tree.topLevelItem(0)
+        _double_click(dialog, top.child(0))
+
+        assert [record["full_name"] for record in picked] == [CARRIER_A_NAME]
+        assert [record["full_name"] for record in drivers] == [DRIVER_NAME]
+        assert drivers[0]["default_carrier_id"] == carrier_a
+        assert dialog.result() == QDialog.Accepted
+    finally:
+        dialog.close()
+
+
+def test_picker_carrier_node_never_calls_driver_handler(
+    qt_app, isolated_db, quiet_dialogs, carrier_a
+):
+    """Клик по ПЕРЕВОЗЧИКУ водителя не трогает — даже с on_pick_driver."""
+    _add_driver(isolated_db, DRIVER_NAME, carrier_a)
+    picked = []
+    drivers = []
+    dialog = _picker_dialog_with_carriers(
+        isolated_db, picked.append, drivers.append
+    )
+    try:
+        _double_click(dialog, dialog.carriers_tree.topLevelItem(0))
+
+        assert [record["full_name"] for record in picked] == [CARRIER_A_NAME]
+        assert drivers == [], "клик по перевозчику не должен давать водителя"
+    finally:
+        dialog.close()
+
+
+def test_driver_handler_not_called_in_manager_mode(
+    qt_app, isolated_db, quiet_dialogs, carrier_a
+):
+    """В менеджере базы (без open_tab) on_pick_driver не участвует."""
+    _add_driver(isolated_db, DRIVER_NAME, carrier_a)
+    picked = []
+    drivers = []
+    from ui.db_manager_dialog import DbManagerDialog
+
+    dialog = DbManagerDialog(
+        None, on_pick=picked.append, on_pick_driver=drivers.append
+    )
+    try:
+        top = dialog.carriers_tree.topLevelItem(0)
+        _double_click(dialog, top.child(0))
+
+        assert picked == []
+        assert drivers == []
+    finally:
+        dialog.close()
+
+
 def test_double_click_empty_space_does_nothing(form_manager, form_stub):
     """Клик мимо узлов: Qt сигнала не шлёт, а обработчик молчит."""
     form_manager._on_carrier_item_double_clicked(None, 0)
