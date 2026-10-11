@@ -33,7 +33,7 @@ INN = "7701234567"
 class FakeClient:
     """Клиент GigaChat: записывает вызовы, отдаёт заготовленные ответы."""
 
-    def __init__(self, vision=None, text=None, vision_model="GigaChat-2-Max"):
+    def __init__(self, vision=None, text=None, vision_model="GigaChat-3-Pro"):
         self.vision_model = vision_model
         self.vision_calls, self.text_calls = [], []
         self._vision, self._text = vision, text

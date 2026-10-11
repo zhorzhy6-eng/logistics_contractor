@@ -19,6 +19,12 @@ from core.settings_service import (
     reset_settings_service,
 )
 
+#: Модель по умолчанию: значение из SettingsService.DEFAULTS. Держится
+#: отдельной константой, чтобы тест «до перечитывания» читался явно;
+#: совпадение с core.gigachat_client.DEFAULT_MODEL проверяет
+#: tests/test_gigachat3_switch.py.
+DEFAULT_MODEL = "GigaChat-3-Pro"
+
 
 @pytest.fixture
 def settings_path(work_file):
@@ -36,7 +42,7 @@ def service(settings_path):
 
 def test_defaults_when_file_missing(service):
     assert service.get_str("provider") == "gigachat"
-    assert service.get_str("gigachat_model") == "GigaChat-2"
+    assert service.get_str("gigachat_model") == DEFAULT_MODEL
     assert service.get_int("gigachat_timeout") == 150
     assert service.get_bool("gigachat_verify_ssl") is True
 
@@ -44,13 +50,13 @@ def test_defaults_when_file_missing(service):
 def test_loads_existing_file(settings_path):
     settings_path.write_text(json.dumps({
         "provider": "gigachat",
-        "gigachat_model": "GigaChat-2-Pro",
+        "gigachat_model": "GigaChat-3-Ultra",
         "gigachat_timeout": 300,
         "gigachat_verify_ssl": False,
     }, ensure_ascii=False), encoding="utf-8")
 
     service = SettingsService(str(settings_path))
-    assert service.get_str("gigachat_model") == "GigaChat-2-Pro"
+    assert service.get_str("gigachat_model") == "GigaChat-3-Ultra"
     assert service.get_int("gigachat_timeout") == 300
     assert service.get_bool("gigachat_verify_ssl") is False
 
@@ -67,7 +73,7 @@ def test_broken_json_does_not_crash(settings_path, caplog):
     settings_path.write_text("{ это не JSON ", encoding="utf-8")
     with caplog.at_level("ERROR", logger="core.settings_service"):
         service = SettingsService(str(settings_path))
-    assert service.get_str("gigachat_model") == "GigaChat-2"
+    assert service.get_str("gigachat_model") == DEFAULT_MODEL
     assert "Ошибка разбора" in caplog.text
 
 
@@ -84,15 +90,15 @@ def test_json_array_instead_of_object(settings_path):
 def test_reload_picks_up_external_changes(service, settings_path):
     settings_path.write_text(json.dumps({"gigachat_model": "Изменено снаружи"}),
                              encoding="utf-8")
-    assert service.get_str("gigachat_model") == "GigaChat-2"   # до перечитывания
+    assert service.get_str("gigachat_model") == DEFAULT_MODEL  # до перечитывания
     service.reload()
     assert service.get_str("gigachat_model") == "Изменено снаружи"
 
 
 def test_update_writes_file(service, settings_path):
-    assert service.update({"gigachat_model": "GigaChat-2-Max"}) is True
+    assert service.update({"gigachat_model": "GigaChat-3-Ultra"}) is True
     written = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert written["gigachat_model"] == "GigaChat-2-Max"
+    assert written["gigachat_model"] == "GigaChat-3-Ultra"
 
 
 def test_update_without_save(service, settings_path):
@@ -142,7 +148,7 @@ def test_update_rejects_non_dict(service):
 # ─────────────────────────────────────────────────────────────
 
 def test_secret_key_is_not_saved(service, settings_path):
-    service.update({"gigachat_credentials": "СЕКРЕТ", "gigachat_model": "GigaChat-2"})
+    service.update({"gigachat_credentials": "СЕКРЕТ", "gigachat_model": DEFAULT_MODEL})
     written = json.loads(settings_path.read_text(encoding="utf-8"))
     assert "gigachat_credentials" not in written
     assert "СЕКРЕТ" not in settings_path.read_text(encoding="utf-8")
@@ -214,7 +220,7 @@ def test_get_bool_variants(settings_path, value, expected):
 def test_as_dict_returns_copy(service):
     data = service.as_dict()
     data["gigachat_model"] = "Испорчено"
-    assert service.get_str("gigachat_model") == "GigaChat-2"
+    assert service.get_str("gigachat_model") == DEFAULT_MODEL
 
 
 def test_path_property(service, settings_path):

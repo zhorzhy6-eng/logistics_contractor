@@ -158,7 +158,7 @@ def rate_limited_client():
         calls.append(deep)
         raise RuntimeError("GigaChat: HTTP 429.")
 
-    return SimpleNamespace(recognize_image=vision, vision_model="GigaChat-2-Max"), calls
+    return SimpleNamespace(recognize_image=vision, vision_model="GigaChat-3-Pro"), calls
 
 
 def test_rate_limit_pause_is_interrupted_by_cancel(page, local_ocr, clock, caplog):

@@ -615,8 +615,9 @@ PDF отправляются в **GigaChat Vision** — облачный реж�
 **Что нужно:**
 - ключ GigaChat в Windows Credential Manager (тот же, что для текстового
   распознавания; сохраняется через `python set_key.py`);
-- модель с поддержкой изображений: **GigaChat-2-Pro** или **GigaChat-2-Max**
-  (Lite-версия картинки не обрабатывает);
+- модель с поддержкой изображений: **GigaChat-3-Pro** или **GigaChat-3-Ultra**
+  (GigaChat-3-Lightning картинки не обрабатывает — API отвечает
+  «422 Model does not support image»);
 - активная настройка **«Разрешить отправку изображений в GigaChat»** в окне
   настроек (`document_cloud_enabled: true`).
 
@@ -668,7 +669,7 @@ Microsoft Word: приложение умеет конвертировать DOC
 страниц в GigaChat Vision (в примере `config/settings.example.json` этот режим уже
 включён; снять галочку **«Разрешить отправку изображений в GigaChat»** можно в окне
 настроек). Нужны ключ GigaChat и модель с поддержкой изображений
-(GigaChat-2-Pro или GigaChat-2-Max).
+(GigaChat-3-Pro или GigaChat-3-Ultra).
 
 Текстовая страница обрабатывается локально. Если локальные правила не нашли
 полей и включён облачный режим, её текст отправляется в GigaChat текстовой

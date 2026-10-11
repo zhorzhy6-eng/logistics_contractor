@@ -47,7 +47,7 @@ def vision_fails(message):
 
 def fake_client(vision=None):
     return SimpleNamespace(recognize_image=vision or vision_ok(),
-                           vision_model="GigaChat-2-Max")
+                           vision_model="GigaChat-3-Pro")
 
 
 #: Пять случаев: «облако выключено», «клиента нет», «401», «429», «Vision упал».
@@ -171,7 +171,7 @@ def test_tree_label_uses_reason(reason, settings, factory, label, hint_tail, log
     method = LOCAL_OCR_METHOD if reason == CLOUD_DISABLED else LOCAL_OCR_FALLBACK_METHOD
     assert method_label(method, reason) == label
     assert source_label(FILE, method, reason) == f"📄 {FILE} — {label}"
-    assert method_hint(method, "GigaChat-2-Max", reason) == HINT_PREFIX + hint_tail
+    assert method_hint(method, "GigaChat-3-Pro", reason) == HINT_PREFIX + hint_tail
 
 
 def test_tree_label_without_reason_keeps_parentheses():

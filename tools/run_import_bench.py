@@ -154,7 +154,7 @@ def main() -> None:
     if config.get("document_cloud_enabled") is True:
         client = GigaChatClient(
             scope=settings.get_str("gigachat_scope", "GIGACHAT_API_PERS"),
-            model=settings.get_str("gigachat_model", "GigaChat-2"),
+            model=settings.get_str("gigachat_model", "GigaChat-3-Pro"),
             timeout=settings.get_int("gigachat_timeout", 150),
             verify_ssl=settings.get_bool("gigachat_verify_ssl", True),
             ca_bundle=settings.get_str("gigachat_ca_bundle", "") or None,

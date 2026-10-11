@@ -50,7 +50,7 @@ class SettingsService:
 
         # GigaChat (ключа здесь НЕТ: он хранится в системном хранилище,
         # см. core/secrets_store.py и set_key.py)
-        "gigachat_model": "GigaChat-2",
+        "gigachat_model": "GigaChat-3-Pro",
         "gigachat_scope": "GIGACHAT_API_PERS",
         "gigachat_timeout": 150,
         # Проверка TLS включена (Шаг 3 задания по безопасности)

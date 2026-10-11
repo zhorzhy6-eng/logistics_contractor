@@ -261,7 +261,7 @@ def _clean_and_parse_json(raw_text: str) -> dict:
     Очищает ответ модели от markdown-оберток и лишнего текста,
     затем парсит JSON.
 
-    Учитывает особенности GigaChat-2:
+    Учитывает особенности ответов GigaChat:
       * иногда возвращает {{ ... }} вместо { ... } (экранирует скобки);
       * иногда обрезает ответ на середине — тогда пытаемся дозакрыть
         незакрытые { и [ и распарсить повторно.
@@ -284,7 +284,7 @@ def _clean_and_parse_json(raw_text: str) -> dict:
     if start != -1 and end != -1 and end > start:
         text = text[start:end + 1]
 
-    # 4. FIX: GigaChat-2 иногда возвращает {{ ... }} вместо { ... }
+    # 4. FIX: модель иногда возвращает {{ ... }} вместо { ... }
     if text.startswith("{{") and text.endswith("}}"):
         logger.warning(
             "GigaChat вернул двойные фигурные скобки {{ }} — "
@@ -375,20 +375,23 @@ class GigaChatClient:
     #: Изображение она не принимает: это отдельная возможность, у неё своя
     #: модель (см. DEFAULT_VISION_MODEL).
     #:
-    #: Модель по умолчанию. Проверено живьём 10.10.2026: GigaChat-2 картинку
-    #: НЕ принимает (422 «Model does not support image»), принимают
-    #: GigaChat-2-Max и GigaChat-2-Pro. Раньше по умолчанию стояла
-    #: GigaChat-2, и распознавание фотографий падало на первом же запросе.
-    DEFAULT_MODEL = "GigaChat-2-Max"
+    #: Поколение GigaChat-3. Проверено живьём 11.10.2026 по списку
+    #: GET /models текущего ключа: доступны GigaChat-3-Pro, GigaChat-3-Ultra,
+    #: GigaChat-3-Lightning. GigaChat-2 больше не отображается в личном
+    #: кабинете оператора, поэтому по умолчанию — GigaChat-3-Pro.
+    DEFAULT_MODEL = "GigaChat-3-Pro"
 
-    #: Модель для распознавания ИЗОБРАЖЕНИЙ (Vision). Модели GigaChat-2 и
-    #: GigaChat-3-Lightning изображение не принимают вовсе: API отвечает
-    #: «422 Model does not support image» (проверено живьём 10.10.2026).
-    DEFAULT_VISION_MODEL = "GigaChat-2-Max"
+    #: Модель для распознавания ИЗОБРАЖЕНИЙ (Vision). Изображение принимают
+    #: GigaChat-3-Pro, GigaChat-3-Ultra, GigaChat-2-Max и GigaChat-2-Pro;
+    #: GigaChat-3-Lightning отвечает «422 Model does not support image»
+    #: (проверено живьём 11.10.2026 — по одному запросу на модель).
+    DEFAULT_VISION_MODEL = "GigaChat-3-Pro"
 
     #: Запасные Vision-модели: если настроенная картинку не принимает,
     #: распознавание пробует следующую, а не падает на первом запросе.
-    VISION_FALLBACKS = ("GigaChat-2-Max", "GigaChat-2-Pro")
+    #: Первым идёт другое поколение GigaChat-3, последним — проверенный
+    #: GigaChat-2-Max: смена поколения не должна ломать распознавание фото.
+    VISION_FALLBACKS = ("GigaChat-3-Ultra", "GigaChat-2-Max")
 
     # ── Повторы и ограничения (Шаг 7 оптимизации) ──
     # При 429/5xx/таймауте повторяем с задержкой 1с → 2с → 4с.
@@ -518,9 +521,9 @@ class GigaChatClient:
         self.model = model
         #: Модель для распознавания КАРТИНОК. Обычная текстовая модель
         #: изображение не принимает вовсе — API отвечает
-        #: «422 Model does not support image» (проверено живьём 10.10.2026:
-        #: GigaChat-2 и GigaChat-3-Lightning картинку не принимают,
-        #: GigaChat-2-Max и GigaChat-2-Pro принимают).
+        #: «422 Model does not support image» (проверено живьём 11.10.2026:
+        #: GigaChat-3-Lightning картинку не принимает, а GigaChat-3-Pro,
+        #: GigaChat-3-Ultra, GigaChat-2-Max и GigaChat-2-Pro принимают).
         self.vision_model = vision_model
         self.timeout = timeout
         # ── TLS: проверка сертификата включена (Шаг 3 задания) ──
@@ -1191,7 +1194,9 @@ class GigaChatClient:
             if resp.status_code == 404:
                 raise RuntimeError(
                     f"GigaChat вернул 404: модель '{self.model}' не найдена. "
-                    "Попробуйте GigaChat-2, GigaChat-2-Pro или GigaChat-2-Max."
+                    "Проверьте gigachat_model в config/settings.json — "
+                    "доступные имена видны в GET /models (например, "
+                    "GigaChat-3-Pro, GigaChat-3-Ultra)."
                 )
             if resp.status_code == 401:
                 raise RuntimeError(

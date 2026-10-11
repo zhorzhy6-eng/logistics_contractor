@@ -282,7 +282,7 @@ class MainWindow(QMainWindow):
             self.gigachat = GigaChatClient(
                 auth_key=auth_key,
                 scope=self.settings_service.get_str("gigachat_scope", "GIGACHAT_API_PERS"),
-                model=self.settings_service.get_str("gigachat_model", "GigaChat-2"),
+                model=self.settings_service.get_str("gigachat_model", "GigaChat-3-Pro"),
                 timeout=self.settings_service.get_int("gigachat_timeout", 150),
                 verify_ssl=self.settings_service.get_bool("gigachat_verify_ssl", True),
                 ca_bundle=self.settings_service.get_str("gigachat_ca_bundle", "") or None,
