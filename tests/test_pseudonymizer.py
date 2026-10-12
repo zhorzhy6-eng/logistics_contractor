@@ -807,3 +807,213 @@ def test_logs_contain_no_pii_with_natasha(pseudo, natasha_layer, caplog):
             assert secret not in rendered
     assert "PERSON=" in caplog.text
     assert "ADDRESS=" in caplog.text
+
+
+# ─────────────────────────────────────────────────────────────
+# Границы строк: маска не заходит на следующую строку
+# ─────────────────────────────────────────────────────────────
+
+def test_mask_does_not_eat_next_line(pseudo):
+    """
+    Маска адреса не заходит на следующую строку и не съедает метку «Телефон:».
+
+    Причина бага: разделитель внутри значения был записан как ``\\s``,
+    а в него входит перевод строки — необязательный «хвост» улицы
+    затягивал начало следующей строки в адрес.
+    """
+    text = "Адрес: г. Мурманск, ул. Центральная\nТелефон: +7 (934) 923-84-26"
+    safe, mapping = pseudo.anonymize(text)
+
+    assert "Телефон:" in safe, "метка следующего поля съедена маской"
+    assert "<<ADDRESS_1>>" in safe and "<<PHONE_1>>" in safe
+    assert all("\n" not in value for value in mapping.values())
+    assert pseudo.restore(safe, mapping) == text
+
+
+def test_birth_place_label_survives_phone_line(pseudo):
+    """
+    Раскладка стресс-теста: «Место рождения» стоит ровно перед «Телефоном».
+
+    Это тот самый случай, из-за которого поле ``driver.birth_place``
+    уходило в облако без метки «Телефон» и модель не находила поле.
+    """
+    text = ("Место рождения:г. Мурманск, ул. Центральная\n"
+            "Телефон:+7 (934) 923-84-26")
+    safe, mapping = pseudo.anonymize(text)
+
+    assert "Место рождения:" in safe and "Телефон:" in safe
+    assert safe.count("\n") == 1
+    assert all("\n" not in value for value in mapping.values())
+    assert pseudo.restore(safe, mapping) == text
+
+
+def test_mask_does_not_eat_issuer_label(pseudo):
+    """«Кем выдан» переживает маску адреса регистрации."""
+    text = ("Адрес регистрации: г. Тверь, ул. Советская\n"
+            "Кем выдан: Отделом УФМС России по г. Твери")
+    safe, mapping = pseudo.anonymize(text)
+
+    assert "Кем выдан:" in safe, "метка «Кем выдан» съедена маской"
+    assert all("\n" not in value for value in mapping.values())
+    assert pseudo.restore(safe, mapping) == text
+
+
+def test_mask_does_not_eat_block_title(pseudo):
+    """Заголовок блока «ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ» остаётся целым."""
+    text = ("Адрес регистрации: г. Тверь, ул. Советская\n"
+            "ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ\n"
+            f"Водительское удостоверение {LICENSE}")
+    safe, mapping = pseudo.anonymize(text)
+
+    assert "ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ" in safe
+    assert all("\n" not in value for value in mapping.values())
+    assert pseudo.restore(safe, mapping) == text
+
+
+def test_house_number_does_not_eat_next_line(pseudo):
+    """Номер дома не затягивает первую букву следующей строки."""
+    text = "Адрес: г. Москва, ул. Ленина, д. 5\nТелефон: +7 (999) 123-45-67"
+    safe, mapping = pseudo.anonymize(text)
+
+    assert "Телефон:" in safe, "первая буква метки съедена номером дома"
+    assert all("\n" not in value for value in mapping.values())
+    assert pseudo.restore(safe, mapping) == text
+
+
+# ─────────────────────────────────────────────────────────────
+# Апостроф — часть слова ФИО
+# ─────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("apostrophe", ["'", "\u2019"])
+def test_apostrophe_in_person_name(pseudo, apostrophe):
+    """
+    «О'Брайен Шон Патрикович» — ОДИН токен, а не два.
+
+    Без апострофа в «слове» ФИО маска стартовала с середины фамилии:
+    «Шон Патрикович» становилось отдельным человеком, а фамилия
+    уходила в облако открытым текстом.
+    """
+    fio = f"О{apostrophe}Брайен Шон Патрикович"
+    text = f"ФИО: {fio}\nПаспорт: 47 12 553107"
+    safe, mapping = pseudo.anonymize(text)
+
+    assert fio not in safe, "фамилия с апострофом осталась открытой"
+    assert "Брайен" not in safe
+    assert list(mapping.values())[0] == fio
+    assert len([key for key in mapping if key.startswith("<<PERSON")]) == 1
+    assert pseudo.restore(safe, mapping) == text
+
+
+def test_apostrophe_in_person_name_dartagnan(pseudo):
+    """«Д'Артаньян Пётр Иванович» — один токен PERSON."""
+    fio = "Д'Артаньян Пётр Иванович"
+    safe, mapping = pseudo.anonymize(f"ФИО: {fio}\nПаспорт: 47 12 553107")
+
+    assert fio not in safe
+    assert list(mapping.values())[0] == fio
+    assert len([key for key in mapping if key.startswith("<<PERSON")]) == 1
+
+
+def test_apostrophe_inside_word_is_one_token(pseudo):
+    """«Мак'Дональд Иван Петрович» — один токен (апостроф в середине слова)."""
+    fio = "Мак'Дональд Иван Петрович"
+    safe, mapping = pseudo.anonymize(f"Директор: {fio}\nИНН 7707083893")
+
+    assert fio not in safe
+    assert list(mapping.values())[0] == fio
+    assert len([key for key in mapping if key.startswith("<<PERSON")]) == 1
+
+
+def test_hyphenated_fio_is_one_token(pseudo):
+    """Регресс: дефисные фамилия и имя остаются одним ФИО."""
+    fio = "Иванов-Петров Иван-Сергей Петрович"
+    safe, mapping = pseudo.anonymize(f"ФИО: {fio}\nПаспорт: 47 12 553107")
+
+    assert fio not in safe
+    assert list(mapping.values())[0] == fio
+    assert len([key for key in mapping if key.startswith("<<PERSON")]) == 1
+
+
+# ─────────────────────────────────────────────────────────────
+# Регресс: обычные ФИО и адреса
+# ─────────────────────────────────────────────────────────────
+
+def test_normal_fio_still_works(pseudo):
+    """«Иванов Иван Иванович» — как и раньше, один токен PERSON."""
+    safe, mapping = pseudo.anonymize(f"ФИО: {PERSON}\nПаспорт: {PASSPORT}")
+
+    assert PERSON not in safe
+    assert "<<PERSON_1>>" in safe
+    assert list(mapping.values())[0] == PERSON
+    assert len([key for key in mapping if key.startswith("<<PERSON")]) == 1
+
+
+def test_normal_address_still_works(pseudo):
+    """«г. Москва, ул. Ленина, д. 1» — улица и дом закрыты, город открыт."""
+    text = "Адрес: г. Москва, ул. Ленина, д. 1"
+    safe, mapping = pseudo.anonymize(text)
+
+    assert "Москва" in safe
+    assert "Ленина" not in safe and "д. 1" not in safe
+    tokens = [key for key in mapping if key.startswith("<<ADDRESS")]
+    assert tokens, "адрес не обезличен вовсе"
+    # Один токен, когда слой Natasha склеивает адрес целиком, два — когда
+    # адрес разбирают регулярки (улица и дом по отдельности). Оба варианта
+    # закрывают адрес полностью — это и проверяется.
+    assert len(tokens) in (1, 2)
+    assert pseudo.restore(safe, mapping) == text
+
+
+def test_foreign_two_word_name_still_masked(pseudo):
+    """Регресс: «Ли Пэн Артёмович» — один токен, не два."""
+    fio = "Ли Пэн Артёмович"
+    safe, mapping = pseudo.anonymize(f"ФИО: {fio}\nПаспорт: 47 12 553107")
+
+    assert fio not in safe
+    assert list(mapping.values())[0] == fio
+    assert len([key for key in mapping if key.startswith("<<PERSON")]) == 1
+
+
+# ─────────────────────────────────────────────────────────────
+# То же со слоем Natasha: в бою он включён и расширял маску сам
+# ─────────────────────────────────────────────────────────────
+
+@pytest.mark.slow
+def test_mask_does_not_eat_next_line_with_natasha(pseudo, natasha_layer):
+    """
+    С включённым Natasha маска тоже не заходит на следующую строку.
+
+    В бою адрес склеивается из частей Natasha, а «хвост» улицы расширял
+    его до начала следующей строки — именно так терялась метка «Телефон:».
+    """
+    text = ("Место рождения:г. Мурманск, ул. Центральная\n"
+            "Телефон:+7 (934) 923-84-26")
+    safe, mapping = pseudo.anonymize(text)
+
+    assert "Место рождения:" in safe and "Телефон:" in safe
+    assert all("\n" not in value for value in mapping.values())
+    assert pseudo.restore(safe, mapping) == text
+
+
+@pytest.mark.slow
+def test_mask_does_not_eat_block_title_with_natasha(pseudo, natasha_layer):
+    """С включённым Natasha заголовок блока ВУ остаётся целым."""
+    text = ("Адрес регистрации: г. Тверь, ул. Советская\n"
+            "ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ\n"
+            f"Водительское удостоверение {LICENSE}")
+    safe, mapping = pseudo.anonymize(text)
+
+    assert "ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ" in safe
+    assert all("\n" not in value for value in mapping.values())
+    assert pseudo.restore(safe, mapping) == text
+
+
+@pytest.mark.slow
+def test_apostrophe_in_person_name_with_natasha(pseudo, natasha_layer):
+    """С включённым Natasha «О'Брайен Шон Патрикович» — всё тот же один токен."""
+    fio = "О'Брайен Шон Патрикович"
+    safe, mapping = pseudo.anonymize(f"ФИО: {fio}\nПаспорт: 47 12 553107")
+
+    assert fio not in safe
+    assert list(mapping.values())[0] == fio
+    assert len([key for key in mapping if key.startswith("<<PERSON")]) == 1
