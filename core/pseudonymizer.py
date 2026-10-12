@@ -36,6 +36,14 @@ Natasha ловит иностранные имена, фамилии без ко
 восстановлении имя токена нормализуется (регистр, пробелы, дефисы,
 подчёркивания), поэтому такие варианты распознаются.
 
+**Паспорт — два токена.** Серия и номер паспорта («58 38 312160») закрываются
+РАЗНЫМИ плейсхолдерами: ``<<PASSPORT_SERIES_1>>`` и ``<<PASSPORT_NUMBER_1>>``.
+С одним токеном модель не видела границы «серия/номер» и в трети случаев
+теряла паспорт целиком. Разделитель между серией и номером в тексте
+сохраняется (он остаётся между токенами), поэтому ответ модели с двумя
+полями восстанавливается обратно в исходную строку. Если разделителя нет
+(«5838312160»), делить нечем — выходит один токен ``<<PASSPORT_1>>``.
+
 Если токен всё равно не найден в маппинге, значение не выдумывается:
 остаток плейсхолдера вычищается (``drop_unknown=True``), а в лог уходит
 WARNING с именем токена — без оригинала.
@@ -58,6 +66,8 @@ TOKEN_TYPES = (
     "SNILS",
     "VIN",
     "PASSPORT",
+    "PASSPORT_SERIES",
+    "PASSPORT_NUMBER",
     "LICENSE",
     "GOSNOMER",
     "INN",
@@ -77,6 +87,8 @@ _PRIORITY = {
     "SNILS": 90,
     "VIN": 85,
     "PASSPORT": 80,
+    "PASSPORT_SERIES": 80,
+    "PASSPORT_NUMBER": 80,
     "LICENSE": 75,
     "GOSNOMER": 70,
     "INN": 65,
@@ -178,7 +190,10 @@ def _natasha_pipeline() -> Optional[Dict[str, Any]]:
 _TOKEN_RE = re.compile(r"<<([^<>]{1,60})>>")
 
 #: Токен, у которого модель потеряла угловые скобки: PERSON_1, PERSON 1.
-_BARE_TOKEN_RE = re.compile(r"(?<![\w<])([A-Z]{2,12})[_ ](\d{1,3})(?![\w>])")
+#: Подчёркивание входит в имя токена: у паспорта оно двойное
+#: (``PASSPORT_SERIES_1``), и без этого такой токен не восстанавливался бы.
+#: Верхняя граница длины — 20 символов: более длинных имён у модуля нет.
+_BARE_TOKEN_RE = re.compile(r"(?<![\w<])([A-Z][A-Z_]{1,19})[_ ](\d{1,3})(?![\w>])")
 
 #: Символы, которые модель может вставить внутрь имени токена.
 _TOKEN_JUNK_RE = re.compile(r"[\s\-–—_.«»\"'`]+")
@@ -463,6 +478,23 @@ def _add(candidates: List[_Candidate], match, kind: str) -> None:
     candidates.append(_Candidate(start, start + len(trimmed), kind, trimmed))
 
 
+def _add_span(candidates: List[_Candidate], text: str, start: int, end: int,
+              kind: str) -> None:
+    """
+    Добавляет совпадение по ЯВНЫМ границам внутри одного match.
+
+    Нужно там, где одно совпадение регулярки обязано стать ДВУМЯ токенами
+    (серия и номер паспорта): группы регулярки дают точные границы частей.
+    """
+    value = text[start:end]
+    trimmed = value.strip()
+    if not trimmed:
+        return
+    offset = len(value) - len(value.lstrip())
+    candidates.append(_Candidate(
+        start + offset, start + offset + len(trimmed), kind, trimmed))
+
+
 # ─────────────────────────────────────────────────────────────
 # Детекторы
 # ─────────────────────────────────────────────────────────────
@@ -488,11 +520,31 @@ def _find_vin(text: str, out: List[_Candidate]) -> None:
 
 
 def _find_documents(text: str, out: List[_Candidate]) -> None:
-    """Паспорт и водительское удостоверение: серия 4 цифры + номер 6 цифр."""
+    """
+    Паспорт и водительское удостоверение: серия 4 цифры + номер 6 цифр.
+
+    У ПАСПОРТА серия и номер закрываются ДВУМЯ токенами (``PASSPORT_SERIES``
+    и ``PASSPORT_NUMBER``), если в тексте между ними есть разделитель
+    (пробел, дефис, «№»): тогда граница «серия/номер» видна модели, и она
+    может вернуть оба поля по отдельности. Слитный номер без разделителя
+    (``5838312160``) разделить нечем — остаётся ОДИН токен ``PASSPORT``,
+    а пару «серия/номер» восстанавливает ядро разбора
+    (``core.gigachat_client._normalize_document_ids``) уже после
+    восстановления оригинала.
+
+    ВУ (``LICENSE``) остаётся одним токеном: его пара и так разбирается
+    постобработкой, а полей у него в разборе меньше.
+    """
     for match in _DOC_NUMBER_RE.finditer(text):
         kind = _document_kind(text, match.start(), match.end())
-        if kind:
-            _add(out, match, kind)
+        if not kind:
+            continue
+        # start(3) == end(2) — между серией и номером разделителя НЕТ.
+        if kind == "PASSPORT" and match.start(3) > match.end(2):
+            _add_span(out, text, match.start(1), match.end(2), "PASSPORT_SERIES")
+            _add_span(out, text, match.start(3), match.end(3), "PASSPORT_NUMBER")
+            continue
+        _add(out, match, kind)
 
     # Слитный номер (1822926830) отличается от ИНН только контекстом.
     for match in _DOC_SOLID_RE.finditer(text):

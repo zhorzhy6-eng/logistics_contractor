@@ -50,9 +50,12 @@ def driver_scenario():
 def test_safety_check_passes_normal_scenario():
     report = safety_check(driver_scenario(), [], 1)
     assert report["masked_ok"] is True
-    assert report["placeholders"] >= 3          # ФИО, паспорт, телефон
+    assert report["placeholders"] >= 4          # ФИО, серия, номер, телефон
     assert report["unmasked_personal"] == 0
-    assert report["length"] > report["masked_length"]
+    # Маскирование обязано ИЗМЕНИТЬ текст. Длину сравнивать нельзя: два
+    # токена паспорта («<<PASSPORT_SERIES_1>> <<PASSPORT_NUMBER_1>>») длиннее
+    # самой серии с номером.
+    assert report["length"] != report["masked_length"]
 
 
 def test_safety_check_stops_on_operator_path():

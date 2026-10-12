@@ -16,6 +16,7 @@
 """
 
 import logging
+import re
 import threading
 import types
 
@@ -63,15 +64,33 @@ def pseudo():
     return Pseudonymizer()
 
 
+def kind_families(mapping) -> set:
+    """
+    Семейства типов токенов в маппинге: «PASSPORT_SERIES_1» → «PASSPORT».
+
+    Серия и номер паспорта — ДВА токена одного семейства PASSPORT
+    (см. core/pseudonymizer.py), поэтому проверки «какие виды данных
+    обезличены» смотрят на семейство, а не на полное имя токена.
+    """
+    families = set()
+    for token in mapping:
+        name = token_name(token).rsplit("_", 1)[0]
+        for suffix in ("_SERIES", "_NUMBER"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        families.add(name)
+    return families
+
+
 # ─────────────────────────────────────────────────────────────
 # Обезличивание
 # ─────────────────────────────────────────────────────────────
 
 def test_all_supported_types_are_found(pseudo):
     safe, mapping = pseudo.anonymize(FULL_TEXT)
-    kinds = {token_name(token).rsplit("_", 1)[0] for token in mapping}
     assert {"PERSON", "PASSPORT", "LICENSE", "PHONE", "EMAIL",
-            "INN", "SNILS", "VIN", "GOSNOMER", "ADDRESS"} <= kinds
+            "INN", "SNILS", "VIN", "GOSNOMER", "ADDRESS"} <= kind_families(mapping)
 
 
 def test_safe_text_contains_no_original_values(pseudo):
@@ -287,7 +306,8 @@ def test_person_initials_are_replaced(pseudo):
 
 def test_token_types_cover_all_documented_kinds():
     assert set(TOKEN_TYPES) == {
-        "EMAIL", "SNILS", "VIN", "PASSPORT", "LICENSE",
+        "EMAIL", "SNILS", "VIN", "PASSPORT", "PASSPORT_SERIES",
+        "PASSPORT_NUMBER", "LICENSE",
         "GOSNOMER", "INN", "PHONE", "PERSON", "ADDRESS",
     }
 
@@ -366,7 +386,8 @@ def test_gigachat_receives_tokens_instead_of_pii(gigachat_client):
     client, sent = gigachat_client
     sent["answer"] = (
         '{"driver": {"full_name": "<<PERSON_1>>", "phone": "<<PHONE_1>>", '
-        '"passport_series": "<<PASSPORT_1>>"}}'
+        '"passport_series": "<<PASSPORT_SERIES_1>>", '
+        '"passport_number": "<<PASSPORT_NUMBER_1>>"}}'
     )
 
     parsed = client.recognize_text(f"Водитель: {PERSON}, тел {PHONE}, паспорт {PASSPORT}")
@@ -376,12 +397,38 @@ def test_gigachat_receives_tokens_instead_of_pii(gigachat_client):
         assert secret not in user_content
     assert "<<PERSON_1>>" in user_content
     assert "<<PHONE_1>>" in user_content
-    assert "<<PASSPORT_1>>" in user_content
+    # Серия и номер уходят ДВУМЯ плейсхолдерами: граница «серия/номер» видна
+    # модели, и она возвращает каждое поле своим токеном.
+    assert "<<PASSPORT_SERIES_1>>" in user_content
+    assert "<<PASSPORT_NUMBER_1>>" in user_content
 
-    # Ответ модели с плейсхолдерами вернулся с оригиналами; пара серия/номер
-    # раскладывается ядром: модель видела один токен и вернула его в одно поле.
     assert parsed["driver"]["full_name"] == PERSON
     assert parsed["driver"]["phone"] == PHONE
+    assert parsed["driver"]["passport_series"] == "18 22"
+    assert parsed["driver"]["passport_number"] == "926830"
+
+
+def test_gigachat_legacy_single_passport_token_is_still_split(gigachat_client):
+    """Слитный паспорт идёт ОДНИМ токеном, и пара всё равно раскладывается."""
+    client, sent = gigachat_client
+    sent["answer"] = '{"driver": {"passport_number": "<<PASSPORT_1>>"}}'
+
+    parsed = client.recognize_text("Паспорт: 1822926830")
+
+    user_content = sent["payloads"][-1]["messages"][1]["content"]
+    assert "<<PASSPORT_1>>" in user_content
+    assert parsed["driver"]["passport_series"] == "18 22"
+    assert parsed["driver"]["passport_number"] == "926830"
+
+
+def test_gigachat_both_passport_tokens_in_one_field_are_split(gigachat_client):
+    """Модель сложила оба токена в одно поле — восстановленная строка делится."""
+    client, sent = gigachat_client
+    sent["answer"] = ('{"driver": {"passport_series": '
+                      '"<<PASSPORT_SERIES_1>> <<PASSPORT_NUMBER_1>>"}}')
+
+    parsed = client.recognize_text(f"Паспорт: {PASSPORT}")
+
     assert parsed["driver"]["passport_series"] == "18 22"
     assert parsed["driver"]["passport_number"] == "926830"
 
@@ -441,18 +488,27 @@ def test_gigachat_logs_contain_no_pii(gigachat_client, caplog):
 def test_passport_series_hyphen_is_anonymized(pseudo):
     text = "Водитель: Кузнецов Пётр Иванович\nПаспорт РФ: 60-26 123456, выдан 20.06.2015"
     safe, mapping = pseudo.anonymize(text)
-    assert "<<PASSPORT_1>>" in safe
-    assert "60-26 123456" in mapping.values()
+    assert "<<PASSPORT_SERIES_1>>" in safe and "<<PASSPORT_NUMBER_1>>" in safe
+    assert "60-26" in mapping.values() and "123456" in mapping.values()
     assert "60-26" not in safe and "123456" not in safe
     assert pseudo.restore(safe, mapping) == text
 
 
-@pytest.mark.parametrize("raw", ["60 26 123456", "6026123456"])
-def test_passport_series_space_and_solid_still_work(pseudo, raw):
-    text = f"Водитель: Кузнецов Пётр Иванович\nПаспорт РФ: {raw}, выдан 20.06.2015"
+def test_passport_series_space_is_two_tokens(pseudo):
+    text = "Водитель: Кузнецов Пётр Иванович\nПаспорт РФ: 60 26 123456, выдан 20.06.2015"
+    safe, mapping = pseudo.anonymize(text)
+    assert "<<PASSPORT_SERIES_1>>" in safe and "<<PASSPORT_NUMBER_1>>" in safe
+    assert "60 26" not in safe and "123456" not in safe
+    assert pseudo.restore(safe, mapping) == text
+
+
+def test_passport_solid_number_is_one_token(pseudo):
+    """Слитный паспорт делить нечем: остаётся один токен PASSPORT."""
+    text = "Водитель: Кузнецов Пётр Иванович\nПаспорт РФ: 6026123456, выдан 20.06.2015"
     safe, mapping = pseudo.anonymize(text)
     assert "<<PASSPORT_1>>" in safe
-    assert raw not in safe
+    assert "<<PASSPORT_SERIES_1>>" not in safe
+    assert "6026123456" not in safe
     assert pseudo.restore(safe, mapping) == text
 
 
@@ -498,6 +554,129 @@ def test_document_tokens_contain_no_original_digits(pseudo):
                 assert digits not in token
                 assert digits not in safe
         assert pseudo.restore(safe, mapping) == text
+
+
+# ─────────────────────────────────────────────────────────────
+# Серия и номер паспорта — ДВА плейсхолдера вместо одного
+# ─────────────────────────────────────────────────────────────
+# «58 38 312160» закрывалось одним токеном, и граница «серия/номер» до
+# модели не доходила: в 132 сценариях из 400 паспорт терялся целиком.
+# Теперь серия и номер — РАЗНЫЕ токены, а разделитель между ними остаётся
+# в тексте, поэтому ответ модели с двумя полями собирается обратно в
+# исходную строку.
+
+#: Форматы записи паспорта из генератора сценариев (simple / medium /
+#: hard / extreme) — те, где серия и номер РАЗДЕЛЕНЫ.
+SPLIT_PASSPORT_FORMS = (
+    "58 38 312160",
+    "5838 312160",
+    "58-38 312160",
+    "58 38 №312160",
+    "5838№312160",
+    "58 38 № 312160",
+)
+
+#: Форматы, где серия и номер слиты: делить нечем, токен остаётся один.
+SOLID_PASSPORT_FORMS = ("5838312160", "58 38312160", "58-38312160")
+
+
+@pytest.mark.parametrize("raw", SPLIT_PASSPORT_FORMS)
+def test_passport_series_and_number_are_two_tokens(pseudo, raw):
+    text = f"Водитель: Кузнецов Пётр Иванович\nПаспорт РФ: {raw}, выдан 20.06.2015"
+    safe, mapping = pseudo.anonymize(text)
+    assert "<<PASSPORT_SERIES_1>>" in safe
+    assert "<<PASSPORT_NUMBER_1>>" in safe
+    assert "5838" not in safe and "312160" not in safe
+    assert pseudo.restore(safe, mapping) == text
+
+
+@pytest.mark.parametrize("raw", SPLIT_PASSPORT_FORMS)
+def test_passport_boundary_is_visible_to_the_model(pseudo, raw):
+    """Между токенами остаётся разделитель — модель видит, что это два поля."""
+    text = f"Паспорт: {raw}"
+    safe, _ = pseudo.anonymize(text)
+    assert re.search(r"<<PASSPORT_SERIES_1>>\s*[№\-–—]?\s*<<PASSPORT_NUMBER_1>>",
+                     safe), safe
+
+
+@pytest.mark.parametrize("raw", SPLIT_PASSPORT_FORMS)
+def test_passport_parts_are_restored_into_place(pseudo, raw):
+    """Серия восстанавливается как серия, номер — как номер."""
+    text = f"Паспорт: {raw}"
+    _, mapping = pseudo.anonymize(text)
+    series = mapping["<<PASSPORT_SERIES_1>>"]
+    number = mapping["<<PASSPORT_NUMBER_1>>"]
+    assert "".join(ch for ch in series if ch.isdigit()) == "5838"
+    assert number == "312160"
+    assert pseudo.restore(
+        "<<PASSPORT_SERIES_1>> / <<PASSPORT_NUMBER_1>>",
+        mapping) == f"{series} / {number}"
+    assert pseudo.restore(
+        '{"driver": {"passport_series": "<<PASSPORT_SERIES_1>>", '
+        '"passport_number": "<<PASSPORT_NUMBER_1>>"}}',
+        mapping) == ('{"driver": {"passport_series": "' + series + '", '
+                     '"passport_number": "' + number + '"}}')
+
+
+@pytest.mark.parametrize("raw", SOLID_PASSPORT_FORMS)
+def test_solid_passport_is_one_token(pseudo, raw):
+    """Слитая запись неразрешима: остаётся один токен PASSPORT."""
+    safe, mapping = pseudo.anonymize(f"Паспорт: {raw}, выдан 20.06.2015")
+    assert "<<PASSPORT_1>>" in safe
+    assert "PASSPORT_SERIES" not in safe
+    assert "".join(ch for ch in raw if ch.isdigit()) not in safe
+    assert pseudo.restore(safe, mapping) == f"Паспорт: {raw}, выдан 20.06.2015"
+
+
+def test_two_passports_get_their_own_pairs(pseudo):
+    text = ("Паспорт: 58 38 312160, выдан 20.06.2015\n"
+            "Паспорт: 61 42 445566, выдан 11.11.2011")
+    safe, mapping = pseudo.anonymize(text)
+    assert "<<PASSPORT_SERIES_1>>" in safe and "<<PASSPORT_NUMBER_1>>" in safe
+    assert "<<PASSPORT_SERIES_2>>" in safe and "<<PASSPORT_NUMBER_2>>" in safe
+    assert "312160" not in safe and "445566" not in safe
+    assert pseudo.restore(safe, mapping) == text
+
+
+def test_same_series_in_two_passports_gets_one_token(pseudo):
+    """Одинаковая серия у двух паспортов — один токен, номера разные."""
+    text = ("Паспорт: 58 38 312160\nПаспорт: 58 38 999999")
+    safe, mapping = pseudo.anonymize(text)
+    assert safe.count("<<PASSPORT_SERIES_1>>") == 2
+    assert "<<PASSPORT_NUMBER_1>>" in safe and "<<PASSPORT_NUMBER_2>>" in safe
+    assert pseudo.restore(safe, mapping) == text
+
+
+@pytest.mark.parametrize("broken", [
+    "<<PASSPORT_SERIES 1>>",
+    "<<passport-series-1>>",
+    "<< Passport_Series_1 >>",
+    "PASSPORT_SERIES_1",
+    "PASSPORT_NUMBER_1",
+])
+def test_broken_passport_tokens_are_restored(pseudo, broken):
+    """Испорченные моделью имена новых токенов всё равно распознаются."""
+    _, mapping = pseudo.anonymize("Паспорт: 58 38 312160")
+    restored = pseudo.restore(broken, mapping)
+    assert "<<" not in restored
+    assert restored in {"58 38", "312160"}
+
+
+def test_license_is_still_one_token(pseudo):
+    """ВУ не тронуто: пара «серия/номер» у него закрыта одним токеном."""
+    text = "Водительское удостоверение: 99 12 654321, выдано 10.10.2020"
+    safe, mapping = pseudo.anonymize(text)
+    assert "<<LICENSE_1>>" in safe
+    assert "PASSPORT" not in safe
+    assert pseudo.restore(safe, mapping) == text
+
+
+def test_describe_reports_passport_families_without_values(pseudo):
+    _, mapping = pseudo.anonymize("Паспорт: 58 38 312160, выдан 20.06.2015")
+    described = pseudo.describe(mapping)
+    assert "PASSPORT_SERIES=1" in described and "PASSPORT_NUMBER=1" in described
+    for secret in ("5838", "312160", "58 38"):
+        assert secret not in described
 
 
 # ─────────────────────────────────────────────────────────────
@@ -561,9 +740,8 @@ def test_pseudonymizer_works_without_natasha(monkeypatch):
     safe, mapping = pseudo.anonymize(FULL_TEXT)
 
     assert pseudonymizer._natasha_pipeline() is None
-    kinds = {token_name(token).rsplit("_", 1)[0] for token in mapping}
     assert {"PERSON", "PASSPORT", "LICENSE", "PHONE", "EMAIL",
-            "INN", "SNILS", "VIN", "GOSNOMER", "ADDRESS"} <= kinds
+            "INN", "SNILS", "VIN", "GOSNOMER", "ADDRESS"} <= kind_families(mapping)
     for secret in ALL_SECRETS:
         assert secret not in safe
     assert pseudo.restore(safe, mapping) == FULL_TEXT

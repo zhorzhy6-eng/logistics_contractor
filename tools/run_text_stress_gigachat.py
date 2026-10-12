@@ -494,6 +494,42 @@ def _describe_error(exc: BaseException) -> str:
     return type(exc).__name__
 
 
+def scenario_field_keys(scenario: Dict[str, Any]) -> set:
+    """
+    Поля эталона сценария в виде «раздел.поле» (индексы списков убраны).
+
+    По ним выбирается ПОДМНОЖЕСТВО сценариев для точечного перезапроса:
+    «переспросить только те тексты, где есть серия паспорта».
+    """
+    keys = set()
+    for key, value in flatten(scenario["ground_truth"]).items():
+        if not _norm(value):
+            continue
+        keys.add(re.sub(r"\[\d+\]", "", key))
+    return keys
+
+
+def build_selection(args, all_meta, scenarios) -> List[int]:
+    """Выборка сценариев запуска: --sample/--kind/--level/--with-field/--limit."""
+    seeds = load_seeds(SEEDS_PATH)
+    total = len(seeds["seeds"])
+    selection = list(range(args.sample if args.sample else total))
+    if args.kind:
+        selection = [i for i in selection if all_meta[i]["kind"] in args.kind]
+    if args.level:
+        selection = [i for i in selection if all_meta[i]["level"] in args.level]
+    if args.with_field:
+        wanted = set(args.with_field)
+        selection = [i for i in selection
+                     if wanted & scenario_field_keys(scenarios[all_meta[i]["number"]])]
+    # --limit — потолок ИМЕННО этого запуска, поэтому применяется последним:
+    # иначе «--with-field … --limit 8» отсекал бы сценарии до фильтра и мог
+    # оставить пустую выборку (проверено: у первых восьми сценариев паспорта нет).
+    if args.limit:
+        selection = selection[:args.limit]
+    return selection
+
+
 def run(args) -> int:
     seeds = load_seeds(SEEDS_PATH)
     all_seeds = seeds["seeds"]
@@ -501,14 +537,13 @@ def run(args) -> int:
     total = len(all_seeds)
     print(f"Сценариев в раскладке: {total}")
 
-    limit = args.sample if args.sample else total
-    if args.limit:
-        limit = min(limit, args.limit)
-    selection = list(range(limit))
-    if args.kind:
-        selection = [i for i in selection if all_meta[i]["kind"] in args.kind]
-    if args.level:
-        selection = [i for i in selection if all_meta[i]["level"] in args.level]
+    scenarios: Dict[int, Dict[str, Any]] = {}
+    for index in range(total):
+        meta = all_meta[index]
+        scenarios[meta["number"]] = scenario_from_seed(
+            all_seeds[index], meta["kind"], meta["level"])
+
+    selection = build_selection(args, all_meta, scenarios)
     print(f"К прогону: {len(selection)}")
 
     progress = load_progress() if args.resume else {"version": 1, "results": {},
@@ -519,19 +554,26 @@ def run(args) -> int:
     progress["scope"] = args.scope
     progress["pause"] = args.pause
 
-    scenarios: Dict[int, Dict[str, Any]] = {}
-    for index in selection:
-        meta = all_meta[index]
-        scenarios[meta["number"]] = scenario_from_seed(
-            all_seeds[index], meta["kind"], meta["level"])
+    if args.reask:
+        cleared = 0
+        for index in selection:
+            entry = progress["results"].get(str(all_meta[index]["number"]))
+            if entry and entry.pop("gigachat", None) is not None:
+                cleared += 1
+            if entry:
+                entry.pop("status", None)
+                entry.pop("error", None)
+                entry.pop("error_text", None)
+        print(f"Сброшено прежних ответов модели (будут переспрошены): {cleared}")
 
     # ── Локальный разбор: бесплатно, поэтому считается для ВСЕЙ выборки ──
-    for number, scenario in scenarios.items():
+    selected_numbers = sorted(all_meta[index]["number"] for index in selection)
+    for number in selected_numbers:
         entry = progress["results"].setdefault(str(number), {"number": number})
         entry.setdefault("kind", all_meta[number - 1]["kind"])
         entry.setdefault("level", all_meta[number - 1]["level"])
         if not entry.get("local"):
-            entry["local"] = local_result(scenario)
+            entry["local"] = local_result(scenarios[number])
 
     db_rows = db_haystack()
     print(f"Строк рабочей базы для сверки: {len(db_rows)}")
@@ -544,13 +586,13 @@ def run(args) -> int:
     if args.local_only or args.dry_run:
         if args.dry_run:
             print("Режим --dry-run: проверки безопасности без запросов")
-            for number in sorted(scenarios):
+            for number in selected_numbers:
                 try:
                     safety_check(scenarios[number], db_rows, number)
                 except SafetyStop as exc:
                     print(f"СТОП (безопасность): {exc}")
                     return 2
-            print(f"Проверки безопасности пройдены: {len(scenarios)} сценариев")
+            print(f"Проверки безопасности пройдены: {len(selected_numbers)} сценариев")
         else:
             print("Режим --local-only: сеть не используется")
         report = build_report(progress, selection, all_meta, args, counters)
@@ -577,7 +619,8 @@ def run(args) -> int:
           f"пауза {args.pause} с")
 
     rate_limit_hits: List[float] = []
-    pending = [n for n in sorted(scenarios) if not progress["results"][str(n)].get("gigachat")]
+    pending = [n for n in selected_numbers
+               if not progress["results"][str(n)].get("gigachat")]
     print(f"К отправке: {len(pending)} | "
           f"готовых ответов: {len(scenarios) - len(pending)}")
 
@@ -1037,6 +1080,11 @@ def main_report(argv=None) -> int:
                         help="куда записать метрики")
     parser.add_argument("--print", dest="show", action="store_true",
                         help="печатать сводку, не записывая файл")
+    parser.add_argument("--compare-with", default="",
+                        help="второй файл прогресса: печатать «было → стало» "
+                             "по полям и по общим метрикам (для замера фикса)")
+    parser.add_argument("--compare-fields", default="",
+                        help="через запятую: какие поля печатать в сравнении")
     args = parser.parse_args(argv)
 
     progress_path = Path(args.progress)
@@ -1047,7 +1095,89 @@ def main_report(argv=None) -> int:
     progress = json.loads(progress_path.read_text(encoding="utf-8"))
     report = build_metrics_1000(progress, None if args.show else Path(args.out))
     print_metrics(report)
+
+    if args.compare_with:
+        before_path = Path(args.compare_with)
+        if not before_path.exists():
+            print(f"Нет файла для сравнения: {before_path}")
+            return 2
+        before = json.loads(before_path.read_text(encoding="utf-8"))
+        fields = [item.strip() for item in args.compare_fields.split(",")
+                  if item.strip()] or None
+        print_comparison(before, progress, fields)
     return 0
+
+
+def field_totals(progress: Dict[str, Any], source: str = "gigachat"
+                 ) -> Dict[str, Dict[str, int]]:
+    """
+    Абсолютные счётчики по каждому полю для одного движка (без долей).
+
+    Нужны для честного «было → стало»: сравнивать доли нельзя, если
+    знаменатель (сколько раз поле было в эталоне) не менялся, — а он
+    не меняется, потому что сценарии те же.
+    """
+    return field_error_stats(_result_rows(progress), source)
+
+
+def comparison_rows(before: Dict[str, Any], after: Dict[str, Any],
+                    source: str = "gigachat") -> List[Dict[str, Any]]:
+    """
+    Построчное «было → стало» по всем полям, где что-то изменилось.
+
+    Поля, которых правка не касалась, дают нулевую дельту и в отчёт не
+    попадают — поэтому таблица сама показывает, куда пришёл фикс.
+    """
+    was = field_totals(before, source)
+    now = field_totals(after, source)
+    rows: List[Dict[str, Any]] = []
+    for key in sorted(set(was) | set(now)):
+        old = was.get(key) or _empty_field()
+        new = now.get(key) or _empty_field()
+        delta = {name: new[name] - old[name]
+                 for name in ("expected", "found", "matched", "missed",
+                              "wrong", "extra")}
+        if not any(delta.values()):
+            continue
+        rows.append({
+            "field": key,
+            "before": {name: old[name] for name in
+                       ("expected", "found", "matched", "missed", "wrong")},
+            "after": {name: new[name] for name in
+                      ("expected", "found", "matched", "missed", "wrong")},
+            "delta": delta,
+            "before_recall": _share(old["matched"], old["expected"]),
+            "after_recall": _share(new["matched"], new["expected"]),
+        })
+    rows.sort(key=lambda row: (-abs(row["delta"]["matched"]), row["field"]))
+    return rows
+
+
+def print_comparison(before: Dict[str, Any], after: Dict[str, Any],
+                     fields: Optional[List[str]] = None,
+                     source: str = "gigachat") -> None:
+    """Печатает «было → стало»: по движку целиком и по каждому полю."""
+    print("=" * 68)
+    print("Сравнение «было -> стало» (облако, те же сценарии)")
+    was = summarise(_result_rows(before), source)["overall"]
+    now = summarise(_result_rows(after), source)["overall"]
+    for name in ("recall", "precision", "precision_core", "f1"):
+        print(f"  {name:<14} {was[name]:.4f} -> {now[name]:.4f} "
+              f"({now[name] - was[name]:+.4f})")
+    print(f"  совпало полей  {was['true_positive']} -> {now['true_positive']} "
+          f"({now['true_positive'] - was['true_positive']:+d})")
+    rows = comparison_rows(before, after, source)
+    if fields:
+        rows = [row for row in rows if row["field"] in set(fields)]
+    print(f"  полей с изменениями: {len(rows)}")
+    for row in rows[:25]:
+        old, new, delta = row["before"], row["after"], row["delta"]
+        print(f"    {row['field']:<34} "
+              f"совпало {old['matched']:>4} -> {new['matched']:>4} "
+              f"({delta['matched']:+d}) | пропуск {old['missed']:>4} -> "
+              f"{new['missed']:>4} ({delta['missed']:+d}) | неверно "
+              f"{old['wrong']:>4} -> {new['wrong']:>4} ({delta['wrong']:+d}) | "
+              f"recall {row['before_recall']:.2f} -> {row['after_recall']:.2f}")
 
 
 def _verdict_ok(report: Dict[str, Any], baseline: Dict[str, Any],
@@ -1080,7 +1210,7 @@ def verdict(report: Dict[str, Any], baseline: Dict[str, Any],
         delta = current["recall"] - was["recall"]
         mark = "OK" if delta >= -TOLERANCE else "РЕГРЕССИЯ"
         ok = ok and delta >= -TOLERANCE
-        lines.append(f"  {title}: recall {was['recall']:.4f} → "
+        lines.append(f"  {title}: recall {was['recall']:.4f} -> "
                      f"{current['recall']:.4f} ({delta:+.4f}) — {mark}")
     lines.append("ИТОГ: " + ("РЕГРЕССИИ НЕТ" if ok else "ЕСТЬ РЕГРЕССИЯ"))
     return "\n".join(lines)
@@ -1136,6 +1266,15 @@ def print_report(report: Dict[str, Any]) -> None:
 
 
 def main(argv=None) -> int:
+    # Консоль Windows по умолчанию cp1251 и падает на стрелках «→» в отчётах
+    # (UnicodeEncodeError посреди прогона). Вывод переводится в UTF-8;
+    # если поток не поддерживает переключение — печатаем как получится.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
     parser = argparse.ArgumentParser(
         description="Стресс-тест распознавания текста через GigaChat-3-Pro.")
     parser.add_argument("--write-baseline", action="store_true",
@@ -1164,6 +1303,12 @@ def main(argv=None) -> int:
                         help="считать только локальный разбор, без сети")
     parser.add_argument("--dry-run", action="store_true",
                         help="без клиента: проверить раскладку и безопасность")
+    parser.add_argument("--with-field", action="append", default=[],
+                        help="только сценарии, где в эталоне есть это поле "
+                             "(«driver.passport_series»); можно несколько раз")
+    parser.add_argument("--reask", action="store_true",
+                        help="сбросить сохранённые ответы модели по выборке и "
+                             "переспросить их заново (для замера фикса)")
     args = parser.parse_args(argv)
 
     if args.report:

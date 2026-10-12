@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Тесты починки разбиения «серия / номер» паспорта и ВУ в ответе модели.
+Тесты разбиения «серия / номер» паспорта и ВУ в ответе модели.
 
-Обезличивание заменяет «60 26 123456» одним плейсхолдером, поэтому модель
-возвращает весь токен в одном поле. Ядро (core/gigachat_client) обязано
-после восстановления разложить пару: серия «XX XX», номер «XXXXXX».
+Два случая:
+
+  * серия и номер паспорта РАЗДЕЛЕНЫ в тексте — обезличивание даёт ДВА
+    плейсхолдера (``<<PASSPORT_SERIES_1>>`` и ``<<PASSPORT_NUMBER_1>>``),
+    и модель возвращает каждое поле своим токеном;
+  * слитная запись (``6026123456``) — плейсхолдер ОДИН, поэтому модель
+    возвращает весь токен в одном поле. Ядро (core/gigachat_client) обязано
+    после восстановления разложить пару: серия «XX XX», номер «XXXXXX».
 
 Все данные синтетические. Логика обезличивания в этих тестах не меняется,
 а проверяется как есть.
@@ -63,13 +68,15 @@ def _recognize(client, sent, answer, text):
 
 
 # ─────────────────────────────────────────────────────────────
-# Паспорт: токен модели в одном поле
+# Паспорт: РАЗДЕЛЁННАЯ запись — два токена, модель кладёт каждый в своё поле
 # ─────────────────────────────────────────────────────────────
 
-def test_passport_token_in_number_field_is_split(client):
+def test_two_passport_tokens_are_placed_by_fields(client):
     client, sent = client
     answer = ('{"driver": {"full_name": "<<PERSON_1>>", '
-              '"passport_number": "<<PASSPORT_1>>", "passport_code": "610-050"}}')
+              '"passport_series": "<<PASSPORT_SERIES_1>>", '
+              '"passport_number": "<<PASSPORT_NUMBER_1>>", '
+              '"passport_code": "610-050"}}')
     parsed = _recognize(client, sent, answer,
                         DRIVER_TEXT.format(passport="60 26 123456", license="99 12 654321"))
     driver = parsed["driver"]
@@ -78,9 +85,47 @@ def test_passport_token_in_number_field_is_split(client):
     assert driver["passport_code"] == "610-050"
     assert driver["full_name"] == "Кузнецов Пётр Иванович"
 
-    # В модель ушли только плейсхолдеры, а не оригиналы.
+    # В модель ушли только плейсхолдеры, а не оригиналы; граница «серия/номер»
+    # видна: между токенами остался разделитель из текста.
     user_content = sent["payloads"][-1]["messages"][1]["content"]
     assert "60 26 123456" not in user_content
+    assert "Кузнецов" not in user_content
+    assert "<<PASSPORT_SERIES_1>> <<PASSPORT_NUMBER_1>>" in user_content
+    dumped = json.dumps(parsed, ensure_ascii=False)
+    assert "<<" not in dumped
+    assert "XX" not in dumped
+
+
+def test_two_passport_tokens_in_one_field_are_still_split(client):
+    """Оба токена в одном поле: после восстановления строку делит ядро."""
+    client, sent = client
+    answer = ('{"driver": {"passport_series": '
+              '"<<PASSPORT_SERIES_1>> <<PASSPORT_NUMBER_1>>"}}')
+    parsed = _recognize(client, sent, answer,
+                        DRIVER_TEXT.format(passport="60 26 123456", license="99 12 654321"))
+    assert parsed["driver"]["passport_series"] == "60 26"
+    assert parsed["driver"]["passport_number"] == "123456"
+
+
+# ─────────────────────────────────────────────────────────────
+# Паспорт: СЛИТНАЯ запись — один токен, пару раскладывает ядро
+# ─────────────────────────────────────────────────────────────
+
+def test_passport_token_in_number_field_is_split(client):
+    client, sent = client
+    answer = ('{"driver": {"full_name": "<<PERSON_1>>", '
+              '"passport_number": "<<PASSPORT_1>>", "passport_code": "610-050"}}')
+    parsed = _recognize(client, sent, answer,
+                        DRIVER_TEXT.format(passport="6026123456", license="99 12 654321"))
+    driver = parsed["driver"]
+    assert driver["passport_series"] == "60 26"
+    assert driver["passport_number"] == "123456"
+    assert driver["passport_code"] == "610-050"
+    assert driver["full_name"] == "Кузнецов Пётр Иванович"
+
+    # В модель ушли только плейсхолдеры, а не оригиналы.
+    user_content = sent["payloads"][-1]["messages"][1]["content"]
+    assert "6026123456" not in user_content
     assert "Кузнецов" not in user_content
     assert "<<PASSPORT_1>>" in user_content
     # И в результате нет ни плейсхолдеров, ни UI-заглушек.
@@ -93,7 +138,7 @@ def test_passport_token_in_series_field_is_split(client):
     client, sent = client
     answer = '{"driver": {"passport_series": "<<PASSPORT_1>>"}}'
     parsed = _recognize(client, sent, answer,
-                        DRIVER_TEXT.format(passport="60 26 123456", license="99 12 654321"))
+                        DRIVER_TEXT.format(passport="6026123456", license="99 12 654321"))
     assert parsed["driver"]["passport_series"] == "60 26"
     assert parsed["driver"]["passport_number"] == "123456"
 
@@ -103,17 +148,16 @@ def test_passport_token_in_both_fields_is_split(client):
     answer = ('{"driver": {"passport_series": "<<PASSPORT_1>>", '
               '"passport_number": "<<PASSPORT_1>>"}}')
     parsed = _recognize(client, sent, answer,
-                        DRIVER_TEXT.format(passport="60 26 123456", license="99 12 654321"))
+                        DRIVER_TEXT.format(passport="6026123456", license="99 12 654321"))
     assert parsed["driver"]["passport_series"] == "60 26"
     assert parsed["driver"]["passport_number"] == "123456"
 
 
-@pytest.mark.parametrize("raw", ["60 26 123456", "6026123456"])
-def test_passport_split_works_for_any_separators(client, raw):
+def test_passport_split_works_for_solid_form(client):
     client, sent = client
     answer = '{"driver": {"passport_number": "<<PASSPORT_1>>"}}'
     parsed = _recognize(client, sent, answer,
-                        DRIVER_TEXT.format(passport=raw, license="99 12 654321"))
+                        DRIVER_TEXT.format(passport="6026123456", license="99 12 654321"))
     assert parsed["driver"]["passport_series"] == "60 26"
     assert parsed["driver"]["passport_number"] == "123456"
 
