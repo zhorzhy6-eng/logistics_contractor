@@ -7,6 +7,8 @@
     python tools/run_text_stress_gigachat.py --resume           # продолжить
     python tools/run_text_stress_gigachat.py --sample 20        # первые 20
     python tools/run_text_stress_gigachat.py --local-only       # без сети
+    python tools/run_text_stress_gigachat.py --report           # метрики по всему
+                                                                # прогрессу, без сети
 
 Что делает
 ----------
@@ -71,8 +73,40 @@ BASELINE_PATH = (
     PROJECT_ROOT / "tests" / "data" / "synthetic_docs" / "baseline_text_gigachat.json"
 )
 
+#: Метрики по ВСЕМУ прогрессу: местоположение ошибок по полям (топы missed /
+#: wrong / extra) и сравнение партий «до фикса» и «после фикса». В git тоже
+#: только числа и имена полей.
+METRICS_1000_PATH = (
+    PROJECT_ROOT / "tests" / "data" / "synthetic_docs"
+    / "baseline_text_gigachat_1000.json"
+)
+
+#: Партия ответов, снятых ДО фикса псевдонимизатора (список номеров сценариев).
+LEGACY_NUMBERS_PATH = PROJECT_ROOT / "tests" / "_tmp" / "_text_stress_264_numbers.txt"
+
+#: Замер «маска заходила на следующую строку» на СТАРОМ коде (проба
+#: `tests/_tmp/_probe_mask_newline.py --save`). Файла может не быть — тогда
+#: замер не печатается. Новое значение считается на месте.
+LEGACY_MASK_PATH = PROJECT_ROOT / "tests" / "_tmp" / "_mask_newline_old.json"
+
+#: Поля, которые обязан был починить фикс псевдонимизатора: маска заходила на
+#: следующую строку и съедала метку поля («Место рождения», «Телефон»,
+#: «Кем выдан», «Код подразделения», «Адрес регистрации»). Здесь только имена.
+FIELDS_AFTER_PSEUDONYMIZER_FIX = (
+    "driver.birth_place",
+    "driver.phone",
+    "driver.passport_issuer",
+    "driver.passport_code",
+    "driver.registration_address",
+    "carrier.bank_name",
+    "customer.bank_name",
+)
+
 #: Допуск падения метрик относительно baseline.
 TOLERANCE = 0.02
+
+#: Сколько полей в топах missed / wrong / extra.
+TOP_FIELDS = 20
 
 #: Пауза между запросами: ~190 запросов в час при лимите Freemium ~200.
 DEFAULT_PAUSE = 19.0
@@ -688,6 +722,334 @@ def load_baseline(path: Path = BASELINE_PATH) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# ─────────────────────────────────────────────────────────────
+# Метрики по всему прогрессу: где именно ошибается каждый движок
+# ─────────────────────────────────────────────────────────────
+
+def _result_rows(progress: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Записи прогресса по возрастанию номера сценария."""
+    results = progress.get("results") or {}
+    keys = [key for key in results if str(key).isdigit()]
+    return [results[key] for key in sorted(keys, key=int)]
+
+
+def _empty_field() -> Dict[str, int]:
+    return {"expected": 0, "missed": 0, "wrong": 0,
+            "found": 0, "matched": 0, "extra": 0,
+            "extra_default": 0, "extra_schema": 0, "extra_real": 0}
+
+
+def _share(part: int, total: int) -> float:
+    """Доля с округлением до 4 знаков; пустой знаменатель — 0.0, а не деление на ноль."""
+    return round(part / total, 4) if total else 0.0
+
+
+def _f1(recall: float, precision: float) -> float:
+    return round(2 * recall * precision / (recall + precision), 4) \
+        if (recall + precision) else 0.0
+
+
+def _schema_artifact(key: str, schema: Dict[str, Any]) -> bool:
+    """Есть ли поле в схеме разбора. `contract.loading_address` — есть."""
+    section, _, field = key.partition(".")
+    return section not in schema or field not in schema[section]
+
+
+def field_error_stats(results: List[Dict[str, Any]],
+                      source: str) -> Dict[str, Dict[str, int]]:
+    """
+    По каждому полю: сколько раз было в эталоне, пропущено, испорчено, лишнее.
+
+    `missed` и `wrong` — взаимоисключающие: поле либо не пришло вовсе, либо
+    пришло другим значением. `extra` — поле, которого в эталоне не было;
+    из них `extra_default` — служебные подстановки промпта (`vat_rate`,
+    год выпуска 0), `extra_schema` — поля схемы ответа, которых нет в
+    эталоне сценария, `extra_real` — настоящие лишние поля. Хранятся ТОЛЬКО
+    имена полей и счётчики: значений здесь нет.
+    """
+    from core.document_import_service import SCHEMA
+
+    stats: Dict[str, Dict[str, int]] = {}
+    for item in results:
+        data = item.get(source)
+        if not data:
+            continue
+        service = set(data.get("default_extras") or [])
+        for key, bucket in (data.get("field_stats") or {}).items():
+            slot = stats.setdefault(key, _empty_field())
+            slot["expected"] += bucket.get("expected", 0)
+            slot["found"] += bucket.get("found", 0)
+            slot["matched"] += bucket.get("matched", 0)
+        for key in data.get("missed") or []:
+            stats.setdefault(key, _empty_field())["missed"] += 1
+        for key in data.get("wrong") or []:
+            stats.setdefault(key, _empty_field())["wrong"] += 1
+        for key in data.get("extra") or []:
+            slot = stats.setdefault(key, _empty_field())
+            slot["extra"] += 1
+            if key in service:
+                slot["extra_default"] += 1
+            elif _schema_artifact(key, SCHEMA):
+                slot["extra_schema"] += 1
+            else:
+                slot["extra_real"] += 1
+    return stats
+
+
+def top_error_fields(stats: Dict[str, Dict[str, int]], key: str,
+                     limit: int = TOP_FIELDS) -> List[Dict[str, Any]]:
+    """
+    Топ полей по одному счётчику (`missed` / `wrong` / `extra`).
+
+    Сортировка: сначала по числу (убывание), затем по имени — чтобы файл
+    не «поехал» от перестановки одинаковых чисел.
+    """
+    items = [(name, bucket) for name, bucket in stats.items() if bucket.get(key, 0)]
+    items.sort(key=lambda pair: (-pair[1][key], pair[0]))
+    return [{"field": name, key: bucket[key], "expected": bucket["expected"],
+             "rate": _share(bucket[key], bucket["expected"])}
+            for name, bucket in items[:limit]]
+
+
+def top_extra_fields(stats: Dict[str, Dict[str, int]],
+                     limit: int = TOP_FIELDS) -> List[Dict[str, Any]]:
+    """
+    Топ-20 лишних полей с пометкой, ОТКУДА поле взялось.
+
+    * `default_extras` — служебные подстановки промпта (`vat_rate`,
+      `payment_days`, год выпуска `0`). В документе они нужны: это настройки
+      приложения, а не ошибка распознавания, — но формула `score` считает их
+      лишними, поэтому `precision_core` считается без них.
+    * `вне схемы` — поля, которых нет во внутренней схеме разбора
+      (`core.document_import_service.SCHEMA`), но которые системный промпт
+      требует возвращать: `contract.price_without_vat`, `loading_address`,
+      `unloading_address`, `carrier.short_name`. Приложение их использует
+      (вкладка «Стоимость», точки маршрута), а замер их записывает в потери
+      precision — это расхождение ЗАМЕРА и реальности, а не ошибка модели.
+    * `лишнее` — настоящее лишнее поле: его нет ни в эталоне, ни в подстановках.
+    """
+    items = [(name, bucket) for name, bucket in stats.items() if bucket.get("extra")]
+    items.sort(key=lambda pair: (-pair[1]["extra"], pair[0]))
+    rows = []
+    for name, bucket in items[:limit]:
+        if bucket["extra_default"]:
+            kind = "default_extras"
+        elif bucket["extra_schema"]:
+            kind = "вне схемы"
+        else:
+            kind = "лишнее"
+        rows.append({
+            "field": name,
+            "extra": bucket["extra"],
+            "expected": bucket["expected"],
+            "extra_default": bucket["extra_default"],
+            "extra_schema": bucket["extra_schema"],
+            "extra_real": bucket["extra_real"],
+            "kind": kind,
+        })
+    return rows
+
+
+def field_metrics_pair(results: List[Dict[str, Any]], field: str) -> Dict[str, Any]:
+    """recall / precision / f1 поля у обоих движков (по одной партии)."""
+    row: Dict[str, Any] = {}
+    for source in ("gigachat", "local"):
+        stats = field_error_stats(results, source)
+        bucket = stats.get(field) or _empty_field()
+        row[source] = {
+            "expected": bucket["expected"],
+            "found": bucket["found"],
+            "matched": bucket["matched"],
+            "recall": _share(bucket["matched"], bucket["expected"]),
+            "precision": _share(bucket["matched"], bucket["found"]),
+            "f1": _f1(_share(bucket["matched"], bucket["expected"]),
+                      _share(bucket["matched"], bucket["found"])),
+        }
+    return row
+
+
+def load_legacy_numbers(path: Path = LEGACY_NUMBERS_PATH) -> set:
+    """Номера сценариев, ответы по которым сняты ДО фикса псевдонимизатора."""
+    if not path.exists():
+        return set()
+    text = path.read_text(encoding="utf-8").strip()
+    return {int(part) for part in text.split(",") if part.strip()}
+
+
+def count_mask_newlines() -> int:
+    """
+    Сколько сценариев имеют перенос строки ВНУТРИ маски (текущий код).
+
+    Тот же замер, что в `tests/_tmp/_probe_mask_newline.py`, но считается на
+    месте: он нужен только для сравнения «было → стало» в отчёте.
+    """
+    from tools.make_text_scenarios import load_seeds, scenario_from_seed
+
+    seeds = load_seeds()
+    pseudo = Pseudonymizer()
+    count = 0
+    for seed, meta in zip(seeds["seeds"], seeds["scenarios"]):
+        scenario = scenario_from_seed(seed, meta["kind"], meta["level"])
+        _masked, mapping = pseudo.anonymize(scenario["text"])
+        if any("\n" in value for value in mapping.values()):
+            count += 1
+    return count
+
+
+def build_metrics_1000(progress: Dict[str, Any],
+                       path: Path = METRICS_1000_PATH) -> Dict[str, Any]:
+    """
+    Метрики по ВСЕМУ прогрессу (не по выборке запуска).
+
+    Отвечает на вопрос «что чинить следующим»: где именно теряются поля,
+    где они приходят неверными и какие поля добавляются зря. Отдельно —
+    партии «до фикса псевдонимизатора» и «после», потому что прогресс
+    смешанный: 264 ответа сняты старым кодом.
+    """
+    results = _result_rows(progress)
+    answered = [item for item in results if item.get("gigachat")]
+    legacy = load_legacy_numbers()
+    old_rows = [item for item in answered if item["number"] in legacy]
+    new_rows = [item for item in answered if item["number"] not in legacy]
+
+    report: Dict[str, Any] = {
+        "model": progress.get("model", ""),
+        "scope": progress.get("scope", ""),
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "updated_at": progress.get("updated_at", ""),
+        "scenarios": len(results),
+        "scenarios_with_answer": len(answered),
+        "scenarios_with_error": sum(1 for item in results if item.get("error")),
+        "batches": {
+            "before_pseudonymizer_fix": {
+                "label": "снято ДО фикса 0cbf386", "scenarios": len(old_rows)},
+            "after_pseudonymizer_fix": {
+                "label": "снято ПОСЛЕ фикса 0cbf386", "scenarios": len(new_rows)},
+        },
+        "totals": {},
+        "by_kind": {},
+        "by_level": {},
+        "top_missed": {},
+        "top_wrong": {},
+        "top_extra": {},
+        "fields_after_pseudonymizer_fix": {},
+    }
+    for source in ("gigachat", "local"):
+        summary = summarise(answered, source)
+        report["totals"][source] = summary["overall"]
+        report["by_kind"][source] = summary["by_kind"]
+        report["by_level"][source] = summary["by_level"]
+        engine_fields = field_error_stats(answered, source)
+        report["top_missed"][source] = top_error_fields(engine_fields, "missed")
+        report["top_wrong"][source] = top_error_fields(engine_fields, "wrong")
+        report["top_extra"][source] = top_extra_fields(engine_fields)
+
+    fields: Dict[str, Any] = {}
+    for field in FIELDS_AFTER_PSEUDONYMIZER_FIX:
+        fields[field] = {
+            "before": field_metrics_pair(old_rows, field),
+            "after": field_metrics_pair(new_rows, field),
+            "all": field_metrics_pair(answered, field),
+            "matched": {
+                "before": fields_expected_map(old_rows, field),
+                "after": fields_expected_map(new_rows, field),
+                "all": fields_expected_map(answered, field),
+            },
+        }
+    report["fields_after_pseudonymizer_fix"] = fields
+
+    if LEGACY_MASK_PATH.exists():
+        legacy_mask = json.loads(LEGACY_MASK_PATH.read_text(encoding="utf-8"))
+        numbers = legacy_mask.get("numbers") or []
+        report["pseudonymizer_mask"] = {
+            "scenarios_with_newline_before": len(numbers),
+            "scenarios_with_newline_after": count_mask_newlines(),
+            "scenarios_with_label_inside_before": legacy_mask.get("label_eaten", 0),
+            "masks_total_before": legacy_mask.get("total_masks", 0),
+        }
+    if path:
+        write_json(report, path)
+    return report
+
+
+def fields_expected_map(results: List[Dict[str, Any]], field: str) -> Dict[str, int]:
+    """Сколько раз поле «совпало / было в эталоне» у каждого движка."""
+    row: Dict[str, int] = {}
+    for source in ("gigachat", "local"):
+        bucket = field_error_stats(results, source).get(field) or _empty_field()
+        row[f"{source}_matched"] = bucket["matched"]
+        row[f"{source}_expected"] = bucket["expected"]
+    return row
+
+
+def write_json(report: Dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=1) + "\n",
+                    encoding="utf-8")
+    print(f"Метрики записаны: {path}")
+
+
+def print_metrics(report: Dict[str, Any]) -> None:
+    print("=" * 68)
+    print(f"Метрики по {report['scenarios']} сценариям "
+          f"(с ответом {report['scenarios_with_answer']}, "
+          f"с ошибкой {report['scenarios_with_error']})")
+    for source, title in (("gigachat", "GigaChat"), ("local", "Локальный разбор")):
+        row = report["totals"][source]
+        print(f"{title}: recall={row['recall']:.4f} precision={row['precision']:.4f} "
+              f"precision_core={row['precision_core']:.4f} f1={row['f1']:.4f}")
+    print("\nТоп-10 пропущенных полей (GigaChat):")
+    for item in report["top_missed"]["gigachat"][:10]:
+        print(f"    {item['field']:<34} missed {item['missed']:>4} из "
+              f"{item['expected']:>4} ({item['rate']:.2f})")
+    print("Топ-10 неверных полей (GigaChat):")
+    for item in report["top_wrong"]["gigachat"][:10]:
+        print(f"    {item['field']:<34} wrong  {item['wrong']:>4} из "
+              f"{item['expected']:>4} ({item['rate']:.2f})")
+    print("Топ-10 лишних полей (GigaChat):")
+    for item in report["top_extra"]["gigachat"][:10]:
+        print(f"    {item['field']:<34} extra  {item['extra']:>4} "
+              f"(служебных {item['extra_default']}, вне схемы {item['extra_schema']}, "
+              f"настоящих {item['extra_real']}) — {item['kind']}")
+    print("\nПоля после фикса псевдонимизатора (recall: было / стало):")
+    for field, row in report["fields_after_pseudonymizer_fix"].items():
+        before = row["before"]["gigachat"]
+        after = row["after"]["gigachat"]
+        print(f"    {field:<34} облако {before['recall']:.2f} / "
+              f"{after['recall']:.2f}; правила {row['before']['local']['recall']:.2f} "
+              f"/ {row['after']['local']['recall']:.2f}")
+    mask = report.get("pseudonymizer_mask")
+    if mask:
+        print(f"\nМаска с переносом строки: было "
+              f"{mask['scenarios_with_newline_before']}, стало "
+              f"{mask['scenarios_with_newline_after']}; "
+              f"с подписью поля внутри маски было "
+              f"{mask['scenarios_with_label_inside_before']}")
+
+
+def main_report(argv=None) -> int:
+    """Собрать метрики по всему прогрессу и записать их в JSON."""
+    parser = argparse.ArgumentParser(
+        description="Метрики стресс-теста текста по всему прогрессу прогона.")
+    parser.add_argument("--progress", default=str(PROGRESS_PATH),
+                        help="файл прогресса (по умолчанию tests/_tmp/...)")
+    parser.add_argument("--out", default=str(METRICS_1000_PATH),
+                        help="куда записать метрики")
+    parser.add_argument("--print", dest="show", action="store_true",
+                        help="печатать сводку, не записывая файл")
+    args = parser.parse_args(argv)
+
+    progress_path = Path(args.progress)
+    if not progress_path.exists():
+        print(f"Нет файла прогресса: {progress_path}\n"
+              f"Сначала прогон: python tools/run_text_stress_gigachat.py --resume")
+        return 2
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    report = build_metrics_1000(progress, None if args.show else Path(args.out))
+    print_metrics(report)
+    return 0
+
+
 def _verdict_ok(report: Dict[str, Any], baseline: Dict[str, Any],
                 selection_size: int) -> bool:
     """Сравнение допустимо только на полной выборке."""
@@ -778,6 +1140,10 @@ def main(argv=None) -> int:
         description="Стресс-тест распознавания текста через GigaChat-3-Pro.")
     parser.add_argument("--write-baseline", action="store_true",
                         help="записать baseline_text_gigachat.json")
+    parser.add_argument("--report", action="store_true",
+                        help="только метрики по всему прогрессу: топы missed / "
+                             "wrong / extra и партии «до/после фикса» → "
+                             "baseline_text_gigachat_1000.json (без сети)")
     parser.add_argument("--resume", action="store_true",
                         help="продолжить с сохранённого прогресса")
     parser.add_argument("--sample", type=int, default=0,
@@ -799,6 +1165,10 @@ def main(argv=None) -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="без клиента: проверить раскладку и безопасность")
     args = parser.parse_args(argv)
+
+    if args.report:
+        return main_report(["--progress", str(PROGRESS_PATH),
+                            "--out", str(METRICS_1000_PATH)])
 
     if not SEEDS_PATH.exists():
         print(f"Нет файла зёрен: {SEEDS_PATH}\n"

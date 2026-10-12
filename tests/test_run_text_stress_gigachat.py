@@ -12,10 +12,13 @@ import pytest
 
 from tools.make_text_scenarios import build_scenario
 from tools.run_text_stress_gigachat import (
-    PROMPT_DEFAULT_VALUES, SafetyStop, _describe_error, _verdict_ok, check_answer,
-    field_stats, group_metrics, prompt_default_extras, safety_check, summarise,
-    verdict,
+    METRICS_1000_PATH, PROMPT_DEFAULT_VALUES, SafetyStop, _describe_error,
+    _result_rows, _verdict_ok, build_metrics_1000, check_answer, field_error_stats,
+    field_metrics_pair, field_stats, group_metrics, load_legacy_numbers,
+    prompt_default_extras, safety_check, summarise, top_error_fields,
+    top_extra_fields, verdict,
 )
+import json
 import random
 
 
@@ -197,6 +200,199 @@ def test_summarise_splits_by_kind_and_level():
     assert report["by_kind"]["drivers"]["recall"] == 0.75
     assert "vehicles" not in report["by_kind"]
     assert report["by_level"]["simple"]["documents"] == 1
+
+
+# ─────────────────────────────────────────────────────────────
+# Метрики по всему прогрессу: где именно ошибается движок
+# ─────────────────────────────────────────────────────────────
+
+def engine_result(**overrides):
+    """Запись прогресса одного сценария с готовыми метриками движка."""
+    row = {
+        "expected": 3, "found": 4, "true_positive": 2,
+        "missed": [], "wrong": [], "extra": [], "default_extras": [],
+        "field_stats": {},
+    }
+    row.update(overrides)
+    return row
+
+
+def progress_item(number, kind="drivers", level="simple", **overrides):
+    item = {"number": number, "kind": kind, "level": level,
+            "gigachat": engine_result(), "local": engine_result()}
+    item.update(overrides)
+    return item
+
+
+def progress_of(*items):
+    return {"results": {str(item["number"]): item for item in items},
+            "model": "GigaChat-3-Pro", "scope": "GIGACHAT_API_PERS",
+            "updated_at": "2026-10-12T18:07:41"}
+
+
+def test_result_rows_sorted_by_number():
+    data = progress_of(progress_item(10), progress_item(2), progress_item(7))
+    assert [row["number"] for row in _result_rows(data)] == [2, 7, 10]
+
+
+def test_field_error_stats_splits_missed_wrong_extra():
+    item = progress_item(1, gigachat=engine_result(
+        missed=["driver.passport_series"],
+        wrong=["driver.phone"],
+        extra=["carrier.short_name"],
+        field_stats={"driver.birth_date": {"expected": 2, "found": 1, "matched": 1}}))
+    stats = field_error_stats([item], "gigachat")
+    assert stats["driver.passport_series"]["missed"] == 1
+    assert stats["driver.passport_series"]["wrong"] == 0
+    assert stats["driver.phone"]["wrong"] == 1
+    assert stats["carrier.short_name"]["extra"] == 1
+    assert stats["driver.birth_date"]["matched"] == 1
+
+
+def test_field_error_stats_marks_service_and_out_of_schema_extras():
+    """
+    Служебная подстановка промпта и поле «вне схемы» — разные пометки.
+
+    `contract.price_without_vat` приходит как `0.0` (подстановка промпта), а
+    `carrier.short_name` — настоящее лишнее поле: оно есть в схеме, но в
+    эталоне сценария его не было.
+    """
+    item = progress_item(1, gigachat=engine_result(
+        extra=["contract.price_without_vat", "carrier.short_name"],
+        default_extras=["contract.price_without_vat"]))
+    stats = field_error_stats([item], "gigachat")
+    assert stats["contract.price_without_vat"]["extra_default"] == 1
+    assert stats["contract.price_without_vat"]["extra_real"] == 0
+    assert stats["carrier.short_name"]["extra_real"] == 1
+    assert stats["carrier.short_name"]["extra_default"] == 0
+
+
+def test_field_error_stats_skips_scenarios_without_answer():
+    item = progress_item(1, gigachat=None, local=engine_result(
+        missed=["driver.phone"]))
+    assert field_error_stats([item], "gigachat") == {}
+    assert field_error_stats([item], "local")["driver.phone"]["missed"] == 1
+
+
+def test_top_error_fields_sorted_by_count_then_name():
+    stats = {
+        "vehicles.color": {"expected": 10, "missed": 4, "wrong": 0, "extra": 0,
+                           "extra_default": 0, "extra_schema": 0, "extra_real": 0},
+        "driver.phone": {"expected": 10, "missed": 4, "wrong": 0, "extra": 0,
+                         "extra_default": 0, "extra_schema": 0, "extra_real": 0},
+        "driver.birth_date": {"expected": 10, "missed": 1, "wrong": 0, "extra": 0,
+                              "extra_default": 0, "extra_schema": 0, "extra_real": 0},
+    }
+    top = top_error_fields(stats, "missed")
+    assert [row["field"] for row in top] == [
+        "driver.phone", "vehicles.color", "driver.birth_date"]
+    assert top[0]["rate"] == 0.4
+    assert top_error_fields(stats, "missed", limit=1) == [top[0]]
+
+
+def test_top_error_fields_ignores_zero_counts():
+    stats = {"driver.phone": {"expected": 5, "missed": 0, "wrong": 0, "extra": 0,
+                              "extra_default": 0, "extra_schema": 0, "extra_real": 0}}
+    assert top_error_fields(stats, "missed") == []
+
+
+def test_top_extra_fields_marks_kind():
+    stats = {
+        "contract.vat_rate": {"expected": 0, "missed": 0, "wrong": 0, "extra": 9,
+                              "extra_default": 9, "extra_schema": 0, "extra_real": 0},
+        "contract.loading_address": {"expected": 0, "missed": 0, "wrong": 0,
+                                     "extra": 5, "extra_default": 0,
+                                     "extra_schema": 5, "extra_real": 0},
+        "carrier.short_name": {"expected": 0, "missed": 0, "wrong": 0, "extra": 2,
+                               "extra_default": 0, "extra_schema": 0,
+                               "extra_real": 2},
+    }
+    kinds = {row["field"]: row["kind"] for row in top_extra_fields(stats)}
+    assert kinds == {"contract.vat_rate": "default_extras",
+                     "contract.loading_address": "вне схемы",
+                     "carrier.short_name": "лишнее"}
+
+
+def test_field_metrics_pair_counts_recall_and_precision():
+    item = progress_item(1, gigachat=engine_result(
+        field_stats={"driver.phone": {"expected": 4, "found": 5, "matched": 3}}))
+    row = field_metrics_pair([item], "driver.phone")["gigachat"]
+    assert row["recall"] == 0.75
+    assert row["precision"] == 0.6
+    assert row["f1"] == round(2 * 0.75 * 0.6 / 1.35, 4)
+
+
+def test_field_metrics_pair_empty_field_does_not_crash():
+    row = field_metrics_pair([progress_item(1)], "driver.passport_code")
+    assert row["gigachat"]["recall"] == 0.0
+    assert row["gigachat"]["f1"] == 0.0
+
+
+def test_build_metrics_1000_structure_and_batches():
+    """Метрики совпадают с `summarise`, партии делятся по файлу номеров."""
+    items = [progress_item(1), progress_item(2, kind="vehicles", level="hard")]
+    metrics = build_metrics_1000(progress_of(*items), None)
+    assert metrics["scenarios"] == 2
+    assert metrics["scenarios_with_answer"] == 2
+    for source in ("gigachat", "local"):
+        assert metrics["totals"][source] == summarise(items, source)["overall"]
+        assert set(metrics["by_kind"][source]) == {"drivers", "vehicles"}
+        assert set(metrics["by_level"][source]) == {"simple", "hard"}
+    all_numbers = load_legacy_numbers()
+    legacy = set() if not all_numbers else {1, 2} & all_numbers
+    assert metrics["batches"]["before_pseudonymizer_fix"]["scenarios"] == len(legacy)
+    assert metrics["batches"]["after_pseudonymizer_fix"]["scenarios"] == 2 - len(legacy)
+
+
+def test_build_metrics_1000_writes_json(tmp_path):
+    target = tmp_path / "metrics.json"
+    build_metrics_1000(progress_of(progress_item(1)), target)
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["totals"]["gigachat"]["documents"] == 1
+    assert data["top_extra"] == {"gigachat": [], "local": []}
+
+
+def test_build_metrics_1000_covers_fields_after_pseudonymizer_fix():
+    metrics = build_metrics_1000(progress_of(progress_item(1)), None)
+    fields = metrics["fields_after_pseudonymizer_fix"]
+    assert "driver.birth_place" in fields
+    assert "carrier.bank_name" in fields
+    assert set(fields["driver.birth_place"]) == {"before", "after", "all", "matched"}
+
+
+def test_build_metrics_1000_has_no_field_values(tmp_path):
+    """
+    Метрики идут в git: в них допустимы только числа и ИМЕНА полей.
+
+    Значения из документов сюда попасть не должны — ни прямо, ни через
+    содержимое `extra` / `missed` (там хранятся только имена).
+    """
+    target = tmp_path / "metrics.json"
+    item = progress_item(1, gigachat=engine_result(
+        missed=["driver.passport_series"], wrong=["driver.phone"],
+        extra=["carrier.bank_name"], default_extras=["contract.vat_rate"]))
+    build_metrics_1000(progress_of(item), target)
+    text = target.read_text(encoding="utf-8")
+    for value in ("Ерофеев", "553107", "+7 (913)", "47 12"):
+        assert value not in text
+
+
+def test_repo_metrics_file_is_valid_and_safe():
+    """Файл метрик в репозитории: JSON, есть сводка и только имена полей."""
+    if not METRICS_1000_PATH.exists():
+        pytest.skip("baseline_text_gigachat_1000.json ещё не собран")
+    data = json.loads(METRICS_1000_PATH.read_text(encoding="utf-8"))
+    assert data["scenarios"] == 1000
+    assert data["scenarios_with_answer"] == 1000
+    assert data["totals"]["gigachat"]["documents"] == 1000
+    assert data["totals"]["local"]["documents"] == 1000
+    assert len(data["top_missed"]["gigachat"]) <= 20
+    assert len(data["top_wrong"]["gigachat"]) <= 20
+    assert len(data["top_extra"]["gigachat"]) <= 20
+    for row in data["top_extra"]["gigachat"]:
+        assert row["kind"] in {"default_extras", "вне схемы", "лишнее"}
+    assert data["batches"]["before_pseudonymizer_fix"]["scenarios"] == 264
+    assert data["batches"]["after_pseudonymizer_fix"]["scenarios"] == 736
 
 
 # ─────────────────────────────────────────────────────────────
