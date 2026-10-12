@@ -129,6 +129,18 @@
     обновляются `baseline_text_gigachat_1000.json` и таблицы в
     `README_TEXT.md`. **Baseline 264 (`baseline_text_gigachat.json`) не
     перегенерировался** — причины нет.
+  - **ЧАСТЬ E — НАХОДКА В ЛОКАЛЬНЫХ ПРАВИЛАХ (не чинилась, вне задачи).**
+    Локальный разбор теряет `vehicles.vehicle_type` в 120 случаях из 275
+    (`tests/_tmp/_probe_vehicle_local.py` + `_vehicle_type_local.txt`), и
+    причина — в разборщике МАКЕТА `core/document_fields.py`, а не в метках:
+    (а) 100 случаев — в тексте несколько блоков (водитель + автомобиль),
+    `extract_document_fields` возвращает только один тип документа (карточку
+    водителя) и блок автомобиля теряется целиком; (б) 20 случаев — признак
+    раздела в `_vehicle` записан как `re.search(r"тягач|седельн", text)`,
+    поэтому ЗНАЧЕНИЕ поля «Тягач» («Тип транспорта Тягач») уводит весь блок
+    в раздел `tractor`. Это тот же капкан «Тягач — значение, а не блок», что
+    и в баге № 5, но уже в правилах; правка требует менять диспетчер макета
+    (отдельная задача с собственным замером).
   - **ЧАСТЬ F — ПРОБЫ ШАГА** (в git не идут, лежат в `tests/_tmp/`):
     `_probe_passport_masks.py`, `_probe_passport_gap.py`,
     `_probe_passport_split_measure.py`, `_probe_vehicle_type.py`,
@@ -136,6 +148,7 @@
     `_probe_birth_place_masks.py` + `_birth_place_masks.txt`, `_probe_three.py`,
     `_probe_stage_sizes.py`, `_probe_ab.py`, `_probe_net.py`,
     `_probe_alt_host.py`, `_probe_alt_models.py`, `_probe_alive.py`,
+    `_probe_vehicle_local.py` + `_vehicle_type_local.txt`,
     `_reask_chain.py` + `_reask_chain.log`, `_reask_when_online.py`,
     `_split_task2_commit.py`, `_run_night4_chunked.ps1` + `_night4_full_chunk1..4.log`.
 
