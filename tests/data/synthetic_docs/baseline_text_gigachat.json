@@ -1,463 +1,463 @@
 {
  "scenarios": 1000,
- "answered": 264,
+ "answered": 1000,
  "model": "GigaChat-3-Pro",
  "scope": "GIGACHAT_API_PERS",
  "pause_seconds": 19.0,
- "generated_at": "2026-10-12T03:05:26",
+ "generated_at": "2026-10-12T18:07:41",
  "requests": {
-  "requests": 112,
-  "ok": 111,
-  "errors": 1,
+  "requests": 1,
+  "ok": 1,
+  "errors": 0,
   "safety": 0,
   "rate_limited": 0,
-  "seconds": 375.57073279999804
+  "seconds": 4.020916199999192
  },
  "gigachat": {
   "overall": {
-   "documents": 264,
-   "expected": 2708,
-   "found": 3753,
-   "true_positive": 2464,
-   "service_filled": 1125,
-   "recall": 0.9099,
-   "precision": 0.6565,
-   "precision_core": 0.9376,
-   "f1": 0.7627
+   "documents": 1000,
+   "expected": 9969,
+   "found": 14247,
+   "true_positive": 9418,
+   "service_filled": 4448,
+   "recall": 0.9447,
+   "precision": 0.6611,
+   "precision_core": 0.9611,
+   "f1": 0.7778
   },
   "by_kind": {
    "addresses": {
-    "documents": 28,
-    "expected": 52,
-    "found": 194,
-    "true_positive": 49,
-    "service_filled": 140,
-    "recall": 0.9423,
-    "precision": 0.2526,
-    "precision_core": 0.9074,
-    "f1": 0.3984
+    "documents": 100,
+    "expected": 190,
+    "found": 694,
+    "true_positive": 180,
+    "service_filled": 500,
+    "recall": 0.9474,
+    "precision": 0.2594,
+    "precision_core": 0.9278,
+    "f1": 0.4072
    },
    "documents": {
-    "documents": 45,
-    "expected": 960,
-    "found": 1101,
-    "true_positive": 841,
-    "service_filled": 178,
-    "recall": 0.876,
-    "precision": 0.7639,
-    "precision_core": 0.9112,
-    "f1": 0.8161
+    "documents": 150,
+    "expected": 3162,
+    "found": 3693,
+    "true_positive": 2903,
+    "service_filled": 617,
+    "recall": 0.9181,
+    "precision": 0.7861,
+    "precision_core": 0.9438,
+    "f1": 0.847
    },
    "drivers": {
-    "documents": 73,
-    "expected": 648,
-    "found": 867,
-    "true_positive": 554,
-    "service_filled": 270,
-    "recall": 0.8549,
-    "precision": 0.639,
-    "precision_core": 0.928,
-    "f1": 0.7314
+    "documents": 250,
+    "expected": 2215,
+    "found": 3131,
+    "true_positive": 2042,
+    "service_filled": 1045,
+    "recall": 0.9219,
+    "precision": 0.6522,
+    "precision_core": 0.9789,
+    "f1": 0.7639
    },
    "organizations": {
-    "documents": 61,
-    "expected": 515,
-    "found": 828,
-    "true_positive": 500,
-    "service_filled": 305,
-    "recall": 0.9709,
-    "precision": 0.6039,
-    "precision_core": 0.956,
-    "f1": 0.7446
+    "documents": 250,
+    "expected": 2130,
+    "found": 3424,
+    "true_positive": 2066,
+    "service_filled": 1250,
+    "recall": 0.97,
+    "precision": 0.6034,
+    "precision_core": 0.9503,
+    "f1": 0.744
    },
    "vehicles": {
-    "documents": 57,
-    "expected": 533,
-    "found": 763,
-    "true_positive": 520,
-    "service_filled": 232,
-    "recall": 0.9756,
-    "precision": 0.6815,
-    "precision_core": 0.9793,
-    "f1": 0.8025
+    "documents": 250,
+    "expected": 2272,
+    "found": 3305,
+    "true_positive": 2227,
+    "service_filled": 1036,
+    "recall": 0.9802,
+    "precision": 0.6738,
+    "precision_core": 0.9815,
+    "f1": 0.7986
    }
   },
   "by_level": {
    "extreme": {
-    "documents": 20,
-    "expected": 389,
-    "found": 412,
-    "true_positive": 323,
-    "service_filled": 67,
-    "recall": 0.8303,
-    "precision": 0.784,
-    "precision_core": 0.9362,
-    "f1": 0.8065
+    "documents": 80,
+    "expected": 1382,
+    "found": 1643,
+    "true_positive": 1253,
+    "service_filled": 315,
+    "recall": 0.9067,
+    "precision": 0.7626,
+    "precision_core": 0.9435,
+    "f1": 0.8284
    },
    "hard": {
-    "documents": 71,
-    "expected": 1218,
-    "found": 1475,
-    "true_positive": 1117,
-    "service_filled": 244,
-    "recall": 0.9171,
-    "precision": 0.7573,
-    "precision_core": 0.9074,
-    "f1": 0.8296
+    "documents": 250,
+    "expected": 4222,
+    "found": 5242,
+    "true_positive": 4079,
+    "service_filled": 940,
+    "recall": 0.9661,
+    "precision": 0.7781,
+    "precision_core": 0.9482,
+    "f1": 0.862
    },
    "medium": {
-    "documents": 92,
-    "expected": 744,
-    "found": 1128,
-    "true_positive": 713,
-    "service_filled": 396,
-    "recall": 0.9583,
-    "precision": 0.6321,
-    "precision_core": 0.974,
-    "f1": 0.7618
+    "documents": 355,
+    "expected": 2996,
+    "found": 4517,
+    "true_positive": 2882,
+    "service_filled": 1574,
+    "recall": 0.9619,
+    "precision": 0.638,
+    "precision_core": 0.9793,
+    "f1": 0.7672
    },
    "simple": {
-    "documents": 81,
-    "expected": 357,
-    "found": 738,
-    "true_positive": 311,
-    "service_filled": 418,
-    "recall": 0.8711,
-    "precision": 0.4214,
-    "precision_core": 0.9719,
-    "f1": 0.568
+    "documents": 315,
+    "expected": 1369,
+    "found": 2845,
+    "true_positive": 1204,
+    "service_filled": 1619,
+    "recall": 0.8795,
+    "precision": 0.4232,
+    "precision_core": 0.9821,
+    "f1": 0.5714
    }
   },
   "by_field": {
    "driver.full_name": {
-    "expected": 118,
-    "found": 118,
-    "matched": 115
+    "expected": 400,
+    "found": 400,
+    "matched": 396
    },
    "driver.birth_date": {
-    "expected": 104,
-    "found": 104,
-    "matched": 104
+    "expected": 339,
+    "found": 339,
+    "matched": 339
    },
    "driver.birth_place": {
-    "expected": 40,
-    "found": 30,
-    "matched": 0
+    "expected": 135,
+    "found": 122,
+    "matched": 92
    },
    "driver.passport_series": {
-    "expected": 118,
-    "found": 78,
-    "matched": 78
+    "expected": 400,
+    "found": 268,
+    "matched": 268
    },
    "driver.passport_number": {
-    "expected": 118,
-    "found": 78,
-    "matched": 78
+    "expected": 400,
+    "found": 268,
+    "matched": 268
    },
    "driver.passport_issue_date": {
-    "expected": 86,
+    "expected": 278,
+    "found": 278,
+    "matched": 278
+   },
+   "driver.passport_issuer": {
+    "expected": 275,
+    "found": 275,
+    "matched": 262
+   },
+   "driver.passport_code": {
+    "expected": 135,
+    "found": 119,
+    "matched": 117
+   },
+   "driver.registration_address": {
+    "expected": 254,
+    "found": 254,
+    "matched": 247
+   },
+   "driver.license_series": {
+    "expected": 135,
+    "found": 132,
+    "matched": 132
+   },
+   "driver.license_number": {
+    "expected": 135,
+    "found": 132,
+    "matched": 132
+   },
+   "driver.license_issue_date": {
+    "expected": 135,
+    "found": 134,
+    "matched": 134
+   },
+   "driver.license_expiry_date": {
+    "expected": 135,
+    "found": 134,
+    "matched": 134
+   },
+   "driver.license_categories": {
+    "expected": 135,
+    "found": 135,
+    "matched": 135
+   },
+   "driver.phone": {
+    "expected": 275,
+    "found": 271,
+    "matched": 244
+   },
+   "carrier.full_name": {
+    "expected": 286,
+    "found": 286,
+    "matched": 271
+   },
+   "carrier.entity_type": {
+    "expected": 286,
+    "found": 286,
+    "matched": 286
+   },
+   "carrier.inn": {
+    "expected": 286,
+    "found": 286,
+    "matched": 286
+   },
+   "carrier.kpp": {
+    "expected": 283,
+    "found": 283,
+    "matched": 282
+   },
+   "carrier.ogrn": {
+    "expected": 286,
+    "found": 286,
+    "matched": 286
+   },
+   "carrier.legal_address": {
+    "expected": 264,
+    "found": 261,
+    "matched": 251
+   },
+   "carrier.actual_address": {
+    "expected": 152,
+    "found": 152,
+    "matched": 148
+   },
+   "carrier.bank_account": {
+    "expected": 96,
     "found": 86,
     "matched": 86
    },
-   "driver.passport_issuer": {
-    "expected": 86,
-    "found": 86,
-    "matched": 73
+   "carrier.bik": {
+    "expected": 96,
+    "found": 96,
+    "matched": 96
    },
-   "driver.passport_code": {
-    "expected": 40,
-    "found": 25,
-    "matched": 24
+   "carrier.correspondent_account": {
+    "expected": 96,
+    "found": 96,
+    "matched": 96
    },
-   "driver.registration_address": {
-    "expected": 74,
-    "found": 74,
-    "matched": 69
+   "carrier.bank_name": {
+    "expected": 96,
+    "found": 96,
+    "matched": 88
    },
-   "driver.license_series": {
-    "expected": 40,
-    "found": 38,
-    "matched": 38
+   "carrier.director_name": {
+    "expected": 96,
+    "found": 95,
+    "matched": 81
    },
-   "driver.license_number": {
-    "expected": 40,
-    "found": 38,
-    "matched": 38
+   "carrier.director_position": {
+    "expected": 96,
+    "found": 96,
+    "matched": 92
    },
-   "driver.license_issue_date": {
-    "expected": 40,
-    "found": 39,
-    "matched": 39
+   "carrier.phone": {
+    "expected": 60,
+    "found": 60,
+    "matched": 60
    },
-   "driver.license_expiry_date": {
-    "expected": 40,
-    "found": 39,
-    "matched": 39
+   "carrier.email": {
+    "expected": 60,
+    "found": 60,
+    "matched": 60
    },
-   "driver.license_categories": {
-    "expected": 40,
-    "found": 40,
-    "matched": 40
+   "customer.full_name": {
+    "expected": 29,
+    "found": 29,
+    "matched": 28
    },
-   "driver.phone": {
-    "expected": 86,
-    "found": 82,
-    "matched": 55
+   "customer.entity_type": {
+    "expected": 29,
+    "found": 28,
+    "matched": 28
    },
-   "carrier.full_name": {
-    "expected": 72,
-    "found": 72,
-    "matched": 68
+   "customer.inn": {
+    "expected": 29,
+    "found": 29,
+    "matched": 29
    },
-   "carrier.entity_type": {
-    "expected": 72,
-    "found": 72,
-    "matched": 72
-   },
-   "carrier.inn": {
-    "expected": 72,
-    "found": 72,
-    "matched": 72
-   },
-   "carrier.kpp": {
-    "expected": 71,
-    "found": 71,
-    "matched": 71
-   },
-   "carrier.ogrn": {
-    "expected": 72,
-    "found": 72,
-    "matched": 72
-   },
-   "carrier.legal_address": {
-    "expected": 67,
-    "found": 66,
-    "matched": 62
-   },
-   "carrier.actual_address": {
-    "expected": 45,
-    "found": 45,
-    "matched": 43
-   },
-   "carrier.bank_account": {
-    "expected": 27,
+   "customer.kpp": {
+    "expected": 24,
     "found": 24,
     "matched": 24
    },
-   "carrier.bik": {
-    "expected": 27,
-    "found": 27,
-    "matched": 27
-   },
-   "carrier.correspondent_account": {
-    "expected": 27,
-    "found": 27,
-    "matched": 27
-   },
-   "carrier.bank_name": {
-    "expected": 27,
-    "found": 27,
-    "matched": 26
-   },
-   "carrier.director_name": {
-    "expected": 27,
-    "found": 27,
-    "matched": 23
-   },
-   "carrier.director_position": {
-    "expected": 27,
-    "found": 27,
-    "matched": 27
-   },
-   "carrier.phone": {
-    "expected": 14,
-    "found": 14,
-    "matched": 14
-   },
-   "carrier.email": {
-    "expected": 14,
-    "found": 14,
-    "matched": 14
-   },
-   "customer.full_name": {
-    "expected": 4,
-    "found": 4,
-    "matched": 4
-   },
-   "customer.entity_type": {
-    "expected": 4,
-    "found": 4,
-    "matched": 4
-   },
-   "customer.inn": {
-    "expected": 4,
-    "found": 4,
-    "matched": 4
-   },
-   "customer.kpp": {
-    "expected": 4,
-    "found": 4,
-    "matched": 4
-   },
    "customer.ogrn": {
-    "expected": 4,
-    "found": 4,
-    "matched": 4
+    "expected": 29,
+    "found": 29,
+    "matched": 29
    },
    "customer.legal_address": {
-    "expected": 4,
-    "found": 4,
-    "matched": 3
+    "expected": 29,
+    "found": 29,
+    "matched": 28
    },
    "customer.actual_address": {
-    "expected": 3,
-    "found": 3,
-    "matched": 3
+    "expected": 19,
+    "found": 19,
+    "matched": 19
    },
    "customer.bank_account": {
-    "expected": 3,
-    "found": 3,
-    "matched": 3
+    "expected": 19,
+    "found": 19,
+    "matched": 19
    },
    "customer.bik": {
-    "expected": 3,
-    "found": 3,
-    "matched": 3
+    "expected": 19,
+    "found": 19,
+    "matched": 19
    },
    "customer.correspondent_account": {
-    "expected": 3,
-    "found": 3,
-    "matched": 3
+    "expected": 19,
+    "found": 19,
+    "matched": 19
    },
    "customer.bank_name": {
-    "expected": 3,
-    "found": 3,
-    "matched": 3
-   },
-   "customer.director_name": {
-    "expected": 3,
-    "found": 3,
-    "matched": 2
-   },
-   "customer.director_position": {
-    "expected": 3,
-    "found": 3,
-    "matched": 3
-   },
-   "customer.phone": {
-    "expected": 2,
-    "found": 2,
-    "matched": 2
-   },
-   "vehicles.vin": {
-    "expected": 102,
-    "found": 101,
-    "matched": 101
-   },
-   "vehicles.brand_model": {
-    "expected": 102,
-    "found": 101,
-    "matched": 99
-   },
-   "vehicles.plate_number": {
-    "expected": 102,
-    "found": 101,
-    "matched": 101
-   },
-   "vehicles.year": {
-    "expected": 86,
-    "found": 85,
-    "matched": 83
-   },
-   "vehicles.color": {
-    "expected": 70,
-    "found": 69,
-    "matched": 69
-   },
-   "vehicles.vehicle_type": {
-    "expected": 70,
-    "found": 54,
-    "matched": 54
-   },
-   "tractor.brand_model": {
-    "expected": 56,
-    "found": 56,
-    "matched": 56
-   },
-   "tractor.plate_number": {
-    "expected": 56,
-    "found": 56,
-    "matched": 56
-   },
-   "tractor.color": {
-    "expected": 56,
-    "found": 56,
-    "matched": 56
-   },
-   "tractor.year": {
-    "expected": 56,
-    "found": 56,
-    "matched": 56
-   },
-   "trailer.brand_model": {
-    "expected": 20,
-    "found": 20,
+    "expected": 19,
+    "found": 19,
     "matched": 16
    },
+   "customer.director_name": {
+    "expected": 19,
+    "found": 19,
+    "matched": 10
+   },
+   "customer.director_position": {
+    "expected": 19,
+    "found": 19,
+    "matched": 17
+   },
+   "customer.phone": {
+    "expected": 16,
+    "found": 16,
+    "matched": 16
+   },
+   "vehicles.vin": {
+    "expected": 400,
+    "found": 399,
+    "matched": 395
+   },
+   "vehicles.brand_model": {
+    "expected": 400,
+    "found": 399,
+    "matched": 392
+   },
+   "vehicles.plate_number": {
+    "expected": 400,
+    "found": 399,
+    "matched": 399
+   },
+   "vehicles.year": {
+    "expected": 339,
+    "found": 338,
+    "matched": 335
+   },
+   "vehicles.color": {
+    "expected": 275,
+    "found": 274,
+    "matched": 274
+   },
+   "vehicles.vehicle_type": {
+    "expected": 275,
+    "found": 226,
+    "matched": 226
+   },
+   "tractor.brand_model": {
+    "expected": 225,
+    "found": 225,
+    "matched": 225
+   },
+   "tractor.plate_number": {
+    "expected": 225,
+    "found": 225,
+    "matched": 225
+   },
+   "tractor.color": {
+    "expected": 225,
+    "found": 225,
+    "matched": 225
+   },
+   "tractor.year": {
+    "expected": 225,
+    "found": 225,
+    "matched": 225
+   },
+   "trailer.brand_model": {
+    "expected": 65,
+    "found": 65,
+    "matched": 57
+   },
    "trailer.plate_number": {
-    "expected": 20,
-    "found": 20,
-    "matched": 20
+    "expected": 65,
+    "found": 65,
+    "matched": 65
    },
    "trailer.color": {
-    "expected": 20,
-    "found": 20,
-    "matched": 20
+    "expected": 65,
+    "found": 65,
+    "matched": 65
    },
    "trailer.year": {
-    "expected": 20,
-    "found": 20,
-    "matched": 20
+    "expected": 65,
+    "found": 65,
+    "matched": 65
    },
    "contract.number": {
-    "expected": 17,
-    "found": 17,
-    "matched": 17
+    "expected": 50,
+    "found": 50,
+    "matched": 50
    },
    "contract.date": {
-    "expected": 17,
-    "found": 17,
-    "matched": 17
+    "expected": 50,
+    "found": 50,
+    "matched": 50
    },
    "contract.route": {
-    "expected": 17,
-    "found": 17,
-    "matched": 17
+    "expected": 50,
+    "found": 50,
+    "matched": 50
    },
    "contract.vat_rate": {
-    "expected": 17,
-    "found": 17,
-    "matched": 17
+    "expected": 50,
+    "found": 50,
+    "matched": 50
    },
    "contract.payment_days": {
-    "expected": 17,
-    "found": 17,
-    "matched": 17
+    "expected": 50,
+    "found": 50,
+    "matched": 50
    },
    "contract.loading_address": {
-    "expected": 3,
-    "found": 3,
-    "matched": 3
+    "expected": 18,
+    "found": 18,
+    "matched": 18
    },
    "contract.unloading_address": {
-    "expected": 4,
-    "found": 4,
-    "matched": 4
+    "expected": 13,
+    "found": 13,
+    "matched": 13
    },
    "customer.email": {
-    "expected": 2,
-    "found": 2,
-    "matched": 2
+    "expected": 16,
+    "found": 16,
+    "matched": 16
    }
   }
  },
