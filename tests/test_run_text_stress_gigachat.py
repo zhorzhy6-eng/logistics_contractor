@@ -13,10 +13,10 @@ import pytest
 from tools.make_text_scenarios import build_scenario
 from tools.run_text_stress_gigachat import (
     METRICS_1000_PATH, PROMPT_DEFAULT_VALUES, SafetyStop, _describe_error,
-    _result_rows, _verdict_ok, build_metrics_1000, check_answer, field_error_stats,
-    field_metrics_pair, field_stats, group_metrics, load_legacy_numbers,
-    prompt_default_extras, safety_check, summarise, top_error_fields,
-    top_extra_fields, verdict,
+    _result_rows, _verdict_ok, build_metrics_1000, check_answer, comparison_rows,
+    field_error_stats, field_metrics_pair, field_stats, field_totals, group_metrics,
+    load_legacy_numbers, prompt_default_extras, safety_check, scenario_field_keys,
+    summarise, top_error_fields, top_extra_fields, verdict,
 )
 import json
 import random
@@ -452,3 +452,73 @@ def test_generated_scenarios_pass_safety_check():
             data = build_scenario(random.Random(seed), kind, level)
             report = safety_check(data, [], seed)
             assert report["masked_ok"] is True
+
+
+# ─────────────────────────────────────────────────────────────
+# Точечный перезапрос и сравнение «было → стало»
+# ─────────────────────────────────────────────────────────────
+# Замер фикса на 1000 сценариях стоит ~2 часа запросов, поэтому
+# переспрашивается только ПОДМНОЖЕСТВО (--with-field), а сравнение идёт по
+# двум файлам прогресса (--report --compare-with). Здесь проверяются обе
+# функции без сети.
+
+def test_scenario_field_keys_are_flat_names():
+    keys = scenario_field_keys({
+        "text": "…",
+        "ground_truth": {"driver": {"passport_series": "47 12", "phone": ""},
+                         "vehicles": [{"vehicle_type": "Тягач"}]},
+    })
+    assert "driver.passport_series" in keys
+    assert "vehicles.vehicle_type" in keys
+    # Пустое поле не считается: переспрашивать нечего.
+    assert "driver.phone" not in keys
+
+
+def _progress_row(number: int, field: str, *, found: bool, matched: bool) -> dict:
+    """Строка прогресса с одной записью field_stats (как её пишет прогонщик)."""
+    return {
+        "number": number, "kind": "drivers", "level": "simple",
+        "gigachat": {
+            "expected": 1, "found": 1 if found else 0,
+            "true_positive": 1 if matched else 0, "missed": [] if found else [field],
+            "wrong": [] if (matched or not found) else [field], "extra": [],
+            "recall": 0.0, "precision": 0.0, "f1": 0.0,
+            "field_stats": {field: {"expected": 1, "found": 1 if found else 0,
+                                    "matched": 1 if matched else 0}},
+            "default_extras": [], "error": "",
+        },
+    }
+
+
+def test_field_totals_count_every_scenario():
+    progress = {"results": {
+        "1": _progress_row(1, "driver.birth_place", found=True, matched=True),
+        "2": _progress_row(2, "driver.birth_place", found=False, matched=False),
+    }}
+    totals = field_totals(progress)
+    assert totals["driver.birth_place"]["expected"] == 2
+    assert totals["driver.birth_place"]["matched"] == 1
+    assert totals["driver.birth_place"]["missed"] == 1
+
+
+def test_comparison_shows_only_changed_fields():
+    before = {"results": {
+        "1": _progress_row(1, "driver.passport_series", found=False, matched=False),
+        "2": _progress_row(2, "driver.phone", found=True, matched=True),
+    }}
+    after = {"results": {
+        "1": _progress_row(1, "driver.passport_series", found=True, matched=True),
+        "2": _progress_row(2, "driver.phone", found=True, matched=True),
+    }}
+    rows = comparison_rows(before, after)
+    assert [row["field"] for row in rows] == ["driver.passport_series"]
+    assert rows[0]["delta"]["matched"] == 1
+    assert rows[0]["delta"]["missed"] == -1
+    assert rows[0]["before_recall"] == 0.0
+    assert rows[0]["after_recall"] == 1.0
+
+
+def test_comparison_is_empty_when_nothing_changed():
+    progress = {"results": {
+        "1": _progress_row(1, "driver.birth_place", found=True, matched=True)}}
+    assert comparison_rows(progress, progress) == []
