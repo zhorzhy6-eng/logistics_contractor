@@ -223,6 +223,14 @@ def _mapping_index(mapping: Dict[str, str]) -> Dict[str, str]:
     вида ``<<PASSPORT_SERIES_N>>``, и модель копирует букву вместо цифры из
     текста. Если токенов одного вида несколько, подставлять нечего —
     неоднозначное имя не восстанавливается (значения не выдумываются).
+
+    Отдельный случай — паспорт, закрытый ОДНИМ общим токеном (слитная запись
+    «5838312160»): серии и номера в маппинге нет вовсе, но модель, зная про
+    два токена, просит ``<<PASSPORT_SERIES_1>>`` или
+    ``<<PASSPORT_NUMBER_1>>``. Оба таких имени указывают на тот же общий
+    токен: пара «серия/номер» раскладывается постобработкой
+    (`core.gigachat_client._normalize_document_ids`) уже после
+    восстановления, поэтому значение не теряется и не выдумывается.
     """
     index: Dict[str, str] = {}
     families: Dict[str, List[str]] = {}
@@ -239,6 +247,19 @@ def _mapping_index(mapping: Dict[str, str]) -> Dict[str, str]:
         value = index[names[0]]
         index.setdefault(family, value)
         index.setdefault(family + "_N", value)
+    # Части паспорта → общий токен паспорта (только если частей нет вовсе,
+    # а общий токен ровно один: иначе непонятно, о каком паспорте речь).
+    for part_family, whole_family in (("PASSPORT_SERIES", "PASSPORT"),
+                                      ("PASSPORT_NUMBER", "PASSPORT")):
+        if any(name.startswith(part_family + "_") for name in index):
+            continue
+        whole = families.get(whole_family) or []
+        if len(whole) != 1:
+            continue
+        value = index[whole[0]]
+        suffix = whole[0].rsplit("_", 1)[1]
+        for alias in (f"{part_family}_{suffix}", f"{part_family}_N", part_family):
+            index.setdefault(alias, value)
     return index
 
 

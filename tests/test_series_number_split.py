@@ -162,6 +162,35 @@ def test_passport_split_works_for_solid_form(client):
     assert parsed["driver"]["passport_number"] == "123456"
 
 
+def test_solid_passport_parts_point_to_the_whole_token(client):
+    """
+    Слитная запись: в маппинге ОДИН общий токен, а модель просит части.
+
+    Проверено живьём 13.10.2026: в тексте стояло «Паспорт <<PASSPORT_1>>»
+    (слитная запись), а модель возвращала выдуманные ею имена
+    <<PASSPORT_SERIES_1>> и <<PASSPORT_NUMBER_1>> — оба не находились в
+    маппинге и поля терялись. Теперь оба имени указывают на общий токен, а
+    пару раскладывает `_normalize_document_ids`.
+    """
+    client, sent = client
+    answer = ('{"driver": {"passport_series": "<<PASSPORT_SERIES_1>>", '
+              '"passport_number": "<<PASSPORT_NUMBER_1>>"}}')
+    parsed = _recognize(client, sent, answer,
+                        DRIVER_TEXT.format(passport="6026123456", license="99 12 654321"))
+    assert parsed["driver"]["passport_series"] == "60 26"
+    assert parsed["driver"]["passport_number"] == "123456"
+
+
+def test_solid_passport_parts_are_not_guessed_with_two_passports(client):
+    """Два паспорта: какое имя имела в виду модель — неизвестно, пусто."""
+    client, sent = client
+    answer = ('{"driver": {"passport_series": "<<PASSPORT_SERIES_N>>"}}')
+    text = ("ВОДИТЕЛЬ\nПаспорт: 6026123456\nПаспорт: 9912345678\n"
+            "Водительское удостоверение: 99 12 654321")
+    parsed = _recognize(client, sent, answer, text)
+    assert parsed["driver"].get("passport_series", "") == ""
+
+
 def test_normalize_splits_value_with_any_separators():
     """Дефис/точка/слитность: разложение пары работает на уровне ядра."""
     import core.gigachat_client as module
