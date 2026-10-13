@@ -1,32 +1,32 @@
 {
  "model": "GigaChat-3-Pro",
  "scope": "GIGACHAT_API_PERS",
- "generated_at": "2026-10-13T00:24:33",
- "updated_at": "2026-10-12T18:07:41",
+ "generated_at": "2026-10-13T14:27:52",
+ "updated_at": "2026-10-13T14:22:13",
  "scenarios": 1000,
  "scenarios_with_answer": 1000,
- "scenarios_with_error": 8,
+ "scenarios_with_error": 0,
  "batches": {
   "before_pseudonymizer_fix": {
    "label": "снято ДО фикса 0cbf386",
-   "scenarios": 264
+   "scenarios": 86
   },
   "after_pseudonymizer_fix": {
    "label": "снято ПОСЛЕ фикса 0cbf386",
-   "scenarios": 736
+   "scenarios": 914
   }
  },
  "totals": {
   "gigachat": {
    "documents": 1000,
    "expected": 9969,
-   "found": 14247,
-   "true_positive": 9418,
-   "service_filled": 4448,
-   "recall": 0.9447,
-   "precision": 0.6611,
-   "precision_core": 0.9611,
-   "f1": 0.7778
+   "found": 14237,
+   "true_positive": 9873,
+   "service_filled": 4057,
+   "recall": 0.9904,
+   "precision": 0.6935,
+   "precision_core": 0.9698,
+   "f1": 0.8157
   },
   "local": {
    "documents": 1000,
@@ -56,46 +56,46 @@
    "documents": {
     "documents": 150,
     "expected": 3162,
-    "found": 3693,
-    "true_positive": 2903,
-    "service_filled": 617,
-    "recall": 0.9181,
-    "precision": 0.7861,
-    "precision_core": 0.9438,
-    "f1": 0.847
+    "found": 3891,
+    "true_positive": 3147,
+    "service_filled": 621,
+    "recall": 0.9953,
+    "precision": 0.8088,
+    "precision_core": 0.9624,
+    "f1": 0.8924
    },
    "drivers": {
     "documents": 250,
     "expected": 2215,
-    "found": 3131,
-    "true_positive": 2042,
-    "service_filled": 1045,
-    "recall": 0.9219,
-    "precision": 0.6522,
-    "precision_core": 0.9789,
-    "f1": 0.7639
+    "found": 2862,
+    "true_positive": 2211,
+    "service_filled": 650,
+    "recall": 0.9982,
+    "precision": 0.7725,
+    "precision_core": 0.9995,
+    "f1": 0.871
    },
    "organizations": {
     "documents": 250,
     "expected": 2130,
-    "found": 3424,
-    "true_positive": 2066,
+    "found": 3459,
+    "true_positive": 2100,
     "service_filled": 1250,
-    "recall": 0.97,
-    "precision": 0.6034,
-    "precision_core": 0.9503,
-    "f1": 0.744
+    "recall": 0.9859,
+    "precision": 0.6071,
+    "precision_core": 0.9507,
+    "f1": 0.7515
    },
    "vehicles": {
     "documents": 250,
     "expected": 2272,
-    "found": 3305,
-    "true_positive": 2227,
+    "found": 3331,
+    "true_positive": 2235,
     "service_filled": 1036,
-    "recall": 0.9802,
-    "precision": 0.6738,
-    "precision_core": 0.9815,
-    "f1": 0.7986
+    "recall": 0.9837,
+    "precision": 0.671,
+    "precision_core": 0.9739,
+    "f1": 0.7978
    }
   },
   "local": {
@@ -161,46 +161,46 @@
    "extreme": {
     "documents": 80,
     "expected": 1382,
-    "found": 1643,
-    "true_positive": 1253,
+    "found": 1716,
+    "true_positive": 1340,
     "service_filled": 315,
-    "recall": 0.9067,
-    "precision": 0.7626,
-    "precision_core": 0.9435,
-    "f1": 0.8284
+    "recall": 0.9696,
+    "precision": 0.7809,
+    "precision_core": 0.9565,
+    "f1": 0.8651
    },
    "hard": {
     "documents": 250,
     "expected": 4222,
-    "found": 5242,
-    "true_positive": 4079,
-    "service_filled": 940,
-    "recall": 0.9661,
-    "precision": 0.7781,
-    "precision_core": 0.9482,
-    "f1": 0.862
+    "found": 5258,
+    "true_positive": 4193,
+    "service_filled": 890,
+    "recall": 0.9931,
+    "precision": 0.7975,
+    "precision_core": 0.9599,
+    "f1": 0.8846
    },
    "medium": {
     "documents": 355,
     "expected": 2996,
-    "found": 4517,
-    "true_positive": 2882,
-    "service_filled": 1574,
-    "recall": 0.9619,
-    "precision": 0.638,
-    "precision_core": 0.9793,
-    "f1": 0.7672
+    "found": 4357,
+    "true_positive": 2981,
+    "service_filled": 1323,
+    "recall": 0.995,
+    "precision": 0.6842,
+    "precision_core": 0.9825,
+    "f1": 0.8108
    },
    "simple": {
     "documents": 315,
     "expected": 1369,
-    "found": 2845,
-    "true_positive": 1204,
-    "service_filled": 1619,
-    "recall": 0.8795,
-    "precision": 0.4232,
-    "precision_core": 0.9821,
-    "f1": 0.5714
+    "found": 2906,
+    "true_positive": 1359,
+    "service_filled": 1529,
+    "recall": 0.9927,
+    "precision": 0.4677,
+    "precision_core": 0.9869,
+    "f1": 0.6358
    }
   },
   "local": {
@@ -253,118 +253,70 @@
  "top_missed": {
   "gigachat": [
    {
-    "field": "driver.passport_number",
-    "missed": 132,
-    "expected": 400,
-    "rate": 0.33
-   },
-   {
-    "field": "driver.passport_series",
-    "missed": 132,
-    "expected": 400,
-    "rate": 0.33
-   },
-   {
-    "field": "vehicles.vehicle_type",
-    "missed": 49,
-    "expected": 275,
-    "rate": 0.1782
-   },
-   {
-    "field": "driver.passport_code",
-    "missed": 16,
+    "field": "driver.license_issue_date",
+    "missed": 3,
     "expected": 135,
-    "rate": 0.1185
+    "rate": 0.0222
    },
    {
-    "field": "driver.birth_place",
-    "missed": 13,
-    "expected": 135,
-    "rate": 0.0963
+    "field": "tractor.brand_model",
+    "missed": 3,
+    "expected": 225,
+    "rate": 0.0133
    },
    {
-    "field": "carrier.bank_account",
-    "missed": 10,
-    "expected": 96,
-    "rate": 0.1042
+    "field": "tractor.color",
+    "missed": 3,
+    "expected": 225,
+    "rate": 0.0133
    },
    {
-    "field": "driver.phone",
-    "missed": 4,
-    "expected": 275,
-    "rate": 0.0145
+    "field": "tractor.plate_number",
+    "missed": 3,
+    "expected": 225,
+    "rate": 0.0133
    },
    {
     "field": "carrier.legal_address",
-    "missed": 3,
+    "missed": 2,
     "expected": 264,
-    "rate": 0.0114
+    "rate": 0.0076
    },
    {
-    "field": "driver.license_number",
-    "missed": 3,
-    "expected": 135,
-    "rate": 0.0222
-   },
-   {
-    "field": "driver.license_series",
-    "missed": 3,
-    "expected": 135,
-    "rate": 0.0222
-   },
-   {
-    "field": "carrier.director_name",
-    "missed": 1,
-    "expected": 96,
-    "rate": 0.0104
-   },
-   {
-    "field": "customer.entity_type",
-    "missed": 1,
-    "expected": 29,
-    "rate": 0.0345
-   },
-   {
-    "field": "driver.license_expiry_date",
+    "field": "driver.birth_place",
     "missed": 1,
     "expected": 135,
     "rate": 0.0074
    },
    {
-    "field": "driver.license_issue_date",
+    "field": "driver.passport_code",
     "missed": 1,
     "expected": 135,
     "rate": 0.0074
    },
    {
-    "field": "vehicles.brand_model",
+    "field": "trailer.brand_model",
     "missed": 1,
-    "expected": 400,
-    "rate": 0.0025
+    "expected": 65,
+    "rate": 0.0154
    },
    {
-    "field": "vehicles.color",
+    "field": "trailer.color",
+    "missed": 1,
+    "expected": 65,
+    "rate": 0.0154
+   },
+   {
+    "field": "trailer.plate_number",
+    "missed": 1,
+    "expected": 65,
+    "rate": 0.0154
+   },
+   {
+    "field": "vehicles.vehicle_type",
     "missed": 1,
     "expected": 275,
     "rate": 0.0036
-   },
-   {
-    "field": "vehicles.plate_number",
-    "missed": 1,
-    "expected": 400,
-    "rate": 0.0025
-   },
-   {
-    "field": "vehicles.vin",
-    "missed": 1,
-    "expected": 400,
-    "rate": 0.0025
-   },
-   {
-    "field": "vehicles.year",
-    "missed": 1,
-    "expected": 339,
-    "rate": 0.0029
    }
   ],
   "local": [
@@ -493,76 +445,16 @@
  "top_wrong": {
   "gigachat": [
    {
-    "field": "driver.birth_place",
-    "wrong": 30,
-    "expected": 135,
-    "rate": 0.2222
-   },
-   {
-    "field": "driver.phone",
-    "wrong": 27,
-    "expected": 275,
-    "rate": 0.0982
-   },
-   {
     "field": "carrier.full_name",
-    "wrong": 15,
+    "wrong": 23,
     "expected": 286,
-    "rate": 0.0524
-   },
-   {
-    "field": "carrier.director_name",
-    "wrong": 14,
-    "expected": 96,
-    "rate": 0.1458
-   },
-   {
-    "field": "driver.passport_issuer",
-    "wrong": 13,
-    "expected": 275,
-    "rate": 0.0473
-   },
-   {
-    "field": "carrier.legal_address",
-    "wrong": 10,
-    "expected": 264,
-    "rate": 0.0379
-   },
-   {
-    "field": "customer.director_name",
-    "wrong": 9,
-    "expected": 19,
-    "rate": 0.4737
-   },
-   {
-    "field": "carrier.bank_name",
-    "wrong": 8,
-    "expected": 96,
-    "rate": 0.0833
-   },
-   {
-    "field": "trailer.brand_model",
-    "wrong": 8,
-    "expected": 65,
-    "rate": 0.1231
-   },
-   {
-    "field": "driver.registration_address",
-    "wrong": 7,
-    "expected": 254,
-    "rate": 0.0276
+    "rate": 0.0804
    },
    {
     "field": "vehicles.brand_model",
-    "wrong": 7,
+    "wrong": 12,
     "expected": 400,
-    "rate": 0.0175
-   },
-   {
-    "field": "carrier.actual_address",
-    "wrong": 4,
-    "expected": 152,
-    "rate": 0.0263
+    "rate": 0.03
    },
    {
     "field": "carrier.director_position",
@@ -571,22 +463,40 @@
     "rate": 0.0417
    },
    {
-    "field": "driver.full_name",
+    "field": "carrier.legal_address",
     "wrong": 4,
+    "expected": 264,
+    "rate": 0.0152
+   },
+   {
+    "field": "carrier.actual_address",
+    "wrong": 3,
+    "expected": 152,
+    "rate": 0.0197
+   },
+   {
+    "field": "tractor.year",
+    "wrong": 3,
+    "expected": 225,
+    "rate": 0.0133
+   },
+   {
+    "field": "trailer.brand_model",
+    "wrong": 3,
+    "expected": 65,
+    "rate": 0.0462
+   },
+   {
+    "field": "vehicles.plate_number",
+    "wrong": 3,
     "expected": 400,
-    "rate": 0.01
+    "rate": 0.0075
    },
    {
     "field": "vehicles.vin",
-    "wrong": 4,
-    "expected": 400,
-    "rate": 0.01
-   },
-   {
-    "field": "customer.bank_name",
     "wrong": 3,
-    "expected": 19,
-    "rate": 0.1579
+    "expected": 400,
+    "rate": 0.0075
    },
    {
     "field": "vehicles.year",
@@ -601,16 +511,58 @@
     "rate": 0.1053
    },
    {
-    "field": "driver.passport_code",
+    "field": "customer.full_name",
     "wrong": 2,
-    "expected": 135,
-    "rate": 0.0148
+    "expected": 29,
+    "rate": 0.069
+   },
+   {
+    "field": "vehicles.color",
+    "wrong": 2,
+    "expected": 275,
+    "rate": 0.0073
+   },
+   {
+    "field": "vehicles.vehicle_type",
+    "wrong": 2,
+    "expected": 275,
+    "rate": 0.0073
    },
    {
     "field": "carrier.kpp",
     "wrong": 1,
     "expected": 283,
     "rate": 0.0035
+   },
+   {
+    "field": "driver.birth_place",
+    "wrong": 1,
+    "expected": 135,
+    "rate": 0.0074
+   },
+   {
+    "field": "driver.full_name",
+    "wrong": 1,
+    "expected": 400,
+    "rate": 0.0025
+   },
+   {
+    "field": "driver.passport_issuer",
+    "wrong": 1,
+    "expected": 275,
+    "rate": 0.0036
+   },
+   {
+    "field": "driver.phone",
+    "wrong": 1,
+    "expected": 275,
+    "rate": 0.0036
+   },
+   {
+    "field": "driver.registration_address",
+    "wrong": 1,
+    "expected": 254,
+    "rate": 0.0039
    }
   ],
   "local": [
@@ -686,56 +638,56 @@
   "gigachat": [
    {
     "field": "contract.price_without_vat",
-    "extra": 955,
+    "extra": 876,
     "expected": 0,
-    "extra_default": 955,
+    "extra_default": 876,
     "extra_schema": 0,
     "extra_real": 0,
     "kind": "default_extras"
    },
    {
     "field": "contract.payment_days",
-    "extra": 905,
+    "extra": 826,
     "expected": 50,
-    "extra_default": 905,
+    "extra_default": 826,
     "extra_schema": 0,
     "extra_real": 0,
     "kind": "default_extras"
    },
    {
     "field": "contract.vat_rate",
-    "extra": 905,
+    "extra": 826,
     "expected": 50,
-    "extra_default": 905,
+    "extra_default": 826,
     "extra_schema": 0,
     "extra_real": 0,
     "kind": "default_extras"
    },
    {
     "field": "trailer.year",
-    "extra": 894,
+    "extra": 815,
     "expected": 65,
-    "extra_default": 894,
+    "extra_default": 815,
     "extra_schema": 0,
     "extra_real": 0,
     "kind": "default_extras"
    },
    {
     "field": "tractor.year",
-    "extra": 734,
+    "extra": 655,
     "expected": 225,
-    "extra_default": 728,
+    "extra_default": 653,
     "extra_schema": 0,
-    "extra_real": 6,
+    "extra_real": 2,
     "kind": "default_extras"
    },
    {
     "field": "carrier.short_name",
-    "extra": 61,
+    "extra": 93,
     "expected": 0,
     "extra_default": 0,
     "extra_schema": 0,
-    "extra_real": 61,
+    "extra_real": 93,
     "kind": "лишнее"
    },
    {
@@ -749,80 +701,44 @@
    },
    {
     "field": "contract.unloading_address",
-    "extra": 42,
+    "extra": 41,
     "expected": 13,
     "extra_default": 0,
-    "extra_schema": 42,
+    "extra_schema": 41,
     "extra_real": 0,
     "kind": "вне схемы"
    },
    {
     "field": "driver.full_name",
-    "extra": 28,
+    "extra": 35,
     "expected": 400,
     "extra_default": 0,
     "extra_schema": 0,
-    "extra_real": 28,
+    "extra_real": 35,
     "kind": "лишнее"
    },
    {
     "field": "contract.loading_address",
-    "extra": 26,
+    "extra": 30,
     "expected": 18,
     "extra_default": 0,
-    "extra_schema": 26,
+    "extra_schema": 30,
     "extra_real": 0,
     "kind": "вне схемы"
    },
    {
     "field": "customer.short_name",
-    "extra": 13,
+    "extra": 18,
     "expected": 0,
     "extra_default": 0,
     "extra_schema": 0,
-    "extra_real": 13,
-    "kind": "лишнее"
-   },
-   {
-    "field": "tractor.brand_model",
-    "extra": 6,
-    "expected": 225,
-    "extra_default": 0,
-    "extra_schema": 0,
-    "extra_real": 6,
-    "kind": "лишнее"
-   },
-   {
-    "field": "tractor.color",
-    "extra": 6,
-    "expected": 225,
-    "extra_default": 0,
-    "extra_schema": 0,
-    "extra_real": 6,
-    "kind": "лишнее"
-   },
-   {
-    "field": "tractor.plate_number",
-    "extra": 6,
-    "expected": 225,
-    "extra_default": 0,
-    "extra_schema": 0,
-    "extra_real": 6,
+    "extra_real": 18,
     "kind": "лишнее"
    },
    {
     "field": "carrier.legal_address",
     "extra": 3,
     "expected": 264,
-    "extra_default": 0,
-    "extra_schema": 0,
-    "extra_real": 3,
-    "kind": "лишнее"
-   },
-   {
-    "field": "driver.passport_code",
-    "extra": 3,
-    "expected": 135,
     "extra_default": 0,
     "extra_schema": 0,
     "extra_real": 3,
@@ -838,18 +754,36 @@
     "kind": "лишнее"
    },
    {
-    "field": "customer.actual_address",
-    "extra": 1,
-    "expected": 19,
+    "field": "tractor.brand_model",
+    "extra": 2,
+    "expected": 225,
     "extra_default": 0,
     "extra_schema": 0,
-    "extra_real": 1,
+    "extra_real": 2,
     "kind": "лишнее"
    },
    {
-    "field": "trailer.brand_model",
+    "field": "tractor.color",
+    "extra": 2,
+    "expected": 225,
+    "extra_default": 0,
+    "extra_schema": 0,
+    "extra_real": 2,
+    "kind": "лишнее"
+   },
+   {
+    "field": "tractor.plate_number",
+    "extra": 2,
+    "expected": 225,
+    "extra_default": 0,
+    "extra_schema": 0,
+    "extra_real": 2,
+    "kind": "лишнее"
+   },
+   {
+    "field": "customer.actual_address",
     "extra": 1,
-    "expected": 65,
+    "expected": 19,
     "extra_default": 0,
     "extra_schema": 0,
     "extra_real": 1,
@@ -862,48 +796,48 @@
   "driver.birth_place": {
    "before": {
     "gigachat": {
-     "expected": 40,
-     "found": 30,
+     "expected": 0,
+     "found": 0,
      "matched": 0,
      "recall": 0.0,
      "precision": 0.0,
      "f1": 0.0
     },
     "local": {
-     "expected": 40,
-     "found": 40,
-     "matched": 27,
-     "recall": 0.675,
-     "precision": 0.675,
-     "f1": 0.675
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     }
    },
    "after": {
     "gigachat": {
-     "expected": 95,
-     "found": 92,
-     "matched": 92,
-     "recall": 0.9684,
-     "precision": 1.0,
-     "f1": 0.9839
+     "expected": 135,
+     "found": 134,
+     "matched": 133,
+     "recall": 0.9852,
+     "precision": 0.9925,
+     "f1": 0.9888
     },
     "local": {
-     "expected": 95,
-     "found": 95,
-     "matched": 73,
-     "recall": 0.7684,
-     "precision": 0.7684,
-     "f1": 0.7684
+     "expected": 135,
+     "found": 135,
+     "matched": 100,
+     "recall": 0.7407,
+     "precision": 0.7407,
+     "f1": 0.7407
     }
    },
    "all": {
     "gigachat": {
      "expected": 135,
-     "found": 122,
-     "matched": 92,
-     "recall": 0.6815,
-     "precision": 0.7541,
-     "f1": 0.716
+     "found": 134,
+     "matched": 133,
+     "recall": 0.9852,
+     "precision": 0.9925,
+     "f1": 0.9888
     },
     "local": {
      "expected": 135,
@@ -917,18 +851,18 @@
    "matched": {
     "before": {
      "gigachat_matched": 0,
-     "gigachat_expected": 40,
-     "local_matched": 27,
-     "local_expected": 40
+     "gigachat_expected": 0,
+     "local_matched": 0,
+     "local_expected": 0
     },
     "after": {
-     "gigachat_matched": 92,
-     "gigachat_expected": 95,
-     "local_matched": 73,
-     "local_expected": 95
+     "gigachat_matched": 133,
+     "gigachat_expected": 135,
+     "local_matched": 100,
+     "local_expected": 135
     },
     "all": {
-     "gigachat_matched": 92,
+     "gigachat_matched": 133,
      "gigachat_expected": 135,
      "local_matched": 100,
      "local_expected": 135
@@ -938,48 +872,48 @@
   "driver.phone": {
    "before": {
     "gigachat": {
-     "expected": 86,
-     "found": 82,
-     "matched": 55,
-     "recall": 0.6395,
-     "precision": 0.6707,
-     "f1": 0.6547
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     },
     "local": {
-     "expected": 86,
-     "found": 81,
-     "matched": 81,
-     "recall": 0.9419,
-     "precision": 1.0,
-     "f1": 0.9701
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     }
    },
    "after": {
     "gigachat": {
-     "expected": 189,
-     "found": 189,
-     "matched": 189,
-     "recall": 1.0,
-     "precision": 1.0,
-     "f1": 1.0
+     "expected": 275,
+     "found": 275,
+     "matched": 274,
+     "recall": 0.9964,
+     "precision": 0.9964,
+     "f1": 0.9964
     },
     "local": {
-     "expected": 189,
-     "found": 177,
-     "matched": 177,
-     "recall": 0.9365,
+     "expected": 275,
+     "found": 258,
+     "matched": 258,
+     "recall": 0.9382,
      "precision": 1.0,
-     "f1": 0.9672
+     "f1": 0.9681
     }
    },
    "all": {
     "gigachat": {
      "expected": 275,
-     "found": 271,
-     "matched": 244,
-     "recall": 0.8873,
-     "precision": 0.9004,
-     "f1": 0.8938
+     "found": 275,
+     "matched": 274,
+     "recall": 0.9964,
+     "precision": 0.9964,
+     "f1": 0.9964
     },
     "local": {
      "expected": 275,
@@ -992,19 +926,19 @@
    },
    "matched": {
     "before": {
-     "gigachat_matched": 55,
-     "gigachat_expected": 86,
-     "local_matched": 81,
-     "local_expected": 86
+     "gigachat_matched": 0,
+     "gigachat_expected": 0,
+     "local_matched": 0,
+     "local_expected": 0
     },
     "after": {
-     "gigachat_matched": 189,
-     "gigachat_expected": 189,
-     "local_matched": 177,
-     "local_expected": 189
+     "gigachat_matched": 274,
+     "gigachat_expected": 275,
+     "local_matched": 258,
+     "local_expected": 275
     },
     "all": {
-     "gigachat_matched": 244,
+     "gigachat_matched": 274,
      "gigachat_expected": 275,
      "local_matched": 258,
      "local_expected": 275
@@ -1014,48 +948,48 @@
   "driver.passport_issuer": {
    "before": {
     "gigachat": {
-     "expected": 86,
-     "found": 86,
-     "matched": 73,
-     "recall": 0.8488,
-     "precision": 0.8488,
-     "f1": 0.8488
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     },
     "local": {
-     "expected": 86,
-     "found": 86,
-     "matched": 73,
-     "recall": 0.8488,
-     "precision": 0.8488,
-     "f1": 0.8488
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     }
    },
    "after": {
     "gigachat": {
-     "expected": 189,
-     "found": 189,
-     "matched": 189,
-     "recall": 1.0,
-     "precision": 1.0,
-     "f1": 1.0
+     "expected": 275,
+     "found": 275,
+     "matched": 274,
+     "recall": 0.9964,
+     "precision": 0.9964,
+     "f1": 0.9964
     },
     "local": {
-     "expected": 189,
-     "found": 189,
-     "matched": 167,
-     "recall": 0.8836,
-     "precision": 0.8836,
-     "f1": 0.8836
+     "expected": 275,
+     "found": 275,
+     "matched": 240,
+     "recall": 0.8727,
+     "precision": 0.8727,
+     "f1": 0.8727
     }
    },
    "all": {
     "gigachat": {
      "expected": 275,
      "found": 275,
-     "matched": 262,
-     "recall": 0.9527,
-     "precision": 0.9527,
-     "f1": 0.9527
+     "matched": 274,
+     "recall": 0.9964,
+     "precision": 0.9964,
+     "f1": 0.9964
     },
     "local": {
      "expected": 275,
@@ -1068,19 +1002,19 @@
    },
    "matched": {
     "before": {
-     "gigachat_matched": 73,
-     "gigachat_expected": 86,
-     "local_matched": 73,
-     "local_expected": 86
+     "gigachat_matched": 0,
+     "gigachat_expected": 0,
+     "local_matched": 0,
+     "local_expected": 0
     },
     "after": {
-     "gigachat_matched": 189,
-     "gigachat_expected": 189,
-     "local_matched": 167,
-     "local_expected": 189
+     "gigachat_matched": 274,
+     "gigachat_expected": 275,
+     "local_matched": 240,
+     "local_expected": 275
     },
     "all": {
-     "gigachat_matched": 262,
+     "gigachat_matched": 274,
      "gigachat_expected": 275,
      "local_matched": 240,
      "local_expected": 275
@@ -1090,35 +1024,35 @@
   "driver.passport_code": {
    "before": {
     "gigachat": {
-     "expected": 40,
-     "found": 25,
-     "matched": 24,
-     "recall": 0.6,
-     "precision": 0.96,
-     "f1": 0.7385
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     },
     "local": {
-     "expected": 40,
-     "found": 40,
-     "matched": 40,
-     "recall": 1.0,
-     "precision": 1.0,
-     "f1": 1.0
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     }
    },
    "after": {
     "gigachat": {
-     "expected": 95,
-     "found": 94,
-     "matched": 93,
-     "recall": 0.9789,
-     "precision": 0.9894,
-     "f1": 0.9841
+     "expected": 135,
+     "found": 134,
+     "matched": 134,
+     "recall": 0.9926,
+     "precision": 1.0,
+     "f1": 0.9963
     },
     "local": {
-     "expected": 95,
-     "found": 95,
-     "matched": 95,
+     "expected": 135,
+     "found": 135,
+     "matched": 135,
      "recall": 1.0,
      "precision": 1.0,
      "f1": 1.0
@@ -1127,11 +1061,11 @@
    "all": {
     "gigachat": {
      "expected": 135,
-     "found": 119,
-     "matched": 117,
-     "recall": 0.8667,
-     "precision": 0.9832,
-     "f1": 0.9213
+     "found": 134,
+     "matched": 134,
+     "recall": 0.9926,
+     "precision": 1.0,
+     "f1": 0.9963
     },
     "local": {
      "expected": 135,
@@ -1144,19 +1078,19 @@
    },
    "matched": {
     "before": {
-     "gigachat_matched": 24,
-     "gigachat_expected": 40,
-     "local_matched": 40,
-     "local_expected": 40
+     "gigachat_matched": 0,
+     "gigachat_expected": 0,
+     "local_matched": 0,
+     "local_expected": 0
     },
     "after": {
-     "gigachat_matched": 93,
-     "gigachat_expected": 95,
-     "local_matched": 95,
-     "local_expected": 95
+     "gigachat_matched": 134,
+     "gigachat_expected": 135,
+     "local_matched": 135,
+     "local_expected": 135
     },
     "all": {
-     "gigachat_matched": 117,
+     "gigachat_matched": 134,
      "gigachat_expected": 135,
      "local_matched": 135,
      "local_expected": 135
@@ -1166,48 +1100,48 @@
   "driver.registration_address": {
    "before": {
     "gigachat": {
-     "expected": 74,
-     "found": 74,
-     "matched": 69,
-     "recall": 0.9324,
-     "precision": 0.9324,
-     "f1": 0.9324
+     "expected": 12,
+     "found": 12,
+     "matched": 11,
+     "recall": 0.9167,
+     "precision": 0.9167,
+     "f1": 0.9167
     },
     "local": {
-     "expected": 74,
-     "found": 68,
-     "matched": 51,
-     "recall": 0.6892,
-     "precision": 0.75,
-     "f1": 0.7183
+     "expected": 12,
+     "found": 12,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     }
    },
    "after": {
     "gigachat": {
-     "expected": 180,
-     "found": 180,
-     "matched": 178,
-     "recall": 0.9889,
-     "precision": 0.9889,
-     "f1": 0.9889
+     "expected": 242,
+     "found": 242,
+     "matched": 242,
+     "recall": 1.0,
+     "precision": 1.0,
+     "f1": 1.0
     },
     "local": {
-     "expected": 180,
-     "found": 172,
-     "matched": 115,
-     "recall": 0.6389,
-     "precision": 0.6686,
-     "f1": 0.6534
+     "expected": 242,
+     "found": 228,
+     "matched": 166,
+     "recall": 0.686,
+     "precision": 0.7281,
+     "f1": 0.7064
     }
    },
    "all": {
     "gigachat": {
      "expected": 254,
      "found": 254,
-     "matched": 247,
-     "recall": 0.9724,
-     "precision": 0.9724,
-     "f1": 0.9724
+     "matched": 253,
+     "recall": 0.9961,
+     "precision": 0.9961,
+     "f1": 0.9961
     },
     "local": {
      "expected": 254,
@@ -1220,19 +1154,19 @@
    },
    "matched": {
     "before": {
-     "gigachat_matched": 69,
-     "gigachat_expected": 74,
-     "local_matched": 51,
-     "local_expected": 74
+     "gigachat_matched": 11,
+     "gigachat_expected": 12,
+     "local_matched": 0,
+     "local_expected": 12
     },
     "after": {
-     "gigachat_matched": 178,
-     "gigachat_expected": 180,
-     "local_matched": 115,
-     "local_expected": 180
+     "gigachat_matched": 242,
+     "gigachat_expected": 242,
+     "local_matched": 166,
+     "local_expected": 242
     },
     "all": {
-     "gigachat_matched": 247,
+     "gigachat_matched": 253,
      "gigachat_expected": 254,
      "local_matched": 166,
      "local_expected": 254
@@ -1242,48 +1176,48 @@
   "carrier.bank_name": {
    "before": {
     "gigachat": {
-     "expected": 27,
-     "found": 27,
-     "matched": 26,
-     "recall": 0.963,
-     "precision": 0.963,
-     "f1": 0.963
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     },
     "local": {
-     "expected": 27,
-     "found": 2,
-     "matched": 2,
-     "recall": 0.0741,
-     "precision": 1.0,
-     "f1": 0.138
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
     }
    },
    "after": {
     "gigachat": {
-     "expected": 69,
-     "found": 69,
-     "matched": 62,
-     "recall": 0.8986,
-     "precision": 0.8986,
-     "f1": 0.8986
+     "expected": 96,
+     "found": 96,
+     "matched": 96,
+     "recall": 1.0,
+     "precision": 1.0,
+     "f1": 1.0
     },
     "local": {
-     "expected": 69,
-     "found": 6,
-     "matched": 6,
-     "recall": 0.087,
+     "expected": 96,
+     "found": 8,
+     "matched": 8,
+     "recall": 0.0833,
      "precision": 1.0,
-     "f1": 0.1601
+     "f1": 0.1538
     }
    },
    "all": {
     "gigachat": {
      "expected": 96,
      "found": 96,
-     "matched": 88,
-     "recall": 0.9167,
-     "precision": 0.9167,
-     "f1": 0.9167
+     "matched": 96,
+     "recall": 1.0,
+     "precision": 1.0,
+     "f1": 1.0
     },
     "local": {
      "expected": 96,
@@ -1296,19 +1230,19 @@
    },
    "matched": {
     "before": {
-     "gigachat_matched": 26,
-     "gigachat_expected": 27,
-     "local_matched": 2,
-     "local_expected": 27
+     "gigachat_matched": 0,
+     "gigachat_expected": 0,
+     "local_matched": 0,
+     "local_expected": 0
     },
     "after": {
-     "gigachat_matched": 62,
-     "gigachat_expected": 69,
-     "local_matched": 6,
-     "local_expected": 69
+     "gigachat_matched": 96,
+     "gigachat_expected": 96,
+     "local_matched": 8,
+     "local_expected": 96
     },
     "all": {
-     "gigachat_matched": 88,
+     "gigachat_matched": 96,
      "gigachat_expected": 96,
      "local_matched": 8,
      "local_expected": 96
@@ -1318,48 +1252,48 @@
   "customer.bank_name": {
    "before": {
     "gigachat": {
-     "expected": 3,
-     "found": 3,
-     "matched": 3,
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
+    },
+    "local": {
+     "expected": 0,
+     "found": 0,
+     "matched": 0,
+     "recall": 0.0,
+     "precision": 0.0,
+     "f1": 0.0
+    }
+   },
+   "after": {
+    "gigachat": {
+     "expected": 19,
+     "found": 19,
+     "matched": 19,
      "recall": 1.0,
      "precision": 1.0,
      "f1": 1.0
     },
     "local": {
-     "expected": 3,
-     "found": 2,
-     "matched": 2,
-     "recall": 0.6667,
+     "expected": 19,
+     "found": 12,
+     "matched": 12,
+     "recall": 0.6316,
      "precision": 1.0,
-     "f1": 0.8
-    }
-   },
-   "after": {
-    "gigachat": {
-     "expected": 16,
-     "found": 16,
-     "matched": 13,
-     "recall": 0.8125,
-     "precision": 0.8125,
-     "f1": 0.8125
-    },
-    "local": {
-     "expected": 16,
-     "found": 10,
-     "matched": 10,
-     "recall": 0.625,
-     "precision": 1.0,
-     "f1": 0.7692
+     "f1": 0.7742
     }
    },
    "all": {
     "gigachat": {
      "expected": 19,
      "found": 19,
-     "matched": 16,
-     "recall": 0.8421,
-     "precision": 0.8421,
-     "f1": 0.8421
+     "matched": 19,
+     "recall": 1.0,
+     "precision": 1.0,
+     "f1": 1.0
     },
     "local": {
      "expected": 19,
@@ -1372,19 +1306,19 @@
    },
    "matched": {
     "before": {
-     "gigachat_matched": 3,
-     "gigachat_expected": 3,
-     "local_matched": 2,
-     "local_expected": 3
+     "gigachat_matched": 0,
+     "gigachat_expected": 0,
+     "local_matched": 0,
+     "local_expected": 0
     },
     "after": {
-     "gigachat_matched": 13,
-     "gigachat_expected": 16,
-     "local_matched": 10,
-     "local_expected": 16
+     "gigachat_matched": 19,
+     "gigachat_expected": 19,
+     "local_matched": 12,
+     "local_expected": 19
     },
     "all": {
-     "gigachat_matched": 16,
+     "gigachat_matched": 19,
      "gigachat_expected": 19,
      "local_matched": 12,
      "local_expected": 19

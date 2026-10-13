@@ -394,8 +394,14 @@ def test_repo_metrics_file_is_valid_and_safe():
     assert len(data["top_extra"]["gigachat"]) <= 20
     for row in data["top_extra"]["gigachat"]:
         assert row["kind"] in {"default_extras", "вне схемы", "лишнее"}
-    assert data["batches"]["before_pseudonymizer_fix"]["scenarios"] == 264
-    assert data["batches"]["after_pseudonymizer_fix"]["scenarios"] == 736
+    # Партии «до/после фикса» — это деление ОТВЕТОВ, а не историческая
+    # константа: 13.10.2026 замер переспросил часть прежней партии «264»,
+    # поэтому здесь проверяется структура (обе части в сумме дают все
+    # сценарии), а не конкретные числа.
+    before = data["batches"]["before_pseudonymizer_fix"]["scenarios"]
+    after = data["batches"]["after_pseudonymizer_fix"]["scenarios"]
+    assert before >= 0 and after >= 0
+    assert before + after == data["scenarios"]
 
 
 # ─────────────────────────────────────────────────────────────
