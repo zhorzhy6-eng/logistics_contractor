@@ -1,28 +1,54 @@
-"""Понятный диалог импорта: дерево сущностей, подтверждение целиком, объяснения.
+"""Проверка документов: распознал → видно, что нашли → одна кнопка → перенос.
 
-Оператор видит три уровня вместо плоского списка из 57 строк:
+Как выглядит окно после переделки (13.10.2026):
 
-    ВОДИТЕЛЬ: Иванов Иван Иванович, 15.03.1985
-      📄 passport_01.jpg
-        Серия паспорта: 60 26            [✓] [Править]
-        Номер паспорта: 123456           [✓] [Править]
-      📄 Не прочитано ни в одном документе
-        Кем выдан паспорт: [не прочитано] [ ] [Ввести вручную]
-      [✓] [Подтвердить водителя целиком]
+    Перетащите файлы или нажмите «Добавить», затем «Распознать».        [?]
+    [+ Добавить файлы]                                [ Распознать ]
+    ┌───────────────────┬──────────────┬────────────────────────────┐
+    │ Файл              │ Статус       │ Найдено                    │
+    │ Договор.pdf       │ ✅ готово    │ 12 полей                   │
+    │ Скан.jpg          │ ❌ ошибка    │ Vision 429                 │
+    └───────────────────┴──────────────┴────────────────────────────┘
+    ┌───────────────────────────────────────────────────────────────┐
+    │ ВОДИТЕЛЬ: Иванов Иван Иванович                                │
+    │   📄 passport_01.jpg (GigaChat Vision)                        │
+    │     Серия паспорта │ 60 26          │ Перевозчик → ИНН        │
+    └───────────────────────────────────────────────────────────────┘
+    Распознано: 12 полей из 15. Не найдено: место рождения, ВУ.
+                                  [ Закрыть ] [ Перенести в форму ]
 
-Ничего не переносится без галочки, в базу импорт не пишет. Группировку
-считает `core/import_entities.py` — диалог только показывает результат.
+Что изменилось по существу
+--------------------------
+* **Галочек подтверждения нет.** Переносится ВСЁ, что распознано и прошло
+  проверку формата: оператор и так видит найденное в дереве. Один шаг
+  («Перенести в форму») вместо «отметить → перенести подтверждённое».
+* **Файлы — таблица со статусами** («ожидает», «распознаётся…», «готово»,
+  «ошибка»), строки подсвечены цветом. Пока файлов нет, вместо таблицы
+  показана подписанная зона перетаскивания.
+* **Кнопки разделены:** слева второстепенная «+ Добавить файлы», справа
+  главная «Распознать»; «Открыть оригинал» и «Показать распознанный текст»
+  переехали в контекстное меню строки, «Отменить обработку» видна только
+  во время распознавания.
+* **Поля без колонок «Подтвердить» и «Действие»**: «Что нашли», «Значение»,
+  «Куда попадёт в форме». Непрочитанное поле видно серым («— не найдено —»),
+  но перенос не блокирует.
+* Полный текст объяснений — в кнопке «?» в правом верхнем углу.
+
+Группировку (водитель / организация / машина) считает `core/import_entities.py`,
+диалог только показывает результат. В базу импорт не пишет: поля уходят
+в форму вызовом `apply_approved`.
 """
 import logging
 from collections import OrderedDict
 from pathlib import Path
 from threading import Event
 
-from PyQt5.QtCore import Qt, QObject, QRunnable, pyqtSignal, QUrl
+from PyQt5.QtCore import QSize, Qt, QObject, QRunnable, pyqtSignal, QUrl
 from PyQt5.QtGui import QBrush, QColor, QDesktopServices
-from PyQt5.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog,
-    QHBoxLayout, QLabel, QListWidget, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout)
+from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog,
+    QFileDialog, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QPlainTextEdit,
+    QProgressBar, QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout)
 
 from core.document_import_service import (DocumentImportService, FieldResult, LABELS,
     LOCAL_OCR_FALLBACK_METHOD, LOCAL_OCR_METHOD, LOCAL_OCR_METHODS, LOCAL_TEXT_METHOD,
@@ -32,34 +58,90 @@ from core.import_entities import (STATE_CONFLICT, STATE_INVALID, STATE_UNREADABL
     UNREADABLE_SOURCE_LABEL, detect_conflicts, entities_from_rows, entity_by_uid,
     progress_text, source_methods, summary_text)
 
+from ui import theme
+from ui.icons import action_icon
 from ui.widgets.table_helpers import (
-    MODE_FIXED, install_tooltip_on_table, setup_point_table,
+    MODE_FIXED, MODE_STRETCH, install_tooltip_on_table, setup_point_table,
 )
 
 logger = logging.getLogger(__name__)
 
-# Колонки дерева проверки.
-COL_WHAT, COL_VALUE, COL_TARGET, COL_CHECK, COL_ACTION = range(5)
+# Колонки дерева проверки: что нашли, значение и куда оно попадёт.
+# Колонок «Подтвердить» и «Действие» здесь нет: подтверждений в окне не
+# осталось, а правка значения идёт двойным кликом по строке.
+COL_WHAT, COL_VALUE, COL_TARGET = range(3)
 
 #: Свойства виджетов дерева: какому (сущность, поле) они служат. Слоты берут
 #: их у отправителя сигнала, поэтому в connect нет ни lambda, ни partial
 #: (цикл ссылок Python ↔ Qt роняет процесс при выходе, грабли 2B.7).
 ENTITY_UID_PROPERTY = "import_entity_uid"
 FIELD_PROPERTY = "import_field"
-TREE_HEADERS = ("Что нашли в документах", "Значение", "Куда попадёт в форме (сейчас там)",
-                "Подтвердить", "Действие")
+TREE_HEADERS = ("Что нашли в документах", "Значение", "Куда попадёт в форме (сейчас там)")
 # Раскладка колонок — общий помощник таблиц (ширины, режимы, подсказки).
 WIDTHS_KEY = "ui/document_import/columns"
-TREE_COLUMN_WIDTHS = (430, 250, 250, 90, 140)
-TREE_COLUMN_MINIMUMS = {COL_WHAT: 260, COL_VALUE: 150, COL_TARGET: 150}
+TREE_COLUMN_WIDTHS = (520, 280, 300)
+TREE_COLUMN_MINIMUMS = {COL_WHAT: 280, COL_VALUE: 180, COL_TARGET: 180}
+
+# Колонки таблицы файлов: имя, состояние обработки и что нашлось.
+FILE_COL_NAME, FILE_COL_STATUS, FILE_COL_FOUND = range(3)
+FILE_HEADERS = ("Файл", "Статус", "Найдено")
+FILE_WIDTHS_KEY = "ui/document_import/files_columns"
+FILE_COLUMN_WIDTHS = (460, 180, 260)
+FILE_COLUMN_MINIMUMS = {FILE_COL_NAME: 220, FILE_COL_STATUS: 140, FILE_COL_FOUND: 160}
+
+#: Состояния файла в таблице. Тексты короткие: строка таблицы — не отчёт,
+#: подробности (текст ошибки) стоят в колонке «Найдено» и в подсказке.
+FILE_WAITING = "ожидает"
+FILE_RUNNING = "⏳ распознаётся…"
+FILE_DONE = "✅ готово"
+FILE_ERROR = "❌ ошибка"
+FILE_EMPTY = "⚠ поля не найдены"
 
 SOURCE_PREFIX = "📄 "
 NO_SOURCE_LABEL = "📄 " + UNREADABLE_SOURCE_LABEL
-FIELD_ACTION_EDIT = "Править"
-FIELD_ACTION_MANUAL = "Ввести вручную"
 UNREAD_FILES_HEADING = "📄 НЕ ПРОЧИТАННЫЕ ФАЙЛЫ"
 FORM_EMPTY_MARK = "— пусто —"
 FORM_DIFFERS_MARK = "≠ "
+#: Поле есть в схеме, но не найдено ни в одном документе: серым, но перенос
+#: оно не блокирует.
+FIELD_NOT_FOUND_MARK = "— не найдено —"
+#: Строку убрали из переноса правым кликом: значение остаётся видимым.
+FIELD_REMOVED_MARK = "— удалено из переноса —"
+
+#: Строка состояния, пока файлы не выбраны.
+FILES_NOT_CHOSEN_TEXT = "Файлы не выбраны: добавьте документы и нажмите «Распознать»."
+
+#: Одна строка над кнопками. Остальное объяснение — в «?».
+HEADER_HINT = "Перетащите файлы или нажмите «Добавить», затем «Распознать»."
+HELP_TITLE = "Проверка документов — как это работает"
+HELP_TEXT = (
+    "1. Добавьте файлы: «+ Добавить файлы» или перетащите их в окно.\n"
+    "2. Нажмите «Распознать» — документы прочитает облако (GigaChat) или\n"
+    "   локальный OCR. Ход работы виден в таблице файлов: «ожидает»,\n"
+    "   «распознаётся…», «готово», «ошибка».\n"
+    "3. Проверьте, что нашлось: слева — поле и значение, справа — куда оно\n"
+    "   попадёт в форме и что там сейчас.\n"
+    "4. Нажмите «Перенести в форму». Подтверждать поля не нужно: переносится\n"
+    "   всё, что распознано.\n"
+    "\n"
+    "Чего в документах нет — видно серым «— не найдено —»: такие поля можно\n"
+    "заполнить в форме вручную, перенос они не блокируют.\n"
+    "Поле в дереве правится двойным кликом. Правый клик по строке — «Открыть\n"
+    "оригинал», «Показать распознанный текст», «Скопировать значение»,\n"
+    "«Удалить строку» (строка не пойдёт в форму).\n"
+    "\n"
+    "Рядом с именем файла указано, чем он прочитан: (GigaChat Vision) —\n"
+    "облако; OCR локально (облако выключено / GigaChat недоступен / GigaChat\n"
+    "вернул 429) — распознавание на этом компьютере.\n"
+    "В базу импорт ничего не пишет: поля попадают только в форму договора."
+)
+
+# ── подписи зоны перетаскивания (пока файлов нет) ──
+DROP_TITLE = "Перетащите файлы сюда"
+DROP_SUBTITLE = "или нажмите «+ Добавить файлы»"
+DROP_FORMATS = "PDF, DOCX, JPG, PNG"
+DROP_PAGE = 0        # страница стека: зона перетаскивания
+FILES_PAGE = 1       # страница стека: таблица файлов
 
 # ── признак пути распознавания у источника ──
 # Оператор должен видеть, чем прочитан документ: облаком или локально.
@@ -134,26 +216,34 @@ def source_hint(method: str, model: str = "", note: str = "", reason: str = "") 
         parts.append(str(note))
     return " ".join(part for part in parts if part)
 
-# ── оформление строк дерева ──
+# ── оформление строк ──
 #: Спорное поле (источники дают разные значения) — светло-красный фон:
 #: видно издалека, но текст остаётся читаемым.
 CONFLICT_BRUSH = QBrush(QColor(255, 214, 214))
 #: Непрочитанное значение — серым курсивом.
 UNREADABLE_BRUSH = QBrush(QColor(130, 130, 130))
+#: Убранная из переноса строка — серым.
+REMOVED_BRUSH = QBrush(QColor(150, 150, 150))
 #: Подсказка «проверить» под сущностью.
 NOTE_BRUSH = QBrush(QColor(255, 244, 204))
 NO_BRUSH = QBrush()
 
-INSTRUCTION = (
-    "Проверка документов.\n"
-    "Слева — что нашли в документах. Справа — куда это попадёт в форме.\n"
-    "Рядом с именем файла указано, чем он прочитан: (GigaChat Vision) — облако, "
-    "OCR локально (облако выключено / GigaChat недоступен / GigaChat вернул 429 / "
-    "Vision не сработал) — распознавание на этом компьютере.\n"
-    "Галочка = «да, верно, перенести». Кнопка «Подтвердить целиком» подтверждает "
-    "все поля одной сущности сразу.\n"
-    "Добавьте файлы или перетащите их в окно. Ничего не переносится автоматически."
-)
+#: Цвет строки таблицы файлов: зелёный — готово, жёлтый — распознаётся,
+#: красный — ошибка, серый — ожидает.
+FILE_STATUS_BRUSHES = {
+    FILE_DONE: QBrush(QColor(226, 245, 227)),
+    FILE_RUNNING: QBrush(QColor(255, 248, 214)),
+    FILE_ERROR: QBrush(QColor(255, 214, 214)),
+    FILE_EMPTY: NOTE_BRUSH,
+    FILE_WAITING: QBrush(QColor(238, 238, 238)),
+}
+
+
+def _drop_zone_qss() -> str:
+    """Рамка зоны перетаскивания в цветах активной темы."""
+    p = theme.palette()
+    return ("QFrame#dropZone { background: %s; border: 2px dashed %s;"
+            " border-radius: 10px; }" % (p["surface_alt"], p["border_input"]))
 
 
 def _files_word(count: int) -> str:
@@ -163,6 +253,15 @@ def _files_word(count: int) -> str:
     if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
         return "файла"
     return "файлов"
+
+
+def _fields_word(count: int) -> str:
+    """Склонение слова «поле» для строки состояния («23 поля», «12 полей»)."""
+    if count % 10 == 1 and count % 100 != 11:
+        return "поле"
+    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        return "поля"
+    return "полей"
 
 
 class ImportSignals(QObject):
@@ -212,11 +311,11 @@ def form_snapshot(window):
 
 
 def apply_approved(window, changes):
-    """Each change is (section, physical vehicle row or None, field, confirmed value)."""
+    """Each change is (section, physical vehicle row or None, field, распознанное значение)."""
     sections, vehicles = {}, {}
     for section, target, key, value in changes:
         if key not in SCHEMA[section] or not valid_value(key, value):
-            raise ValueError("Некорректное подтверждённое поле")
+            raise ValueError("Некорректное распознанное поле")
         if section == "vehicles":
             vehicles.setdefault(target, {})[key] = value
         else:
@@ -240,7 +339,7 @@ def apply_approved(window, changes):
             continue
         for key, value in fields.items():
             # Значение ставится по КЛЮЧУ поля: скрытая колонка тоже
-            # обновляется, поэтому подтверждённое в импорте не теряется.
+            # обновляется, поэтому распознанное в импорте не теряется.
             tab.set_field(target, key, value)
 
 
@@ -256,9 +355,9 @@ class DocumentImportDialog(QDialog):
         self.entities = []
         self.unread_files = []
         # Состояние интерфейса, которое должно переживать перерисовку дерева:
-        # подтверждения — по устойчивому ключу сущности, а не по номеру строки.
-        self.confirmed = {}          # (uid сущности, поле) -> bool
+        # правки — по устойчивому ключу сущности, а не по номеру строки.
         self.edited = {}             # (uid сущности, поле) -> исходное значение
+        self.removed = set()         # (uid сущности, поле) -> строка убрана из переноса
         self.targets = {}            # uid сущности -> (раздел, цель в форме)
         self.ocr_texts = {}
         self.unread_sources = set()
@@ -270,6 +369,11 @@ class DocumentImportDialog(QDialog):
         self.local_reasons = {}      # источник -> код причины (CLOUD_*)
         # Текст ошибки -> источники, в которых она повторилась (для сводки).
         self.error_sources = {}
+        # Таблица файлов: путь -> строка, имя файла -> состояние обработки.
+        self.file_rows = {}          # имя файла -> номер строки таблицы
+        self.file_status = {}        # имя файла -> состояние (FILE_*)
+        self.file_fields = {}        # имя файла -> сколько полей нашлось
+        self.file_notes = {}         # имя файла -> текст ошибки или примечания
         self._items = {}             # uid сущности -> узел дерева
         self._field_items = {}       # (uid сущности, поле) -> узел дерева
         self._unreadable_items = []
@@ -284,83 +388,73 @@ class DocumentImportDialog(QDialog):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        instruction = QLabel(INSTRUCTION)
-        instruction.setWordWrap(True)
-        layout.addWidget(instruction)
 
-        self.files = QListWidget()
-        self.files.setMaximumHeight(115)
-        self.files.setAcceptDrops(False)
-        layout.addWidget(self.files)
+        # ── шапка: ОДНА строка и «?» с полным текстом ──
+        header = QHBoxLayout()
+        self.header_hint = QLabel(HEADER_HINT)
+        self.header_hint.setWordWrap(True)
+        header.addWidget(self.header_hint, 1)
+        self.help_button = theme.secondary_button("?", "Справка: как работает импорт документов")
+        self.help_button.setFixedSize(32, 28)
+        self.help_button.setToolTip(self._help_text())
+        self.help_button.setAccessibleName("Справка по окну импорта")
+        header.addWidget(self.help_button, 0, Qt.AlignTop)
+        layout.addLayout(header)
 
+        # ── кнопки: слева второстепенная, справа главная ──
         bar = QHBoxLayout()
-        self.add_button = QPushButton("Добавить файлы")
+        self.add_button = theme.secondary_button(
+            "+ Добавить файлы", "Выбрать документы на диске (PDF, DOCX, JPG, PNG)")
         self.add_button.clicked.connect(self.choose_files)
         bar.addWidget(self.add_button)
-        open_button = QPushButton("Открыть выбранный оригинал")
-        open_button.clicked.connect(self.open_original)
-        bar.addWidget(open_button)
-        text_button = QPushButton("Показать распознанный текст")
-        text_button.clicked.connect(self.show_ocr_text)
-        bar.addWidget(text_button)
-        self.start_button = QPushButton("Распознать")
+        bar.addStretch(1)
+        self.start_button = theme.primary_button(
+            "Распознать", "Прочитать документы и показать найденные поля")
+        self.start_button.setIcon(action_icon("recognize.svg"))
+        self.start_button.setIconSize(QSize(18, 18))
         self.start_button.clicked.connect(self.start)
         bar.addWidget(self.start_button)
-        self.cancel_button = QPushButton("Отменить обработку")
+        # «Отменить обработку» видна только во время распознавания — вместо
+        # «Распознать», а не рядом с ней.
+        self.cancel_button = theme.secondary_button(
+            "Отменить обработку", "Остановить распознавание: уже прочитанное останется")
         self.cancel_button.clicked.connect(self.cancel)
-        self.cancel_button.setEnabled(False)
+        self.cancel_button.setVisible(False)
         bar.addWidget(self.cancel_button)
         layout.addLayout(bar)
 
-        cloud = self.window.settings_service.get_bool("document_cloud_enabled", False)
-        if cloud and self.window.gigachat is not None:
-            cloud_state = ("в GigaChat уходят изображения и сканы (Vision), а также текст, "
-                           "в котором локальные правила не нашли реквизитов")
-        elif cloud:
-            cloud_state = "GigaChat Vision включён, но ключ недоступен — будет локальный OCR (Tesseract)"
-        else:
-            cloud_state = "GigaChat Vision выключен — используется локальный OCR (Tesseract)"
-        self.status = QLabel("Облачная обработка: " + cloud_state)
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-
-        # ── прогресс: «Обработано X из Y файлов, найдено N сущностей» ──
+        # ── прогресс: виден только во время распознавания ──
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
         self.progress.setMaximumHeight(14)
+        self.progress.setVisible(False)
         layout.addWidget(self.progress)
-        self.progress_label = QLabel("Файлы ещё не обработаны.")
+        self.progress_label = QLabel("")
         self.progress_label.setWordWrap(True)
+        self.progress_label.setObjectName("pageHint")
+        self.progress_label.setVisible(False)
         layout.addWidget(self.progress_label)
 
-        # ── шапка дерева: что скрыто и что подтверждено ──
-        header = QHBoxLayout()
-        self.hide_unreadable_button = QPushButton("Скрыть непрочитанные")
-        self.hide_unreadable_button.setCheckable(True)
-        self.hide_unreadable_button.setToolTip(
-            "Убирает из дерева поля, которых нет в документах. Данные не меняются.")
-        self.hide_unreadable_button.toggled.connect(self._on_hide_unreadable)
-        header.addWidget(self.hide_unreadable_button)
-        self.uncheck_button = QPushButton("Снять галочки у выбранных")
-        self.uncheck_button.setToolTip("Снимает все подтверждения — форма не меняется.")
-        self.uncheck_button.clicked.connect(self.uncheck_all)
-        header.addWidget(self.uncheck_button)
-        expand_button = QPushButton("Развернуть всё")
-        expand_button.clicked.connect(self.tree_expand_all)
-        header.addWidget(expand_button)
-        collapse_button = QPushButton("Свернуть всё")
-        collapse_button.clicked.connect(self.tree_collapse_all)
-        header.addWidget(collapse_button)
-        header.addStretch(1)
-        layout.addLayout(header)
+        self.status = QLabel(self._cloud_state_text())
+        self.status.setWordWrap(True)
+        self.status.setObjectName("pageHint")
+        layout.addWidget(self.status)
 
+        # ── файлы: подписанная зона перетаскивания ИЛИ таблица статусов ──
+        self.drop_zone = self._build_drop_zone()
+        self.files_table = self._build_files_table()
+        self.files_stack = QStackedWidget()
+        self.files_stack.addWidget(self.drop_zone)
+        self.files_stack.addWidget(self.files_table)
+        self.files_stack.setCurrentIndex(DROP_PAGE)
+        layout.addWidget(self.files_stack)
+
+        # ── дерево: что нашли, значение и куда попадёт ──
         self.tree = QTreeWidget()
         self.tree.setColumnCount(len(TREE_HEADERS))
         self.tree.setHeaderLabels(list(TREE_HEADERS))
-        # Последняя колонка («Действие») не растягивается: иначе она забирала
-        # бы место у остальных, а строка уходила бы в горизонтальную прокрутку.
         self.tree.header().setStretchLastSection(False)
         # Ширины и минимумы — общий помощник таблиц (ШАГ FIX-6, часть E):
         # колонки Interactive, раскладка запоминается между запусками.
@@ -374,38 +468,93 @@ class DocumentImportDialog(QDialog):
         self.tree.setWordWrap(True)
         install_tooltip_on_table(self.tree)
         self.tree.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_tree_menu)
         self.tree.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.tree, 1)
-
-        manual = QHBoxLayout()
-        manual.addWidget(QLabel("Если поля не прочитаны, выберите вкладку для ручной проверки:"))
-        self.manual_section = QComboBox()
-        for section, title in TITLES.items():
-            self.manual_section.addItem(title, section)
-        manual.addWidget(self.manual_section)
-        self.manual_button = QPushButton("Добавить пустые поля")
-        self.manual_button.clicked.connect(self.add_manual_group)
-        manual.addWidget(self.manual_button)
-        manual.addStretch(1)
-        layout.addLayout(manual)
 
         self.errors = QLabel("")
         self.errors.setWordWrap(True)
         self.errors.setTextFormat(Qt.PlainText)
+        self.errors.setVisible(False)
         layout.addWidget(self.errors)
 
+        # ── нижняя панель: что распознано и ОДНА главная кнопка ──
         footer = QHBoxLayout()
-        self.apply_button = QPushButton("Перенести подтверждённые поля")
+        self.summary = QLabel(FILES_NOT_CHOSEN_TEXT)
+        self.summary.setWordWrap(True)
+        footer.addWidget(self.summary, 1)
+        self.close_button = theme.secondary_button("Закрыть", "Закрыть окно, ничего не перенося")
+        self.close_button.clicked.connect(self.reject)
+        footer.addWidget(self.close_button)
+        self.apply_button = theme.primary_button(
+            "Перенести в форму", "Перенести в форму все распознанные поля")
         self.apply_button.clicked.connect(self.apply)
         self.apply_button.setEnabled(False)
-        footer.addWidget(self.apply_button, 1)
-        close_button = QPushButton("Закрыть")
-        close_button.clicked.connect(self.reject)
-        footer.addWidget(close_button)
+        footer.addWidget(self.apply_button)
         layout.addLayout(footer)
 
+    def _build_drop_zone(self):
+        """Подписанная зона перетаскивания: видна, пока файлов нет."""
+        zone = QFrame()
+        zone.setObjectName("dropZone")
+        zone.setStyleSheet(_drop_zone_qss())
+        zone.setMinimumHeight(140)
+        box = QVBoxLayout(zone)
+        box.addStretch(1)
+        title = QLabel(DROP_TITLE)
+        title.setObjectName("pageTitle")
+        title.setAlignment(Qt.AlignCenter)
+        box.addWidget(title)
+        subtitle = QLabel(DROP_SUBTITLE)
+        subtitle.setObjectName("pageHint")
+        subtitle.setAlignment(Qt.AlignCenter)
+        box.addWidget(subtitle)
+        box.addSpacing(6)
+        formats = QLabel(DROP_FORMATS)
+        formats.setObjectName("pageHint")
+        formats.setAlignment(Qt.AlignCenter)
+        box.addWidget(formats)
+        box.addStretch(1)
+        return zone
+
+    def _build_files_table(self):
+        """Таблица файлов со статусами: видна, когда файлы добавлены."""
+        table = QTableWidget(0, len(FILE_HEADERS))
+        table.setHorizontalHeaderLabels(list(FILE_HEADERS))
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.verticalHeader().setVisible(False)
+        table.setMaximumHeight(160)
+        table.setContextMenuPolicy(Qt.CustomContextMenu)
+        table.customContextMenuRequested.connect(self._show_files_menu)
+        setup_point_table(
+            table,
+            [(FILE_COL_NAME, MODE_STRETCH, 0),
+             (FILE_COL_STATUS, MODE_FIXED, FILE_COLUMN_WIDTHS[FILE_COL_STATUS]),
+             (FILE_COL_FOUND, MODE_FIXED, FILE_COLUMN_WIDTHS[FILE_COL_FOUND])],
+            storage_key=FILE_WIDTHS_KEY,
+            minimums=FILE_COLUMN_MINIMUMS,
+        )
+        return table
+
+    def _cloud_state_text(self):
+        """Короткая строка о том, кто читает документы в этом запуске."""
+        cloud = self.window.settings_service.get_bool("document_cloud_enabled", False)
+        if cloud and self.window.gigachat is not None:
+            return ("Облачная обработка: включена — фото и сканы читает GigaChat Vision, "
+                    "текст уходит в облачную модель.")
+        if cloud:
+            return "Облачная обработка: ключ недоступен — будет локальный OCR (Tesseract)."
+        return "Облачная обработка: выключена — локальный OCR (Tesseract), файлы никуда не отправляются."
+
+    def _help_text(self):
+        """Полное объяснение для кнопки «?» (в окне осталась одна строка)."""
+        return HELP_TITLE + "\n\n" + HELP_TEXT + "\n\n" + self._cloud_state_text()
+
     # ─────────────────────────────────────────────────────────
-    # Файлы и обработка (без изменений по существу)
+    # Файлы: выбор, перетаскивание, таблица статусов
     # ─────────────────────────────────────────────────────────
 
     def choose_files(self):
@@ -418,11 +567,88 @@ class DocumentImportDialog(QDialog):
             return
         added = 0
         for path in paths:
-            if path not in self.paths:
-                self.paths.append(path)
-                self.files.addItem(Path(path).name)
-                added += 1
+            name = Path(path).name
+            if path in self.paths or name in self.file_rows:
+                continue
+            self.paths.append(path)
+            self._add_file_row(name)
+            added += 1
         logger.info("Документы выбраны: новых=%s, всего=%s", added, len(self.paths))
+        if added:
+            self._switch_files_view()
+            self._refresh_summary()
+            self.status.setText("Файлов выбрано: " + str(len(self.paths)) + ". Нажмите «Распознать».")
+
+    def _add_file_row(self, name):
+        """Строка таблицы файлов: имя, «ожидает», пустое «Найдено»."""
+        row = self.files_table.rowCount()
+        self.files_table.insertRow(row)
+        self.file_rows[name] = row
+        self.file_status[name] = FILE_WAITING
+        self.file_fields[name] = 0
+        self.file_notes[name] = ""
+        for column, text in enumerate((name, FILE_WAITING, "")):
+            item = QTableWidgetItem(text)
+            item.setToolTip(name if column == FILE_COL_NAME else text)
+            self.files_table.setItem(row, column, item)
+        self._paint_file_row(name)
+
+    def _paint_file_row(self, name):
+        """Красит строку файла по его состоянию."""
+        row = self.file_rows.get(name)
+        if row is None:
+            return
+        brush = FILE_STATUS_BRUSHES.get(self.file_status.get(name, FILE_WAITING), NO_BRUSH)
+        for column in range(self.files_table.columnCount()):
+            item = self.files_table.item(row, column)
+            if item is not None:
+                item.setBackground(brush)
+
+    def _set_file_status(self, name, status, found="", note=""):
+        """Состояние файла в таблице: «ожидает» → «распознаётся…» → «готово»/«ошибка»."""
+        if name not in self.file_rows:
+            self._add_file_row(name)
+        self.file_status[name] = status
+        if found:
+            self.file_fields[name] = found
+        if note:
+            self.file_notes[name] = note
+        row = self.file_rows[name]
+        status_item = self.files_table.item(row, FILE_COL_STATUS)
+        found_item = self.files_table.item(row, FILE_COL_FOUND)
+        if status_item is not None:
+            status_item.setText(status)
+            status_item.setToolTip(status + ("\n" + self.file_notes[name] if self.file_notes[name] else ""))
+        if found_item is not None:
+            found_item.setText(self.file_found_text(name))
+            found_item.setToolTip(self.file_notes[name] or self.file_found_text(name))
+        if status == FILE_ERROR and self.file_notes[name]:
+            self._append_error(name + ": " + self.file_notes[name])
+        self._paint_file_row(name)
+
+    def file_found_text(self, name):
+        """Колонка «Найдено»: сколько полей нашлось или чем файл не прочитан."""
+        if self.file_status.get(name) == FILE_ERROR:
+            return self.file_notes.get(name, "")
+        if self.file_status.get(name) == FILE_EMPTY:
+            return "поля не найдены"
+        count = self.file_fields.get(name, 0)
+        if not count:
+            return ""
+        return f"{count} полей"
+
+    def _switch_files_view(self):
+        """Пока файлов нет — зона перетаскивания, когда есть — таблица файлов."""
+        self.files_stack.setCurrentIndex(FILES_PAGE if self.file_rows else DROP_PAGE)
+
+    def _row_file_name(self, row=None):
+        """Имя файла по номеру строки таблицы (по умолчанию — текущей)."""
+        if row is None:
+            row = self.files_table.currentRow()
+        for name, index in self.file_rows.items():
+            if index == row:
+                return name
+        return ""
 
     def dragEnterEvent(self, event):
         if not self.task and event.mimeData().hasUrls():
@@ -432,23 +658,41 @@ class DocumentImportDialog(QDialog):
         self.add_paths([url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()])
         event.acceptProposedAction()
 
-    def open_original(self):
-        index = self.files.currentRow()
-        if 0 <= index < len(self.paths):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(self.paths[index]))
+    def path_for_source(self, source):
+        """Полный путь к файлу по имени источника из дерева (пусто — не найден)."""
+        name = str(source or "").split(", стр. ")[0].strip()
+        if not name:
+            return ""
+        for path in self.paths:
+            if Path(path).name == name:
+                return path
+        return ""
+
+    def open_original(self, source=None):
+        """Открывает оригинал файла системным просмотрщиком."""
+        if source is None:
+            source = self._row_file_name()
+        path = self.path_for_source(source)
+        if path:
+            logger.info("Импорт документов: открыт оригинал файла")
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        else:
+            QMessageBox.information(self, "Оригинал", "Файл не найден среди добавленных.")
 
     def remember_text(self, source, variants):
         # UI memory only. Personal document text is not persisted or logged.
         self.ocr_texts[source] = list(variants)
 
-    def show_ocr_text(self):
-        index = self.files.currentRow()
-        if not 0 <= index < len(self.paths):
-            QMessageBox.information(self, "Распознанный текст", "Сначала выберите файл в списке.")
+    def show_ocr_text(self, source=None):
+        """Показывает распознанный текст файла (из памяти окна)."""
+        if not source:
+            source = self._row_file_name()
+        if not source:
+            QMessageBox.information(self, "Распознанный текст", "Сначала выберите файл в таблице.")
             return
-        filename = Path(self.paths[index]).name
-        entries = [(source, variants) for source, variants in self.ocr_texts.items()
-                   if source == filename or source.startswith(filename + ", стр. ")]
+        filename = str(source).split(", стр. ")[0].strip()
+        entries = [(item_source, variants) for item_source, variants in self.ocr_texts.items()
+                   if item_source == filename or item_source.startswith(filename + ", стр. ")]
         if not entries:
             QMessageBox.information(self, "Распознанный текст", "Для этого файла текст пока недоступен.")
             return
@@ -467,6 +711,148 @@ class DocumentImportDialog(QDialog):
         layout.addWidget(close)
         dialog.exec_()
 
+    # ─────────────────────────────────────────────────────────
+    # Контекстные меню (правый клик по строке)
+    # ─────────────────────────────────────────────────────────
+
+    def _build_files_menu(self, row=None):
+        """Меню строки таблицы файлов (тесты вызывают его напрямую)."""
+        name = self._row_file_name(row)
+        menu = QMenu(self.files_table)
+        if not name:
+            return menu
+        menu.addAction("Открыть оригинал").setData(("open", name))
+        menu.addAction("Показать распознанный текст").setData(("text", name))
+        if not self.task:
+            menu.addSeparator()
+            menu.addAction("Убрать из списка").setData(("forget", name))
+        for action in menu.actions():
+            action.triggered.connect(self._on_menu_action)
+        return menu
+
+    def _build_tree_menu(self, item):
+        """Меню строки дерева полей (тесты вызывают его напрямую)."""
+        menu = QMenu(self.tree)
+        payload = item.data(COL_WHAT, Qt.UserRole) if item is not None else None
+        kind = payload[0] if payload else ""
+        source = self._payload_source(payload)
+        if source:
+            menu.addAction("Открыть оригинал").setData(("open", source))
+            menu.addAction("Показать распознанный текст").setData(("text", source))
+        if kind == "field":
+            uid, field = payload[1], payload[2]
+            if self._field_value(uid, field) is not None:
+                menu.addAction("Скопировать значение").setData(("copy", uid, field))
+            if (uid, field) in self.removed:
+                menu.addAction("Вернуть строку в перенос").setData(("restore", uid, field))
+            else:
+                menu.addAction("Удалить строку").setData(("drop", uid, field))
+        elif kind == "entity":
+            uid = payload[1]
+            entity = entity_by_uid(self.entities, uid)
+            menu.addAction("Скопировать название").setData(("copy_name", uid))
+            if entity is not None and any((uid, value.field) not in self.removed
+                                          for value in entity.fields):
+                menu.addAction("Удалить строки сущности").setData(("drop_entity", uid))
+            else:
+                menu.addAction("Вернуть строки сущности").setData(("restore_entity", uid))
+        submenu = menu.addMenu("Добавить пустые поля вручную")
+        for section, title in TITLES.items():
+            submenu.addAction(title).setData(("manual", section))
+        for action in menu.actions():
+            action.triggered.connect(self._on_menu_action)
+            if action.menu() is not None:
+                for sub_action in action.menu().actions():
+                    sub_action.triggered.connect(self._on_menu_action)
+        return menu
+
+    def _payload_source(self, payload):
+        """Источник файла у строки дерева (пусто — строке нечего открывать)."""
+        if not payload:
+            return ""
+        if payload[0] in ("source", "field", "variant") and len(payload) > 3:
+            return str(payload[3] or "")
+        if payload[0] == "unread_file":
+            return str(payload[1] or "")
+        return ""
+
+    def _show_files_menu(self, position):
+        menu = self._build_files_menu(self.files_table.rowAt(position.y()))
+        if menu.isEmpty():
+            return
+        menu.exec_(self.files_table.viewport().mapToGlobal(position))
+
+    def _show_tree_menu(self, position):
+        menu = self._build_tree_menu(self.tree.itemAt(position))
+        if menu.isEmpty():
+            return
+        menu.exec_(self.tree.viewport().mapToGlobal(position))
+
+    def _on_menu_action(self, _checked: bool = False):
+        """Слот пунктов контекстного меню: команда лежит в data() отправителя."""
+        action = self.sender()
+        data = action.data() if action is not None else None
+        if not data:
+            return
+        command = data[0]
+        if command in ("open", "text"):
+            source = data[1]
+            if command == "open":
+                self.open_original(source)
+            else:
+                self.show_ocr_text(source)
+        elif command == "copy":
+            self.copy_field_value(data[1], data[2])
+        elif command == "copy_name":
+            entity = entity_by_uid(self.entities, data[1])
+            if entity is not None:
+                QApplication.clipboard().setText(entity.display_name)
+        elif command == "drop":
+            self.set_field_removed(data[1], data[2], True)
+        elif command == "restore":
+            self.set_field_removed(data[1], data[2], False)
+        elif command == "drop_entity":
+            self.set_entity_removed(data[1], True)
+        elif command == "restore_entity":
+            self.set_entity_removed(data[1], False)
+        elif command == "manual":
+            self.add_manual_group(data[1])
+        elif command == "forget":
+            self.forget_file(data[1])
+
+    def copy_field_value(self, uid, field):
+        """«Скопировать значение»: значение поля уходит в буфер обмена."""
+        value = self._field_value(uid, field)
+        if value is None:
+            return
+        QApplication.clipboard().setText(str(value.value or ""))
+        logger.info("Импорт документов: значение поля скопировано, раздел=%s, поле=%s",
+                    value.section, field)
+
+    def forget_file(self, name):
+        """Убирает файл из списка до следующего распознавания."""
+        if self.task:
+            return
+        path = self.path_for_source(name)
+        if path in self.paths:
+            self.paths.remove(path)
+        row = self.file_rows.pop(name, None)
+        self.file_status.pop(name, None)
+        self.file_fields.pop(name, None)
+        self.file_notes.pop(name, None)
+        if row is not None:
+            self.files_table.removeRow(row)
+            for other, index in list(self.file_rows.items()):
+                if index > row:
+                    self.file_rows[other] = index - 1
+        logger.info("Импорт документов: файл убран из списка, осталось=%s", len(self.paths))
+        self._switch_files_view()
+        self._refresh_summary()
+
+    # ─────────────────────────────────────────────────────────
+    # Обработка
+    # ─────────────────────────────────────────────────────────
+
     def start(self):
         if self.task or not self.paths:
             logger.info("Запуск импорта пропущен: задача уже идёт=%s, файлов=%s", bool(self.task), len(self.paths))
@@ -482,25 +868,43 @@ class DocumentImportDialog(QDialog):
         self.local_reasons = {}
         self.error_sources = {}
         self.unread_files = []
-        self.confirmed = {}
         self.edited = {}
+        self.removed = set()
         self.targets = {}
-        self.errors.setText("")
+        self._set_errors("")
         self.load_rows([])
+        for name in self.file_rows:
+            self.file_fields[name] = 0
+            self.file_notes[name] = ""
+            self._set_file_status(name, FILE_WAITING)
+        # Первый файл помечаем «распознаётся…»: сервис читает файлы по порядку.
+        if self.paths:
+            self._set_file_status(Path(self.paths[0]).name, FILE_RUNNING)
         settings = self.window.settings_service.as_dict()
         service = DocumentImportService(settings, self.window.gigachat)
         self.task = ImportTask(service, list(self.paths))
         self.task.signals.result.connect(self.receive)
         self.task.signals.text.connect(self.remember_text)
         self.task.signals.done.connect(self.finished)
-        self.add_button.setEnabled(False)
-        self.start_button.setEnabled(False)
-        self.apply_button.setEnabled(False)
-        self.cancel_button.setEnabled(True)
-        self.manual_button.setEnabled(False)
+        self._busy(True)
         self.status.setText("Обработка… Отмена сработает после текущего запроса.")
         self._refresh_progress(processed=0)
         self.window.thread_pool.start(self.task)
+
+    def _busy(self, running):
+        """Во время распознавания главная кнопка уступает место отмене."""
+        self.add_button.setEnabled(not running)
+        self.start_button.setVisible(not running)
+        self.start_button.setEnabled(not running)
+        self.cancel_button.setVisible(running)
+        self.cancel_button.setEnabled(running)
+        self.progress.setVisible(running)
+        # Подпись прогресса остаётся после работы: в ней итоговая сводка.
+        self.progress_label.setVisible(running or bool(self.progress_label.text().strip()))
+        if running:
+            self.apply_button.setEnabled(False)
+        else:
+            self._refresh_summary()
 
     def receive(self, source, evidence, error):
         logger.info("Импорт документов: получен результат, групп=%s, ошибка=%s", len(evidence), bool(error))
@@ -514,21 +918,37 @@ class DocumentImportDialog(QDialog):
                 logger.info("Импорт документов: изображение прочитано локально, причина=%s",
                             item.local_reason or "не указана")
                 break
-        self.status.setText("Обработан: " + source + ". Найдено полей-кандидатов: " +
-                            str(sum(sum(not k.startswith('_') for k in e.values) for e in evidence)) +
-                            ". Ожидаем завершения остальных документов…")
-        if not evidence:
-            self.unread_sources.add(source)
+        found = sum(sum(not k.startswith('_') for k in e.values) for e in evidence)
+        name = str(source).split(", стр. ")[0].strip()
         if error:
             # Полный список ошибок по файлам остаётся в self.errors,
-            # здесь только копятся источники для сводки в статусе.
+            # здесь только копится состояние строки для сводки в статусе.
             sources = self.error_sources.setdefault(error, [])
             if source not in sources:
                 sources.append(source)
-            self.errors.setText(self.errors.text() + source + ": " + error + "\n")
+            self._set_file_status(name, FILE_ERROR, note=error)
         elif not evidence:
-            self.errors.setText(self.errors.text() + source + ": поля не прочитаны; проверьте оригинал.\n")
+            self.unread_sources.add(source)
+            self._set_file_status(name, FILE_EMPTY)
+            self._append_error(source + ": поля не прочитаны; проверьте оригинал.")
+        else:
+            previous = self.file_fields.get(name, 0)
+            self._set_file_status(name, FILE_DONE, found=previous + found)
+        self._mark_next_running(name)
+        self.status.setText("Обработан: " + source + ". Найдено полей-кандидатов: " +
+                            str(found) + ". Ожидаем завершения остальных документов…")
+        self._refresh_summary()
         self._refresh_progress()
+
+    def _mark_next_running(self, name):
+        """Следующий необработанный файл — «распознаётся…» (сервис идёт по порядку)."""
+        names = [Path(path).name for path in self.paths]
+        if name in names:
+            index = names.index(name)
+            for following in names[index + 1:]:
+                if self.file_status.get(following) == FILE_WAITING:
+                    self._set_file_status(following, FILE_RUNNING)
+                    return
 
     def cancel(self):
         if self.task:
@@ -563,20 +983,20 @@ class DocumentImportDialog(QDialog):
         return len(done)
 
     def _refresh_progress(self, processed=None, entities=None, prefix=""):
+        """Полоса и подпись прогресса: во время работы — «Распознано N из M»."""
         total = len(self.paths)
         done = self._reported_file_count() if processed is None else int(processed)
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(min(done, max(1, total)))
-        self.progress_label.setText(progress_text(done, total, entities, prefix))
+        if prefix or entities is not None:
+            self.progress_label.setText(progress_text(done, total, entities, prefix))
+        else:
+            self.progress_label.setText(f"Распознано {done} из {total} файлов…")
 
     def finished(self):
         cancelled = self.task.cancel.is_set()
         logger.info("Импорт документов: задача завершена, отменено=%s, групп=%s", cancelled, len(self.evidence))
         self.task = None
-        self.add_button.setEnabled(True)
-        self.start_button.setEnabled(True)
-        self.cancel_button.setEnabled(False)
-        self.manual_button.setEnabled(True)
         readable = {e.source for e in self.evidence}
         self.unread_files = sorted(self.unread_sources - readable)
         self.rows = compare_fields(self.evidence)
@@ -586,10 +1006,10 @@ class DocumentImportDialog(QDialog):
         self._refresh_progress(processed=self._reported_file_count() if cancelled else len(self.paths),
                                entities=self.entities, prefix=prefix)
         summary = self.repeated_errors_summary()
-        self.status.setText(prefix + " Полученные поля доступны для проверки. "
-                            "Непрочитанные значения можно ввести вручную." +
+        self.status.setText(prefix + " Распознанные поля ниже — проверьте и переносите в форму." +
                             (" " + summary if summary else ""))
-        self.apply_button.setEnabled(bool(self.entities))
+        self._busy(False)
+        self._refresh_summary()
         if self._closing:
             if self.errors.text():
                 QMessageBox.warning(self, "Сообщения импорта", self.errors.text())
@@ -614,6 +1034,96 @@ class DocumentImportDialog(QDialog):
             for message, count in repeated)
 
     # ─────────────────────────────────────────────────────────
+    # Сводка и состояние нижней панели
+    # ─────────────────────────────────────────────────────────
+
+    def _append_error(self, line):
+        """Копит сообщения об ошибках: строка видна, только когда есть что сказать."""
+        text = self.errors.text()
+        self.errors.setText((text + line + "\n") if text else (line + "\n"))
+        self.errors.setVisible(True)
+
+    def _set_errors(self, text):
+        self.errors.setText(text)
+        self.errors.setVisible(bool(text.strip()))
+
+    def field_counts(self):
+        """(всего полей, распознано) — без строк, убранных из переноса."""
+        total = found = 0
+        for entity in self.entities:
+            for value in entity.fields:
+                if (entity.uid, value.field) in self.removed:
+                    continue
+                total += 1
+                if value.readable:
+                    found += 1
+        return total, found
+
+    def transferable_count(self):
+        """Сколько полей реально уйдёт в форму: распознано, формат верный, есть в форме."""
+        count = 0
+        for entity in self.entities:
+            for value in entity.fields:
+                if (entity.uid, value.field) in self.removed:
+                    continue
+                if self.is_transferable(entity, value):
+                    count += 1
+        return count
+
+    @staticmethod
+    def is_transferable(entity, value):
+        """Поле уйдёт в форму: распознано, формат верный и поле есть в разделе формы."""
+        return value.confirmable and value.field in SCHEMA.get(entity.section, ())
+
+    def missing_labels(self, limit=3):
+        """Подписи ненайденных полей для строки состояния (без ПДн)."""
+        labels = []
+        for entity in self.entities:
+            for value in entity.fields:
+                if (entity.uid, value.field) in self.removed:
+                    continue
+                if value.unreadable and value.label not in labels:
+                    labels.append(value.label)
+        return labels[:limit], max(0, len(labels) - limit)
+
+    def _error_file_count(self):
+        return sum(1 for status in self.file_status.values() if status == FILE_ERROR)
+
+    def _summary_text(self):
+        """Строка слева внизу: что распознано и что осталось незаполненным."""
+        parts = []
+        errors = self._error_file_count()
+        if errors:
+            parts.append(f"Ошибки: {errors} {_files_word(errors)}. Подробности — в таблице.")
+        if not self.paths and not self.entities:
+            return FILES_NOT_CHOSEN_TEXT
+        if not self.entities:
+            if not self.reported_sources:
+                parts.append(f"Файлов выбрано: {len(self.paths)}. Нажмите «Распознать».")
+            else:
+                parts.append("Распознанных полей нет: проверьте документы "
+                             "или добавьте другие файлы.")
+            return " ".join(parts)
+        total, found = self.field_counts()
+        if found and found == total:
+            parts.append(f"Распознано: {total} из {total}. Всё готово.")
+        else:
+            missing, rest = self.missing_labels()
+            tail = ""
+            if missing:
+                tail = " Не найдено: " + ", ".join(missing) + (" и ещё " + str(rest) if rest else "") + "."
+            parts.append(f"Распознано: {found} {_fields_word(found)} из {total}." + tail)
+        skipped = found - self.transferable_count()
+        if skipped:
+            parts.append(f"Не переносится: {skipped} (нет в форме, формат или расхождение).")
+        return " ".join(parts)
+
+    def _refresh_summary(self):
+        """Обновляет строку состояния и доступность главной кнопки."""
+        self.summary.setText(self._summary_text())
+        self.apply_button.setEnabled(self.task is None and self.transferable_count() > 0)
+
+    # ─────────────────────────────────────────────────────────
     # Дерево сущностей
     # ─────────────────────────────────────────────────────────
 
@@ -635,16 +1145,15 @@ class DocumentImportDialog(QDialog):
             self.tree.expandAll()
         finally:
             self._rendering = False
-        self._apply_unreadable_filter()
         self._refresh_progress(entities=self.entities)
-        self.apply_button.setEnabled(bool(self.entities))
-        logger.info("Импорт документов: сущностей=%s, спорных полей=%s",
-                    len(self.entities), len(detect_conflicts(self.entities)))
+        self._refresh_summary()
+        logger.info("Импорт документов: сущностей=%s, спорных полей=%s, переносимых=%s",
+                    len(self.entities), len(detect_conflicts(self.entities)),
+                    self.transferable_count())
 
     def _add_entity_item(self, entity):
-        top = QTreeWidgetItem(self.tree, [entity.display_name, "", "", "", ""])
+        top = QTreeWidgetItem(self.tree, [entity.display_name, "", ""])
         top.setData(COL_WHAT, Qt.UserRole, ("entity", entity.uid))
-        top.setFlags(top.flags() | Qt.ItemIsUserCheckable)
         font = top.font(COL_WHAT)
         font.setBold(True)
         top.setFont(COL_WHAT, font)
@@ -654,21 +1163,12 @@ class DocumentImportDialog(QDialog):
             self.tree.setItemWidget(top, COL_TARGET, target)
         else:
             top.setText(COL_TARGET, TITLES.get(entity.section, ""))
-        button = QPushButton(entity.button_text)
-        button.setToolTip("Подтверждает все прочитанные поля этой сущности одной кнопкой.")
-        # Сущность и поле лежат свойствами на самих виджетах, а слоты — методы
-        # диалога: partial, как и lambda, держит сильную ссылку на диалог, а
-        # связь живёт в C++ объекте виджета — это цикл Python ↔ Qt, который
-        # роняет процесс при выходе (грабли 2B.7).
-        button.setProperty(ENTITY_UID_PROPERTY, entity.uid)
-        button.clicked.connect(self._on_confirm_entity_pressed)
-        self.tree.setItemWidget(top, COL_ACTION, button)
         self._items[entity.uid] = top
 
         # Подсказки «проверить» — сразу под сущностью, до источников: это то,
         # на что оператору нужно посмотреть в первую очередь.
         for note in entity.notes:
-            note_item = QTreeWidgetItem(top, ["⚠ " + note, "", "", "", ""])
+            note_item = QTreeWidgetItem(top, ["⚠ " + note, "", ""])
             note_item.setData(COL_WHAT, Qt.UserRole, ("note", entity.uid))
             note_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             note_item.setBackground(COL_WHAT, NOTE_BRUSH)
@@ -680,32 +1180,26 @@ class DocumentImportDialog(QDialog):
             method = methods.get(source, "")
             reason = self._local_reason(source) if source in self.local_fallback_sources else ""
             node = QTreeWidgetItem(top, [source_label(source, method, reason) if source else NO_SOURCE_LABEL,
-                                         "", "", "", ""])
+                                         "", ""])
+            node.setData(COL_WHAT, Qt.UserRole, ("source", entity.uid, "", source))
             if not source:
                 node.setToolTip(COL_WHAT, "В документах этих полей нет: введите значение "
-                                          "вручную, если оно нужно в форме.")
+                                          "в поле формы вручную, если оно нужно.")
                 self._unreadable_items.append(node)
             else:
                 fallback = self._fallback_note(source) if source in self.local_fallback_sources else ""
                 node.setToolTip(COL_WHAT, source_hint(method, self.vision_model, fallback, reason))
             for value in values:
-                self._add_field_item(node, entity, value, methods)
+                self._add_field_item(node, entity, value, source, methods)
         self._refresh_entity_item(entity.uid)
 
-    def _add_field_item(self, node, entity, value, methods=None):
-        item = QTreeWidgetItem(node, [value.label, "", "", "", ""])
-        item.setData(COL_WHAT, Qt.UserRole, ("field", entity.uid, value.field))
-        item.setFlags((item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
-                      & ~Qt.ItemIsDropEnabled)
+    def _add_field_item(self, node, entity, value, source="", methods=None):
+        item = QTreeWidgetItem(node, [value.label, "", ""])
+        item.setData(COL_WHAT, Qt.UserRole, ("field", entity.uid, value.field, source))
+        item.setFlags((item.flags() | Qt.ItemIsEditable) & ~Qt.ItemIsDropEnabled)
         self._field_items[(entity.uid, value.field)] = item
         if value.unreadable:
             self._unreadable_items.append(item)
-        button = QPushButton(FIELD_ACTION_EDIT)
-        button.setToolTip("Изменить значение: правка идёт только в форму, оригинал не меняется.")
-        button.setProperty(ENTITY_UID_PROPERTY, entity.uid)
-        button.setProperty(FIELD_PROPERTY, value.field)
-        button.clicked.connect(self._on_edit_field_pressed)
-        self.tree.setItemWidget(item, COL_ACTION, button)
         self._add_conflict_variants(item, entity, value, methods)
         self._refresh_field_item(entity, value)
 
@@ -729,22 +1223,22 @@ class DocumentImportDialog(QDialog):
                 continue
             reason = self._local_reason(source) if source in self.local_fallback_sources else ""
             child = QTreeWidgetItem(item, [source_label(source, methods.get(source, ""), reason),
-                                           variant, "", "", ""])
-            child.setData(COL_WHAT, Qt.UserRole, ("variant", entity.uid, value.field))
+                                           variant, ""])
+            child.setData(COL_WHAT, Qt.UserRole, ("variant", entity.uid, value.field, source))
             child.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             child.setBackground(COL_WHAT, CONFLICT_BRUSH)
             child.setBackground(COL_VALUE, CONFLICT_BRUSH)
             fallback = self._fallback_note(source) if source in self.local_fallback_sources else ""
             child.setToolTip(COL_WHAT, source_hint(methods.get(source, ""), self.vision_model,
                                                    fallback, reason)
-                             or "Значение из этого файла. Подтвердить его "
-                                "можно кнопкой «Править» у поля выше.")
+                             or "Значение из этого файла. Исправить поле можно "
+                                "двойным кликом по строке выше.")
 
     def _add_unread_files_item(self):
         if not self.unread_files:
             return
         root = QTreeWidgetItem(self.tree, [UNREAD_FILES_HEADING,
-                                           f"файлов: {len(self.unread_files)}", "", "", ""])
+                                           f"файлов: {len(self.unread_files)}", ""])
         root.setData(COL_WHAT, Qt.UserRole, ("unread_files", ""))
         font = root.font(COL_WHAT)
         font.setBold(True)
@@ -752,7 +1246,7 @@ class DocumentImportDialog(QDialog):
         root.setToolTip(COL_WHAT, "Эти файлы прочитаны, но поддерживаемые поля в них "
                                   "не найдены. Проверьте оригиналы.")
         for name in self.unread_files:
-            child = QTreeWidgetItem(root, [SOURCE_PREFIX + name, "", "", "", ""])
+            child = QTreeWidgetItem(root, [SOURCE_PREFIX + name, "", ""])
             child.setData(COL_WHAT, Qt.UserRole, ("unread_file", name))
             child.setToolTip(COL_WHAT, "Поля не прочитаны; проверьте оригинал.")
 
@@ -827,9 +1321,8 @@ class DocumentImportDialog(QDialog):
         return False
 
     def _on_target_changed(self, uid, combo, _index=None):
-        """Смена цели — это другой объект формы: подтверждения группы снимаются."""
+        """Смена цели: поля этой сущности уйдут в другую запись формы."""
         self.targets[uid] = combo.currentData()
-        self.set_entity_confirmed(uid, False)
 
     # ── Слоты виджетов дерева ──
     # Виджет помнит своё (сущность, поле) свойством, а слот берёт его у
@@ -841,35 +1334,12 @@ class DocumentImportDialog(QDialog):
         widget = self.sender()
         return widget.property(name) if widget is not None else None
 
-    def _on_confirm_entity_pressed(self, _checked: bool = False):
-        uid = self._sender_property(ENTITY_UID_PROPERTY)
-        if not isinstance(uid, str):
-            logger.warning("Импорт документов: у кнопки нет сущности — пропуск")
-            return
-        self.set_entity_confirmed(uid, True)
-
-    def _on_edit_field_pressed(self, _checked: bool = False):
-        uid = self._sender_property(ENTITY_UID_PROPERTY)
-        field = self._sender_property(FIELD_PROPERTY)
-        if not isinstance(uid, str) or not isinstance(field, str):
-            logger.warning("Импорт документов: у кнопки нет поля — пропуск")
-            return
-        self.edit_field(uid, field)
-
     def _on_target_changed_pressed(self, _index: int = 0):
         uid = self._sender_property(ENTITY_UID_PROPERTY)
         if not isinstance(uid, str):
             logger.warning("Импорт документов: у списка целей нет сущности — пропуск")
             return
         self._on_target_changed(uid, self.sender())
-
-    def _apply_unreadable_filter(self):
-        for item in self._unreadable_items:
-            item.setHidden(self.hide_unreadable_button.isChecked())
-
-    def _on_hide_unreadable(self, checked):
-        logger.info("Импорт документов: непрочитанные поля скрыты=%s", bool(checked))
-        self._apply_unreadable_filter()
 
     def tree_expand_all(self):
         self.tree.expandAll()
@@ -878,7 +1348,7 @@ class DocumentImportDialog(QDialog):
         self.tree.collapseAll()
 
     # ─────────────────────────────────────────────────────────
-    # Подтверждения и правка значений
+    # Правка значений и строки, убранные из переноса
     # ─────────────────────────────────────────────────────────
 
     def destination(self, entity):
@@ -898,48 +1368,46 @@ class DocumentImportDialog(QDialog):
         """Узел дерева для поля (тесты и программная правка)."""
         return self._field_items.get((uid, field))
 
-    def is_confirmed(self, uid, field):
-        return bool(self.confirmed.get((uid, field)))
-
-    def set_field_confirmed(self, uid, field, state):
-        """Подтверждение одного поля (галочка оператора)."""
+    def _field_value(self, uid, field):
         entity = entity_by_uid(self.entities, uid)
-        value = entity.field_value(field) if entity else None
+        return entity.field_value(field) if entity else None
+
+    def is_removed(self, uid, field):
+        """Строка убрана из переноса правым кликом? (данные при этом целы)"""
+        return (uid, field) in self.removed
+
+    def set_field_removed(self, uid, field, state):
+        """«Удалить строку» / «Вернуть строку»: поле не пойдёт в форму."""
+        value = self._field_value(uid, field)
         if value is None:
             return
-        if state and not value.confirmable:
-            state = False
-        self.confirmed[(uid, field)] = bool(state)
+        if state:
+            self.removed.add((uid, field))
+        else:
+            self.removed.discard((uid, field))
+        entity = entity_by_uid(self.entities, uid)
         self._refresh_field_item(entity, value)
-        self._refresh_entity_item(uid)
-        self._refresh_progress(entities=self.entities)
+        self._refresh_summary()
+        logger.info("Импорт документов: строка убрана из переноса=%s, раздел=%s, поле=%s",
+                    bool(state), value.section, field)
 
-    def set_entity_confirmed(self, uid, state, _clicked=False):
-        """«Подтвердить водителя целиком»: все прочитанные поля одной сущности."""
+    def set_entity_removed(self, uid, state):
+        """Убирает из переноса все строки сущности (или возвращает их)."""
         entity = entity_by_uid(self.entities, uid)
         if entity is None:
             return
-        confirmed = 0
         for value in entity.fields:
-            if state and not value.confirmable:
-                continue
-            self.confirmed[(uid, value.field)] = bool(state)
             if state:
-                confirmed += 1
+                self.removed.add((uid, value.field))
+            else:
+                self.removed.discard((uid, value.field))
             self._refresh_field_item(entity, value)
-        self._refresh_entity_item(uid)
-        self._refresh_progress(entities=self.entities)
-        logger.info("Импорт документов: подтверждение целиком, раздел=%s, полей=%s",
-                    entity.section, confirmed if state else 0)
-
-    def uncheck_all(self):
-        """Снимает все галочки: ничего не переносится, форма не меняется."""
-        for entity in self.entities:
-            self.set_entity_confirmed(entity.uid, False)
-        logger.info("Импорт документов: галочки сняты")
+        self._refresh_summary()
+        logger.info("Импорт документов: строки сущности убраны из переноса=%s, раздел=%s, полей=%s",
+                    bool(state), entity.section, len(entity.fields))
 
     def edit_field(self, uid, field, _clicked=False):
-        """Кнопка «Править» / «Ввести вручную» — правка значения в дереве."""
+        """Двойной клик по строке — правка значения прямо в дереве."""
         item = self._field_items.get((uid, field))
         if item is None:
             return
@@ -962,12 +1430,8 @@ class DocumentImportDialog(QDialog):
                 return
             if column == COL_VALUE:
                 self._apply_manual_value(entity, value, item.text(COL_VALUE))
-            elif column == COL_CHECK:
-                self.set_field_confirmed(uid, field, item.checkState(COL_CHECK) == Qt.Checked)
             else:
                 self._refresh_field_item(entity, value)
-        elif kind == "entity" and column == COL_CHECK:
-            self.set_entity_confirmed(payload[1], item.checkState(COL_CHECK) == Qt.Checked)
 
     def _apply_manual_value(self, entity, value, text):
         """Правка поля: значение уходит в форму, но не в документ-источник."""
@@ -980,11 +1444,10 @@ class DocumentImportDialog(QDialog):
             value.state, value.detail = "ok", "введено вручную"
         else:
             value.state, value.detail = STATE_INVALID, "формат не подходит"
-        self.confirmed[(entity.uid, value.field)] = False
         self._write_back_row(entity, value)
         self._refresh_field_item(entity, value)
         self._refresh_entity_item(entity.uid)
-        self._refresh_progress(entities=self.entities)
+        self._refresh_summary()
         logger.info("Импорт документов: правка поля, раздел=%s, поле=%s, длина=%s",
                     entity.section, value.field, len(text))
 
@@ -1000,34 +1463,27 @@ class DocumentImportDialog(QDialog):
         item = self._field_items.get((entity.uid, value.field))
         if item is None:
             return
-        confirmable = value.confirmable
         self._rendering = True
         try:
-            item.setText(COL_VALUE, self._value_text(value))
+            item.setText(COL_VALUE, self._value_text(value, entity.uid))
             item.setText(COL_TARGET, self._current_text(entity, value))
             item.setToolTip(COL_VALUE, self._value_hint(value))
             item.setToolTip(COL_TARGET, self._target_hint(entity, value))
-            self._apply_field_style(item, value)
-            if confirmable:
-                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            else:
-                item.setFlags(item.flags() & ~Qt.ItemIsUserCheckable)
-                self.confirmed[(entity.uid, value.field)] = False
-            checked = confirmable and self.is_confirmed(entity.uid, value.field)
-            item.setCheckState(COL_CHECK, Qt.Checked if checked else Qt.Unchecked)
-            button = self.tree.itemWidget(item, COL_ACTION)
-            if isinstance(button, QPushButton):
-                button.setText(FIELD_ACTION_EDIT if value.value else FIELD_ACTION_MANUAL)
+            self._apply_field_style(item, value, entity.uid)
         finally:
             self._rendering = False
 
-    @staticmethod
-    def _apply_field_style(item, value):
+    def _apply_field_style(self, item, value, uid=""):
         """Оформление поля: спорное — на красном фоне, непрочитанное — серым курсивом."""
+        removed = (uid, value.field) in self.removed
         font = item.font(COL_VALUE)
-        font.setItalic(value.unreadable)
+        font.setItalic(value.unreadable or removed)
+        font.setStrikeOut(removed)
         item.setFont(COL_VALUE, font)
-        item.setForeground(COL_VALUE, UNREADABLE_BRUSH if value.unreadable else NO_BRUSH)
+        if value.unreadable or removed:
+            item.setForeground(COL_VALUE, REMOVED_BRUSH if removed else UNREADABLE_BRUSH)
+        else:
+            item.setForeground(COL_VALUE, NO_BRUSH)
         background = CONFLICT_BRUSH if value.conflicted else NO_BRUSH
         item.setBackground(COL_WHAT, background)
         item.setBackground(COL_VALUE, background)
@@ -1037,13 +1493,9 @@ class DocumentImportDialog(QDialog):
         item = self._items.get(uid)
         if entity is None or item is None:
             return
-        confirmable = entity.confirmable_fields()
-        checked = [value for value in confirmable if self.is_confirmed(uid, value.field)]
         self._rendering = True
         try:
-            item.setText(COL_VALUE, self._entity_summary(entity, len(checked)))
-            all_checked = bool(confirmable) and len(checked) == len(confirmable)
-            item.setCheckState(COL_CHECK, Qt.Checked if all_checked else Qt.Unchecked)
+            item.setText(COL_VALUE, self._entity_summary(entity))
         finally:
             self._rendering = False
 
@@ -1053,28 +1505,32 @@ class DocumentImportDialog(QDialog):
                 self._refresh_field_item(entity, value)
             self._refresh_entity_item(entity.uid)
 
-    def add_manual_group(self):
-        """Пустая сущность для ручного ввода: подтверждения остальных не теряются."""
-        section = self.manual_section.currentData()
+    def add_manual_group(self, section=None):
+        """Пустая сущность для ручного ввода — из контекстного меню окна."""
+        if section is None:
+            section = next(iter(TITLES))
+        if section not in SCHEMA:
+            logger.warning("Импорт документов: неизвестный раздел ручного ввода")
+            return
         logger.info("Импорт документов: добавление пустой группы, раздел=%s", section)
         group = max((row.group for row in self.rows), default=-1) + 1
-        index = self.files.currentRow()
-        source = Path(self.paths[index]).name if 0 <= index < len(self.paths) else "Ручная проверка оригинала"
+        name = self._row_file_name()
+        source = name or "Ручная проверка оригинала"
         self.rows.extend(FieldResult(group, section, key, "", source, "не прочитано")
                          for key in SCHEMA[section])
         self.render()
-        self.apply_button.setEnabled(True)
 
     # ─────────────────────────────────────────────────────────
     # Тексты ячеек и подсказки
     # ─────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _value_text(value):
+    def _value_text(self, value, uid=""):
+        if (uid, value.field) in self.removed:
+            return FIELD_REMOVED_MARK
         if value.state == STATE_CONFLICT:
             return "[расхождение в источниках]"
         if value.state == STATE_UNREADABLE:
-            return "[не прочитано]"
+            return FIELD_NOT_FOUND_MARK
         if value.state == STATE_INVALID:
             return value.value + "  (формат не подходит)"
         return value.value
@@ -1086,7 +1542,8 @@ class DocumentImportDialog(QDialog):
             lines.append(f"{source}: {variant or '—'}")
         if value.note:
             lines.append("Примечание: " + value.note)
-        lines.append("Нажмите «Править», чтобы изменить значение вручную.")
+        lines.append("Двойной клик по значению — исправить. Правый клик — открыть "
+                     "оригинал или убрать строку из переноса.")
         return "\n".join(lines)
 
     @staticmethod
@@ -1095,16 +1552,13 @@ class DocumentImportDialog(QDialog):
         if entity.needs_review:
             lines.append("Опознать по документам не удалось — проверьте поля вручную.")
         lines.extend("⚠ " + note for note in entity.notes)
-        lines.append(f"Если данные верные — нажмите «{entity.button_text}».")
-        lines.append("Если что-то не так — правьте поле и подтверждайте отдельно.")
+        lines.append("Значение поля исправляется двойным кликом по строке.")
         return "\n".join(lines)
 
-    def _entity_summary(self, entity, confirmed):
+    def _entity_summary(self, entity):
         text = entity.counts_text()
         if entity.needs_review:
             text += " · требует ручной проверки"
-        if confirmed:
-            text += f" · подтверждено: {confirmed}"
         return text
 
     def _target_hint(self, entity, value):
@@ -1141,24 +1595,27 @@ class DocumentImportDialog(QDialog):
     def _current_value(self, snapshot, destination, key):
         return str(self._record(snapshot, destination).get(key, "") or "")
 
+    def _form_changed(self, latest, destination, value):
+        """Поле правили в форме после открытия окна? Тогда его не перезаписываем."""
+        now = self._current_value(latest, destination, value.field)
+        was = self._current_value(self.snapshot, destination, value.field)
+        return normalized(now) != normalized(was)
+
     # ─────────────────────────────────────────────────────────
-    # Перенос подтверждённого
+    # Перенос в форму
     # ─────────────────────────────────────────────────────────
 
     def apply(self):
-        logger.info("Импорт документов: проверка подтверждённых полей")
-        confirmed = [(entity, value) for entity in self.entities for value in entity.fields
-                     if self.is_confirmed(entity.uid, value.field)]
-        if not confirmed:
-            logger.info("Импорт документов: перенос пропущен, нет подтверждённых полей")
-            return
+        """Переносит в форму ВСЕ распознанные поля: подтверждать нечего."""
+        logger.info("Импорт документов: перенос распознанных полей")
         latest = form_snapshot(self.window)
         destinations, candidates = OrderedDict(), []
-        for entity, value in confirmed:
+        conflicts, invalid, stale, unmapped = [], [], [], []
+        for entity in self.entities:
             destination = self.destination(entity)
             if not destination:
                 QMessageBox.warning(self, "Выберите цель",
-                                    "Выберите целевую запись для подтверждённого поля.")
+                                    "Выберите целевую запись для распознанных полей.")
                 return
             section, target = destination
             if section == "vehicles" and isinstance(target, int) and target >= len(latest["vehicles"]):
@@ -1166,39 +1623,40 @@ class DocumentImportDialog(QDialog):
                 QMessageBox.warning(self, "Запись удалена",
                                     "Целевой автомобиль удалён из формы. Выберите новую запись.")
                 return
-            text = str(value.value).strip()
-            if value.field not in SCHEMA[section] or not valid_value(value.field, text):
-                logger.warning("Импорт документов: перенос отклонён, неверное поле=%s, раздел=%s",
-                               value.field, section)
-                QMessageBox.warning(self, "Проверьте значение",
-                                    "Пустое, неоднозначное или неверное значение: " +
-                                    LABELS.get(value.field, value.field))
-                return
-            destinations.setdefault(destination, OrderedDict()).setdefault(entity.uid, entity)
-            candidates.append((destination, entity, value))
+            for value in entity.fields:
+                if (entity.uid, value.field) in self.removed:
+                    continue
+                if value.conflicted:
+                    conflicts.append(value)
+                    continue
+                text = str(value.value or "").strip()
+                if not text:
+                    continue
+                if value.field not in SCHEMA.get(section, ()):
+                    # Такое поле распознано, но в этом разделе формы его нет:
+                    # оператор видит его в дереве, в форму оно не уходит.
+                    unmapped.append(value)
+                    continue
+                if not valid_value(value.field, text):
+                    invalid.append(value)
+                    continue
+                if self._form_changed(latest, destination, value):
+                    stale.append(value)
+                    continue
+                destinations.setdefault(destination, OrderedDict())[entity.uid] = entity
+                candidates.append((destination, entity, value))
 
         # 1. Поля из разных сущностей с разными опознавательными данными вместе
-        #    подтверждать нельзя: в форме это разные объекты.
+        #    переносить нельзя: в форме это разные объекты.
         for destination, members in destinations.items():
             members = list(members.values())
             if len(members) > 1 and self._mixed_entities(members):
                 self._report_mixed_entities(members, destination)
                 return
 
-        # 2. Форма изменилась с момента открытия диалога — подтверждать заново.
-        for destination in destinations:
-            if self._record(latest, destination) != self._record(self.snapshot, destination):
-                logger.warning("Импорт документов: перенос отклонён, форма изменилась")
-                self.snapshot = latest
-                self.uncheck_all()
-                self._refresh_all_fields()
-                QMessageBox.warning(self, "Форма изменилась",
-                                    "Текущие значения обновлены. Подтвердите поля заново.")
-                return
-
-        # Повторная галочка на том же поле — не ошибка: одинаковые значения
-        # переносятся один раз, а разные означают конфликт источников, и такое
-        # поле не переносится, пока пользователь не выберет одну строку.
+        # Повтор одного и того же поля из разных файлов — не ошибка: одинаковые
+        # значения переносятся один раз, а разные означают конфликт источников,
+        # и такое поле не переносится, пока оператор не выберет одну строку.
         entries, order = OrderedDict(), []
         for destination, entity, value in candidates:
             map_key = destination + (value.field,)
@@ -1207,7 +1665,7 @@ class DocumentImportDialog(QDialog):
                 order.append(map_key)
             entries[map_key].append((canonical_value(value.field, value.value), entity, value))
 
-        changes, conflicts = [], []
+        changes = []
         change_entities, change_pairs = {}, {}
         for map_key in order:
             section, target, key = map_key
@@ -1222,8 +1680,10 @@ class DocumentImportDialog(QDialog):
                 values[0][1]
             change_pairs.setdefault((section, target), set()).add(
                 (key, normalized(values[0][0])))
-        if not changes and not conflicts:
-            logger.info("Импорт документов: перенос пропущен, нет подтверждённых полей")
+        if not changes and not conflicts and not invalid and not stale and not unmapped:
+            logger.info("Импорт документов: перенос пропущен, переносимых полей нет")
+            self.snapshot = latest
+            self._refresh_summary()
             return
 
         for destination, members in change_entities.items():
@@ -1241,8 +1701,9 @@ class DocumentImportDialog(QDialog):
         if changes:
             apply_approved(self.window, changes)
             logger.info("Импорт документов: перенесено полей=%s", len(changes))
-        if conflicts:
-            self._report_conflicts(conflicts, changes)
+        self.snapshot = form_snapshot(self.window)
+        if conflicts or invalid or stale or unmapped:
+            self._report_skipped(conflicts, invalid, stale, unmapped, len(changes))
             return
         self._report_done(len(changes))
 
@@ -1261,78 +1722,75 @@ class DocumentImportDialog(QDialog):
         Поля из разных сущностей в одной записи формы.
 
         Оператор не должен догадываться, что случилось: сообщение называет
-        обе сущности и три шага, что делать дальше.
+        обе сущности и говорит, что делать дальше.
         """
         section = destination[0] if destination else ""
         lines = []
         for entity in members:
             suffix = f" — файлы: {entity.sources_text()}" if entity.sources else ""
             lines.append("• " + entity.display_name + suffix)
-        first, last = members[0], members[-1]
-        steps = ["1. Нажмите «Снять галочки у выбранных»."]
-        if first.uid == last.uid:
-            steps.append(f"2. Подтвердите сущность целиком кнопкой «{first.button_text}».")
-        else:
-            steps.append(f"2. Подтвердите одну сущность целиком кнопкой «{first.button_text}».")
-            steps.append(f"3. Затем — вторую: «{last.button_text}».")
         message = "\n".join([
-            f"Вы выбрали поля из ДВУХ разных сущностей, а они попадают в одну запись формы "
+            f"В документах {len(members)} разных записей, а в форме одна запись "
             f"«{TITLES.get(section, section)}»:",
             "",
             *lines,
             "",
-            "Одной галочкой нельзя подтвердить поля из разных сущностей — "
-            "это разные объекты в форме.",
+            "Перенести их одной кнопкой нельзя: в форме это одно место.",
             "",
             "Что делать:",
-            *steps,
+            "• если это разные люди или машины — уберите лишние строки правым кликом "
+            "(«Удалить строки сущности») и повторите перенос;",
+            "• если это одна и та же запись — исправьте опознавательные поля "
+            "двойным кликом по строке;",
+            "• для машин и организаций проверьте колонку «Куда попадёт в форме».",
         ])
         logger.warning("Импорт документов: перенос отклонён, поля из разных сущностей, "
                        "раздел=%s, сущностей=%s", section, len(members))
-        self.errors.setText(self.errors.text() +
-                            "Поля из разных сущностей не перенесены: " +
-                            ", ".join(entity.display_name for entity in members) + "\n")
+        self._append_error("Поля из разных сущностей не перенесены: " +
+                           ", ".join(entity.display_name for entity in members))
         QMessageBox.warning(self, "Разные сущности", message)
 
-    def _report_conflicts(self, conflicts, applied):
-        """Разные значения одного поля: переносим остальное, поле оставляем на выбор.
+    def _report_skipped(self, conflicts, invalid, stale, unmapped, applied):
+        """Что не ушло в форму и почему: конфликт, формат, правка в форме, нет поля.
 
-        Диалог показывается только при настоящем конфликте источников; значения
-        в сообщение не попадают — только названия полей и файлы.
+        Значения в сообщение не попадают — только названия полей (логи без ПДн).
+        Убранные из переноса строки сюда не входят: это осознанный выбор.
         """
-        variants = OrderedDict()
-        for value in conflicts:
-            sources = variants.setdefault(value.field, [])
-            for source in (value.sources or ["источник не определён"]):
-                if source not in sources:
-                    sources.append(source)
-        labels = ", ".join(f"{LABELS.get(key, key)} (источники: {', '.join(sources)})"
-                           for key, sources in variants.items())
-        self.snapshot = form_snapshot(self.window)
-        applied_keys = {(section, target, key) for section, target, key, _ in applied}
-        for entity in self.entities:
-            destination = self.destination(entity)
-            for value in entity.fields:
-                if destination and (destination[0], destination[1], value.field) in applied_keys:
-                    self.confirmed[(entity.uid, value.field)] = False
+        lines = []
+        if conflicts:
+            sources = OrderedDict()
+            for value in conflicts:
+                files = sources.setdefault(value.field, [])
+                for source in (value.sources or ["источник не определён"]):
+                    if source not in files:
+                        files.append(source)
+            lines.append("• разные значения в источниках: " + ", ".join(
+                LABELS.get(key, key) for key in sources))
+        if invalid:
+            lines.append("• формат не подходит: " + ", ".join(
+                sorted({LABELS.get(value.field, value.field) for value in invalid})))
+        if unmapped:
+            lines.append("• такого поля нет в разделе формы: " + ", ".join(
+                sorted({LABELS.get(value.field, value.field) for value in unmapped})))
+        if stale:
+            lines.append("• вы уже правили эти поля в форме после открытия окна: " + ", ".join(
+                sorted({LABELS.get(value.field, value.field) for value in stale})))
+        tail = ("Остальные поля уже перенесены." if applied
+                else "В форму ничего не перенесено.")
+        message = ("Не всё ушло в форму:\n\n" + "\n".join(lines) + "\n\n"
+                   "Исправьте значение двойным кликом по строке (или уберите строку "
+                   "правым кликом) и нажмите «Перенести в форму» ещё раз. " + tail)
+        self._append_error("Не перенесено: " + "; ".join(lines))
         self._refresh_all_fields()
-        tail = ("остальные подтверждённые поля уже перенесены."
-                if applied else "перенос не выполнен.")
-        message = ("Для одного поля выбраны разные значения из разных источников. "
-                   "Такие поля не перенесены: " + labels + ".\n\n"
-                   "Снимите галочку с лишней строки (или исправьте значение) "
-                   "и повторите перенос — " + tail)
-        self.errors.setText(self.errors.text() +
-                            "Конфликт значений, поля не перенесены: " + labels + "\n")
-        QMessageBox.warning(self, "Конфликт значений", message)
+        self._refresh_summary()
+        QMessageBox.warning(self, "Проверьте поля", message)
 
     def _report_done(self, transferred):
         """Итог переноса: оператор видит, что всё ушло в форму, и может закрывать."""
-        self.snapshot = form_snapshot(self.window)
-        self.uncheck_all()
         self._refresh_all_fields()
-        self.progress_label.setText("Готово. Все данные перенесены в форму. Можно закрывать. " +
-                                    summary_text(self.entities))
-        self.status.setText(f"Перенесено полей: {transferred}. Форма обновлена, "
-                            "диалог можно закрыть.")
+        self._refresh_progress(entities=self.entities)
+        self.summary.setText(f"Готово: перенесено полей — {transferred}. "
+                             "Форма обновлена, окно можно закрывать.")
+        self.status.setText(f"Перенесено полей: {transferred}. " + summary_text(self.entities))
+        self.apply_button.setEnabled(self.transferable_count() > 0)
         logger.info("Импорт документов: перенос завершён, полей=%s", transferred)

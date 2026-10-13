@@ -657,33 +657,34 @@ def window(monkeypatch):
     window.close()
 
 
-def test_review_unchecked_and_manual_values_preserved(window):
+def test_recognized_fields_replace_manual_values(window):
+    """Галочек больше нет: распознанное переносится и заменяет значения формы."""
     from ui.document_import_dialog import DocumentImportDialog
     window.driver_tab.phone.setText("manual phone")
     window.driver_tab.full_name.setText("manual name")
+    window.driver_tab.passport_issuer.setText("manual issuer")
     dialog = DocumentImportDialog(window)
     dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Test", "phone": "other"}, "a", "OCR")]))
     driver = dialog.entities[0]
-    # Ничего не подтверждено заранее: сначала оператор проверяет по оригиналу.
-    assert not any(dialog.is_confirmed(driver.uid, value.field) for value in driver.fields)
-    dialog.apply()
-    assert window.driver_tab.full_name.text() == "manual name"
-    dialog.set_field_confirmed(driver.uid, "full_name", True)
+    # Ничего не подтверждено заранее — и подтверждать нечего: переносим всё.
+    assert not any(dialog.is_removed(driver.uid, value.field) for value in driver.fields)
     dialog.apply()
     assert window.driver_tab.full_name.text() == "Test"
-    assert window.driver_tab.phone.text() == "manual phone"
+    assert window.driver_tab.phone.text() == "other"
+    # Поля, которых в документах нет, форма не трогает.
+    assert window.driver_tab.passport_issuer.text() == "manual issuer"
 
 
-def test_stale_form_requires_reconfirmation(window):
+def test_form_field_edited_after_open_is_not_overwritten(window):
+    """Правку в форме, сделанную после открытия окна, импорт не затирает."""
     from ui.document_import_dialog import DocumentImportDialog
     dialog = DocumentImportDialog(window)
     dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Test"}, "a", "OCR")]))
-    driver = dialog.entities[0]
-    dialog.set_field_confirmed(driver.uid, "full_name", True)
     window.driver_tab.full_name.setText("new manual entry")
     dialog.apply()
     assert window.driver_tab.full_name.text() == "new manual entry"
-    assert not dialog.is_confirmed(driver.uid, "full_name")
+    assert "вы уже правили эти поля в форме" in dialog.errors.text()
+    assert dialog.apply_button.isEnabled()      # перенос можно повторить
 
 
 def test_new_vehicle_no_defaults_no_existing_row_loss(window):
@@ -753,7 +754,7 @@ def test_unread_file_is_visible_and_cannot_be_applied(window):
     dialog.task = SimpleNamespace(cancel=Event())
     dialog.receive("synthetic.png, стр. 1", [], "")
     dialog.finished()
-    # Непрочитанный файл виден отдельным блоком, но подтверждать в нём нечего.
+    # Непрочитанный файл виден отдельным блоком, но переносить в нём нечего.
     headings = [dialog.tree.topLevelItem(i).text(0)
                 for i in range(dialog.tree.topLevelItemCount())]
     assert any("НЕ ПРОЧИТАННЫЕ ФАЙЛЫ" in text for text in headings)
@@ -761,8 +762,8 @@ def test_unread_file_is_visible_and_cannot_be_applied(window):
     before = window.driver_tab.get_data()
     dialog.apply()
     assert before == window.driver_tab.get_data()
-    dialog.manual_section.setCurrentIndex(dialog.manual_section.findData("driver"))
-    dialog.add_manual_group()
+    assert not dialog.apply_button.isEnabled()
+    dialog.add_manual_group("driver")
     assert [entity.section for entity in dialog.entities] == ["driver"]
     assert len(dialog.entities[0].fields) == len(SCHEMA["driver"])
 
@@ -774,14 +775,16 @@ def test_different_people_cannot_fill_one_driver(window):
         Evidence("driver", {"full_name": "First Person"}, "a", "Текст"),
         Evidence("driver", {"full_name": "Second Person", "phone": "123"}, "b", "Текст")]))
     assert len(dialog.entities) == 2
-    for entity in dialog.entities:
-        dialog.set_entity_confirmed(entity.uid, True)
     before = window.driver_tab.get_data()
     dialog.apply()
     assert before == window.driver_tab.get_data()
+    # Строки лишнего человека убираются из переноса — тогда проходит остальное.
+    dialog.set_entity_removed(dialog.entities[1].uid, True)
+    dialog.apply()
+    assert window.driver_tab.full_name.text() == "First Person"
 
 
-def test_repeated_confirmation_of_same_value_is_not_conflict(window, monkeypatch):
+def test_same_value_from_two_files_is_transferred_once(window, monkeypatch):
     from ui.document_import_dialog import DocumentImportDialog
     from PyQt5.QtWidgets import QMessageBox
     asked = []
@@ -792,13 +795,8 @@ def test_repeated_confirmation_of_same_value_is_not_conflict(window, monkeypatch
         Evidence("carrier", {"director_name": "Тестов Тест"}, "a", "GigaChat Vision"),
         Evidence("carrier", {"director_name": "Тестов Тест"}, "b", "Текст")]))
     assert len(dialog.entities) == 2
-    checked = 0
-    for entity in dialog.entities:
-        dialog.set_entity_confirmed(entity.uid, True)
-        checked += 1 if dialog.is_confirmed(entity.uid, "director_name") else 0
-    assert checked == 2  # одно и то же поле подтверждено дважды, значение совпадает
     dialog.apply()
-    assert asked == []  # повторная галочка — не конфликт
+    assert asked == []  # одно и то же значение из двух файлов — не конфликт
     assert window.carrier_tab.director_name.text() == "Тестов Тест"
 
 
@@ -813,26 +811,24 @@ def test_field_conflict_does_not_block_other_fields(window, monkeypatch):
         Evidence("carrier", {"director_name": "Тестов Тест"}, "a", "GigaChat Vision"),
         Evidence("carrier", {"director_name": "Другой Человек", "phone": "+7 900 000-00-00"},
                  "b", "Текст")]))
-    for entity in dialog.entities:
-        dialog.set_entity_confirmed(entity.uid, True)
     dialog.apply()
     # Конфликтное поле не перенесено, остальные поля — перенесены, диалог открыт.
-    assert [title for title, _ in asked] == ["Конфликт значений"]
+    assert [title for title, _ in asked] == ["Проверьте поля"]
     assert "Руководитель" in asked[0][1]
     assert window.carrier_tab.director_name.text() == ""
     assert window.carrier_tab.phone.text() == "+7 900 000-00-00"
     assert dialog.result() == 0
 
 
-def test_edit_resets_confirmation(window):
+def test_edited_value_is_transferred(window):
     from ui.document_import_dialog import COL_VALUE, DocumentImportDialog
     dialog = DocumentImportDialog(window)
     dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Test"}, "a", "OCR")]))
     driver = dialog.entities[0]
-    dialog.set_field_confirmed(driver.uid, "full_name", True)
     dialog.field_item(driver.uid, "full_name").setText(COL_VALUE, "Edited")
-    assert not dialog.is_confirmed(driver.uid, "full_name")
     assert driver.field_value("full_name").value == "Edited"
+    dialog.apply()
+    assert window.driver_tab.full_name.text() == "Edited"
 
 
 def test_settings_import_is_opt_in(work_file):
@@ -861,8 +857,6 @@ def test_unidentified_pages_require_explicit_link_confirmation(window, monkeypat
     dialog.load_rows(compare_fields([
         Evidence("driver", {"full_name": "Примеров Тест Тестович"}, "passport", "OCR"),
         Evidence("driver", {"license_number": "123456"}, "license", "OCR")]))
-    for entity in dialog.entities:
-        dialog.set_entity_confirmed(entity.uid, True)
     before = window.driver_tab.get_data()
     dialog.apply()
     assert asked
@@ -873,39 +867,37 @@ def test_unidentified_pages_require_explicit_link_confirmation(window, monkeypat
         assert window.driver_tab.get_data() == before
 
 
-def test_manual_group_button_keeps_target_and_does_not_crash(window):
+def test_manual_group_keeps_target_and_does_not_crash(window):
     from ui.document_import_dialog import DocumentImportDialog
     dialog = DocumentImportDialog(window)
     dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Тестовый Человек",
                                                         "birth_date": "01.02.1990"}, "synthetic", "OCR")]))
     driver = dialog.entities[0]
-    dialog.set_field_confirmed(driver.uid, "full_name", True)
     for _ in range(3):
-        dialog.manual_button.click()
+        dialog.add_manual_group("driver")
         assert dialog.destination(driver) == ("driver", None)
-        assert dialog.is_confirmed(driver.uid, "full_name")
     assert len(dialog.entities) == 4          # водитель и три пустые группы
 
 
-def test_unread_or_invalid_date_cannot_be_confirmed_until_corrected(window):
+def test_invalid_date_is_not_transferred_until_corrected(window):
     from ui.document_import_dialog import COL_VALUE, DocumentImportDialog
     dialog = DocumentImportDialog(window)
     dialog.load_rows(compare_fields([Evidence("driver", {"full_name": "Тестовый Человек"},
                                               "synthetic", "OCR")]))
     driver = dialog.entities[0]
     assert not driver.field_value("birth_date").confirmable
-    dialog.set_field_confirmed(driver.uid, "birth_date", True)
-    assert not dialog.is_confirmed(driver.uid, "birth_date")
 
     item = dialog.field_item(driver.uid, "birth_date")
     item.setText(COL_VALUE, "01.02.19?0")
     assert not driver.field_value("birth_date").confirmable
-    dialog.set_field_confirmed(driver.uid, "birth_date", True)
-    assert not dialog.is_confirmed(driver.uid, "birth_date")
+    dialog.apply()
+    # Неверный формат в форму не уходит — и остальные поля это не блокирует.
+    assert window.driver_tab.get_data()["birth_date"] != "1990-02-01"
+    assert window.driver_tab.full_name.text() == "Тестовый Человек"
+    assert "формат не подходит" in dialog.errors.text()
 
     item.setText(COL_VALUE, "01.02.1990 г.")
     assert driver.field_value("birth_date").confirmable
-    dialog.set_field_confirmed(driver.uid, "birth_date", True)
     dialog.apply()
     assert window.driver_tab.get_data()["birth_date"] == "1990-02-01"
 
