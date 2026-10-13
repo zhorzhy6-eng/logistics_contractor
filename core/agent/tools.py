@@ -191,27 +191,44 @@ def _ok(data: Any = None, **extra: Any) -> Dict[str, Any]:
     return result
 
 
+#: Признак «метода нет». Нужен, потому что заполнение формы возвращает
+#: None даже при успехе: по одному None отличить вызов от его отсутствия
+#: нельзя, а от этого зависит «поле заполнено / форма не приняла значение».
+_MISSING = object()
+
+
 def _call(target: Any, method: str, *args: Any) -> Any:
     """
-    Зовёт метод объекта, если он есть.
+    Зовёт метод объекта и возвращает результат (``_MISSING`` — метода нет).
 
-    Нужно, чтобы отсутствие метода (другая версия вкладки, заглушка в тесте)
-    не превращалось в исключение: инструмент просто получит пустой словарь.
+    Отсутствие метода (другая версия вкладки, заглушка в тесте) не должно
+    превращаться в исключение: вызывающий код сам решит, что делать.
     """
     func = getattr(target, method, None)
     if not callable(func):
-        return None
+        return _MISSING
     try:
         return func(*args)
     except Exception as e:  # noqa: BLE001 — форма не должна ронять инструмент
         logger.warning("Метод %s.%s не отработал: %s", type(target).__name__, method, e)
-        return None
+        return _MISSING
 
 
 def _tab_data(tab: Any) -> Dict[str, Any]:
     """Данные вкладки словарём (пустой словарь — если вкладка их не отдаёт)."""
-    data = _call(tab, "get_data")
+    data = _tab_raw(tab)
     return dict(data) if isinstance(data, dict) else {}
+
+
+def _tab_raw(tab: Any) -> Any:
+    """
+    Что вернула вкладка: словарь, список (машины) или ``_MISSING``.
+
+    Разделение нужно, чтобы отличить «вкладка пуста» от «вкладка не умеет
+    отдавать данные»: в первом случае поля проверяются по её ключам, во
+    втором — заполнение не блокируется (проверить нечем).
+    """
+    return _call(tab, "get_data")
 
 
 def _window_tab_keys(window: Any) -> Tuple[str, ...]:
@@ -669,28 +686,78 @@ _SECTION_ALIASES: Dict[str, str] = {
     "vehicles": "vehicles_tab",
 }
 
+#: Разделы распознавания документов → вкладки формы (одно и то же место
+#: называется по-разному: в импорте — «driver», в форме — «driver_tab»).
+#: Тягач и полуприцеп ведут на вкладку «Тягач/прицеп» (`trailer_tab`), а
+#: имя БЛОКА (`tractor` / `trailer`) сохраняет _resolve_section: у вкладки
+#: два блока, и fill_fields различает их по имени.
+_DOCUMENT_SECTION_TABS: Dict[str, str] = {
+    "driver": "driver_tab",
+    "carrier": "carrier_tab",
+    "customer": "customer_tab",
+    "contract": "contract_tab",
+    "tractor": "trailer_tab",
+    "trailer": "trailer_tab",
+}
+
+#: Блоки вкладки «Тягач/прицеп»: у неё нет отдельных ключей вкладок.
+_TRAILER_BLOCKS = ("tractor", "trailer")
+
+
+def _resolve_section(section: str, keys: Sequence[str]) -> Optional[str]:
+    """
+    Ключ вкладки (или имя блока) по имени раздела.
+
+    Порядок: точное совпадение, русское название («водитель»), раздел
+    импорта документов («driver» → driver_tab), блоки тягача и полуприцепа
+    (у них своей вкладки нет — они живут внутри «Тягач/прицеп»), затем
+    вариант с суффиксом вкладки («vehicle» → vehicles_tab).
+    """
+    name = str(section or "").strip()
+    if name in keys:
+        return name
+
+    alias = _SECTION_ALIASES.get(name.casefold())
+    if alias in keys:
+        return alias
+
+    mapped = _DOCUMENT_SECTION_TABS.get(name)
+    if mapped in keys:
+        # Блок тягача/полуприцепа отдаётся СВОИМ именем: вкладка у них
+        # общая, и различает их вызывающий код (fill_fields).
+        return name if name in _TRAILER_BLOCKS else mapped
+
+    for candidate in (f"{name}_tab", f"{name}s_tab", f"{name}es_tab"):
+        if candidate in keys:
+            return candidate
+    return None
+
 
 def _section_alias(name: str, sections: Dict[str, Any]) -> Optional[str]:
     """Раздел по русскому названию или короткому ключу (None — не нашли)."""
-    key = _SECTION_ALIASES.get(str(name or "").strip().casefold())
-    return key if key in sections else None
+    return _resolve_section(name, tuple(sections))
 
 
-def _get_schema(contract_type: str = "", **_) -> Dict[str, Any]:
+def _get_schema(contract_type: str = "", window: Any = None, **_) -> Dict[str, Any]:
     """
     Схема разделов формы: какие поля есть у типа договора.
 
-    Источник — ContractData (разделы вкладок) и реестр типов: у типа
-    берётся человеческое название, у разделов — список полей, которые
-    заполнены сейчас. Полный список ключей даёт открытая форма: перечень
-    полей вкладки — это и есть схема (core/contract_data.py не меняется).
+    Источник — открытая форма (разделы вкладок и их поля) и реестр типов
+    (человеческое название типа). Отдельного описания схемы полей в проекте
+    нет: перечень полей вкладки — это и есть схема, а core/contract_data.py
+    не меняется (только чтение).
     """
     from core.contracts.registry import ContractTypeRegistry
+
+    # Реестр наполняется в main.py при старте. Если агент спросили раньше
+    # (панель в тесте, отдельный вызов) — догружаем встроенные типы: без
+    # этого схема показала бы пустой список известных типов.
+    if not ContractTypeRegistry.known_types():
+        ContractTypeRegistry.load_builtin()
 
     key = str(contract_type or "").strip()
     spec = ContractTypeRegistry.find(key) if key else None
 
-    window = _CONTEXT_WINDOW
     fields: Dict[str, List[str]] = {}
     if window is not None:
         for name, data in collect_form_data(window).items():
@@ -765,6 +832,29 @@ def _validate_current_form(context: AgentContext, **_) -> Dict[str, Any]:
 _INT_FIELDS = frozenset({"year", "payment_days", "prepayment_amount",
                          "prepayment_percent", "vat_rate_num"})
 
+#: Порядок разделов, когда имя поля указано БЕЗ раздела и встречается в
+#: нескольких вкладках сразу. Живой случай: `full_name` есть и у водителя,
+#: и у перевозчика, и у заказчика — ФИО без раздела должно попасть
+#: в водителя, а не в первую вкладку окна.
+_FORM_SECTION_PRIORITY: Tuple[str, ...] = (
+    "driver_tab", "tractor", "trailer", "vehicles_tab",
+    "carrier_tab", "customer_tab", "contract_tab",
+)
+
+#: Колонки таблицы driver_vehicles → имена полей формы тягача и полуприцепа.
+#: Разные имена заложены исторически: в базе «tractor_plate», в форме
+#: «plate_number» (см. MainWindow._load_driver_from_db).
+_DRIVER_VEHICLE_COLUMNS: Dict[str, Dict[str, str]] = {
+    "tractor": {
+        "brand_model": "tractor_brand", "plate_number": "tractor_plate",
+        "color": "tractor_color", "year": "tractor_year",
+    },
+    "trailer": {
+        "brand_model": "trailer_brand", "plate_number": "trailer_plate",
+        "color": "trailer_color", "year": "trailer_year",
+    },
+}
+
 
 def _coerce_field(field_name: str, value: Any) -> Any:
     """Приводит значение к типу поля формы (числа — числами)."""
@@ -787,14 +877,23 @@ def fill_fields(window: Any, fields: Dict[str, Any]) -> Dict[str, Any]:
 
     Имя поля принимается в трёх видах: ``driver_tab.full_name``,
     ``full_name`` (ищем во всех разделах) и ``route.route``
-    (поле вложенного блока вкладки «Договор»).
+    (поле вложенного блока вкладки «Договор»). Раздел можно назвать
+    по-русски («водитель») или как в импорте документов («driver»).
+
+    Поле проверяется по списку полей вкладки: если вкладка отдаёт данные и
+    такого поля в них нет, значение не пишется, а в отчёт попадает причина.
+    Без этой проверки форма молча принимала бы любую опечатку модели.
     """
     if window is None:
         return {"filled": {}, "failed": {"форма": "окно не открыто"}}
     if not isinstance(fields, dict) or not fields:
         return {"filled": {}, "failed": {"поля": "ничего не передано"}}
 
-    tabs = {key: _tab_for_key(window, key) for key in _window_tab_keys(window)}
+    keys = _window_tab_keys(window)
+    tabs = {key: _tab_for_key(window, key) for key in keys}
+    #: Какие поля есть у каждой вкладки (пустой набор — вкладка не отдаёт
+    #: данные: проверять нечем, заполнение не блокируем).
+    known = {key: _tab_data(tab) for key, tab in tabs.items() if tab is not None}
 
     filled: Dict[str, Any] = {}
     failed: Dict[str, str] = {}
@@ -807,34 +906,46 @@ def fill_fields(window: Any, fields: Dict[str, Any]) -> Dict[str, Any]:
         section, _, field_name = name.partition(".")
         if not field_name:
             # Раздел не указан: ищем поле в разделах формы по порядку.
+            # Имя поля бывает НЕ уникальным (`full_name` есть и у водителя,
+            # и у перевозчика), поэтому порядок раздела задан явно — иначе
+            # ФИО водителя уезжало бы в перевозчика.
             candidates = [
-                (key, name) for key in _window_tab_keys(window)
-                if tabs.get(key) is not None
-                and name in _tab_data(tabs[key])
+                (key, name) for key in _FORM_SECTION_PRIORITY
+                if known.get(key) and name in known[key]
             ]
             if not candidates:
                 failed[name] = "поля с таким именем в открытой форме нет"
                 continue
             section, field_name = candidates[0]
         else:
-            field_name = name.partition(".")[2]
+            section = _resolve_section(section, keys) or section
 
-        tab = tabs.get(section)
+        # У блока (тягач, полуприцеп) своего ключа вкладки нет: сам он
+        # остаётся именем блока, а вкладку берём из таблицы разделов.
+        tab_key = _DOCUMENT_SECTION_TABS.get(section, section)
+        tab = tabs.get(tab_key)
         if tab is None:
             failed[name] = f"раздела «{section}» в форме нет"
             continue
 
+        tab_fields = known.get(tab_key) or {}
+        if tab_fields and field_name not in tab_fields:
+            failed[name] = f"поля «{field_name}» в разделе «{section}» нет"
+            continue
+
         # Тягач и полуприцеп у вкладки «Тягач/прицеп» — вложенные блоки,
         # и fill_data принимает их СРАЗУ оба, поэтому передаём пустой блок.
-        if section == "tractor":
-            ok = _fill_trailer_tab(tab, "tractor", field_name,
-                                   _coerce_field(field_name, value))
-        elif section == "trailer":
-            ok = _fill_trailer_tab(tab, "trailer", field_name,
+        if section in ("tractor", "trailer"):
+            ok = _fill_trailer_tab(tab, section, field_name,
                                    _coerce_field(field_name, value))
         else:
+            # Поля идут по одному, а не одним словарём. Причина: некоторые
+            # вкладки (например, «Водитель») внутри fill_data пересобирают
+            # часть полей из своего словаря и обнуляют то, чего в нём нет.
+            # Пакетный вызов терял бы уже записанное значение, а пофайловый —
+            # трогает ровно одно поле формы.
             ok = _call(tab, "fill_data",
-                       {field_name: _coerce_field(field_name, value)}) is not None
+                       {field_name: _coerce_field(field_name, value)}) is not _MISSING
 
         if ok:
             filled[name] = _short(value, 120)
@@ -852,7 +963,7 @@ def _fill_trailer_tab(tab: Any, block: str, field_name: str, value: Any) -> bool
         tractor[field_name] = value
     else:
         trailer[field_name] = value
-    return _call(tab, "fill_data", tractor, trailer) is not None
+    return _call(tab, "fill_data", tractor, trailer) is not _MISSING
 
 
 def _fill_field(context: AgentContext, field: str = "", value: Any = "") -> Dict[str, Any]:
@@ -905,6 +1016,9 @@ def _fill_from_entity(context: AgentContext, entity_type: str = "",
     except (TypeError, ValueError):
         return _error("entity_id должен быть числом (ID записи из поиска)")
 
+    #: Блоки тягача и полуприцепа — только у водителя (у остальных пусто).
+    blocks: Dict[str, Dict[str, Any]] = {}
+
     if kind == "driver":
         record = load_driver(record_id)
         if not record:
@@ -922,22 +1036,21 @@ def _fill_from_entity(context: AgentContext, entity_type: str = "",
         }
         target = "driver_tab"
         title = _short(record.get("full_name"))
+        # Тягач и полуприцеп водителя отдаются ОТДЕЛЬНЫМИ блоками: это две
+        # части одной вкладки формы, и смешивать их с полями водителя нельзя.
+        # Имена колонок driver_vehicles (tractor_plate) не совпадают с
+        # именами полей формы (plate_number) — переводим явно, как это
+        # делает MainWindow._load_driver_from_db.
         vehicle = load_driver_vehicle(record_id)
         if vehicle:
-            tractor = {
-                key: vehicle.get(f"tractor_{key}")
-                for key in ("brand_model", "plate_number", "color", "year")
-                if str(vehicle.get(f"tractor_{key}") or "").strip()
-            }
-            trailer = {
-                key: vehicle.get(f"trailer_{key}")
-                for key in ("brand_model", "plate_number", "color", "year")
-                if str(vehicle.get(f"trailer_{key}") or "").strip()
-            }
-            if tractor:
-                fields.update({f"tractor.{key}": value for key, value in tractor.items()})
-            if trailer:
-                fields.update({f"trailer.{key}": value for key, value in trailer.items()})
+            for block, columns in _DRIVER_VEHICLE_COLUMNS.items():
+                values = {
+                    field_name: vehicle.get(column)
+                    for field_name, column in columns.items()
+                    if str(vehicle.get(column) or "").strip()
+                }
+                if values:
+                    blocks[block] = values
 
     elif kind in ("carrier", "customer"):
         record = load_organization(record_id, is_carrier=(kind == "carrier"))
@@ -991,26 +1104,35 @@ def _fill_from_entity(context: AgentContext, entity_type: str = "",
             given=entity_type,
         )
 
-    if not fields:
+    if not fields and not blocks:
         return _error(f"у записи ID={record_id} нет заполненных полей")
 
     # Пустые значения в форму не отдаём: подтверждать нечего.
+    data: Dict[str, Any] = {
+        "entity_type": kind, "entity_id": record_id, "title": title,
+        "target": target, "fields": fields,
+    }
+    for block, values in (blocks or {}).items():
+        data[block] = values
+    count = len(fields) + sum(len(values) for values in (blocks or {}).values())
     return _ok(
-        {"entity_type": kind, "entity_id": record_id, "title": title,
-         "target": target, "fields": fields},
+        data,
         message=(
-            f"найдено полей: {len(fields)}. Показать оператору и после "
+            f"найдено полей: {count}. Показать оператору и после "
             f"подтверждения заполнить"
         ),
     )
 
 
-def _fill_entity_fields(context: AgentContext, fields: Any = None, **_) -> Dict[str, Any]:
+def _fill_entity_fields(context: AgentContext, fields: Any = None,
+                        tractor: Any = None, trailer: Any = None,
+                        **_) -> Dict[str, Any]:
     """
     Заполняет форму набором полей (опасное действие, требует подтверждения).
 
-    Вызывается после fill_from_entity: модель передаёт сюда ровно те поля,
-    которые вернул предыдущий инструмент.
+    Вызывается после fill_from_entity: модель передаёт сюда ровно то, что
+    вернул предыдущий инструмент, — поля записи и (для водителя) отдельные
+    блоки тягача и полуприцепа.
     """
     window, error = _current_window_or_error(context)
     if error:
@@ -1018,7 +1140,15 @@ def _fill_entity_fields(context: AgentContext, fields: Any = None, **_) -> Dict[
     if not isinstance(fields, dict) or not fields:
         return _error("не переданы поля для заполнения")
 
-    report = fill_fields(window, fields)
+    prepared: Dict[str, Any] = dict(fields)
+    # Блоки тягача и полуприцепа раскладываются с префиксом раздела: так их
+    # понимает fill_fields (это два блока одной вкладки формы).
+    if isinstance(tractor, dict) and tractor:
+        prepared.update({f"tractor.{key}": value for key, value in tractor.items()})
+    if isinstance(trailer, dict) and trailer:
+        prepared.update({f"trailer.{key}": value for key, value in trailer.items()})
+
+    report = fill_fields(window, prepared)
     if not report["filled"]:
         return _error("ни одно поле заполнить не удалось", details=report["failed"])
     return _ok(
@@ -1115,13 +1245,17 @@ def _apply_recognized_fields(context: AgentContext, fields: Any = None,
         return error
 
     flat: Dict[str, Any] = {}
+    keys = _window_tab_keys(window)
 
     if isinstance(sections, dict):
         for section, values in sections.items():
             if not isinstance(values, dict):
                 continue
+            # Раздел импорта («driver») приводим к вкладке формы
+            # («driver_tab»): иначе перенос молча не находил бы место.
+            key = _resolve_section(section, keys) or section
             for name, value in values.items():
-                flat[f"{section}.{name}" if "." not in str(name) else str(name)] = value
+                flat[f"{key}.{name}" if "." not in str(name) else str(name)] = value
     if isinstance(fields, dict):
         for name, value in fields.items():
             flat[str(name)] = value
@@ -1413,7 +1547,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         return _get_current_form(ctx, section=section)
 
     def get_schema(contract_type: str = "", **_):
-        return _get_schema(contract_type=contract_type)
+        return _get_schema(contract_type=contract_type, window=ctx.current_window())
 
     def validate_current_form(**_):
         return _validate_current_form(ctx)
@@ -1463,8 +1597,10 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     def fill_from_entity(entity_type: str = "", entity_id: int = 0):
         return _fill_from_entity(ctx, entity_type=entity_type, entity_id=entity_id)
 
-    def fill_entity_fields(fields: Any = None):
-        return _fill_entity_fields(ctx, fields=fields)
+    def fill_entity_fields(fields: Any = None, tractor: Any = None,
+                           trailer: Any = None):
+        return _fill_entity_fields(ctx, fields=fields, tractor=tractor,
+                                   trailer=trailer)
 
     registry.register(Tool(
         name="fill_field",
@@ -1506,17 +1642,29 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     registry.register(Tool(
         name="fill_entity_fields",
         description=(
-            "Заполнить форму набором полей (результат fill_from_entity или "
-            "apply_recognized_fields). Требует подтверждения оператора."
+            "Заполнить форму данными, которые вернул fill_from_entity. "
+            "Блоки tractor и trailer (тягач и полуприцеп водителя) "
+            "передаются отдельными аргументами. Требует подтверждения "
+            "оператора."
         ),
-        parameters=_json_schema({"fields": {
-            "type": "object",
-            "description": "объект «поле: значение» (можно с разделом)",
-        }}, required=["fields"]),
+        parameters=_json_schema({
+            "fields": {
+                "type": "object",
+                "description": "объект «поле: значение» (можно с разделом)",
+            },
+            "tractor": {
+                "type": "object",
+                "description": "поля тягача из fill_from_entity (если есть)",
+            },
+            "trailer": {
+                "type": "object",
+                "description": "поля полуприцепа из fill_from_entity (если есть)",
+            },
+        }, required=["fields"]),
         function=fill_entity_fields,
         requires_confirmation=True,
         summary="Заполнить поля формы данными из базы",
-        hide_value_args=("fields",),
+        hide_value_args=("fields", "tractor", "trailer"),
     ))
 
     # ── B.4. Документы ──

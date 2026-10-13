@@ -29,6 +29,81 @@ logger = logging.getLogger("core.settings_service")
 
 ENV_PATH = "LOGISTICS_SETTINGS_PATH"
 
+# ─────────────────────────────────────────────────────────────
+# Настройки ИИ-агента «Максимилиан» (раздел "agent")
+# ─────────────────────────────────────────────────────────────
+# Раздел лежит внутри settings.json вложенным объектом, а не плоскими
+# ключами agent_*: так видно, что это настройки одной подсистемы, и
+# существующие ключи не пересекаются с ними по имени.
+
+#: Значения по умолчанию для раздела "agent" (задание, часть E.1).
+DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
+    "enabled": True,
+    "name": "Максимилиан",
+    "avatar": "cat_scientist",
+    "mode": "hybrid",
+    "show_floating": False,
+    "show_panel_on_start": False,
+    "hotkey": "Ctrl+M",
+    "max_history": 20,
+    "max_tool_steps": 5,
+}
+
+#: Режимы показа агента: только иконка, только панель, и то и другое.
+AGENT_MODES = ("icon", "panel", "hybrid")
+
+#: Границы числовых настроек агента — защита от значения «1000000» в файле.
+AGENT_LIMITS = {
+    "max_history": (1, 200),
+    "max_tool_steps": (1, 20),
+}
+
+
+def normalize_agent_settings(values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Приводит раздел "agent" к полному и разумному виду.
+
+    Неизвестные ключи сохраняются (как и в остальных настройках), но
+    известные проверяются: режим — из списка, числа — в границах,
+    строки — без пробелов по краям. Ошибка в файле не должна ронять
+    программу: подставляется значение по умолчанию.
+    """
+    result = dict(DEFAULT_AGENT_SETTINGS)
+    if isinstance(values, dict):
+        result.update(values)
+
+    for key in ("enabled", "show_floating", "show_panel_on_start"):
+        value = result.get(key)
+        if not isinstance(value, bool):
+            result[key] = str(value).strip().lower() in ("1", "true", "yes", "да", "on")
+
+    for key in ("name", "avatar", "hotkey"):
+        result[key] = str(result.get(key) or "").strip() or DEFAULT_AGENT_SETTINGS[key]
+
+    mode = str(result.get("mode") or "").strip().lower()
+    if mode not in AGENT_MODES:
+        logger.warning(
+            f"agent.mode={result.get('mode')!r} неизвестен — берём "
+            f"{DEFAULT_AGENT_SETTINGS['mode']!r}"
+        )
+        mode = DEFAULT_AGENT_SETTINGS["mode"]
+    result["mode"] = mode
+
+    for key, (low, high) in AGENT_LIMITS.items():
+        try:
+            number = int(result.get(key))
+        except (TypeError, ValueError):
+            number = DEFAULT_AGENT_SETTINGS[key]
+        if not low <= number <= high:
+            logger.warning(
+                f"agent.{key}={result.get(key)!r} вне границ {low}..{high} — "
+                f"берём {DEFAULT_AGENT_SETTINGS[key]}"
+            )
+            number = DEFAULT_AGENT_SETTINGS[key]
+        result[key] = number
+
+    return result
+
 
 def default_settings_path() -> str:
     """Путь к settings.json по умолчанию (config/ рядом с проектом)."""
@@ -67,6 +142,10 @@ class SettingsService:
         "ollama_url": "http://127.0.0.1:11434",
         "ollama_model": "qwen2.5:7b",
         "ollama_timeout": 150,
+
+        # ИИ-агент «Максимилиан» (раздел agent, задание часть E.1).
+        # Хранится ВЛОЖЕННЫМ объектом — см. normalize_agent_settings.
+        "agent": dict(DEFAULT_AGENT_SETTINGS),
     }
 
     # Поля-секреты: их нельзя ни читать из файла, ни записывать в него.
@@ -154,6 +233,11 @@ class SettingsService:
         for obsolete in ("document_tesseract", "document_ocr_languages"):
             merged.pop(obsolete, None)
 
+        # Раздел агента доводится до полного вида: в файле он мог быть
+        # записан частично (или старым форматом) — панель должна получить
+        # все ключи, а не падать на отсутствующем.
+        merged["agent"] = normalize_agent_settings(merged.get("agent"))
+
         # Защита от унаследованных файлов, где ключ лежал открытым текстом:
         # такой секрет не используется и немедленно вычищается из файла.
         leaked = [
@@ -174,6 +258,68 @@ class SettingsService:
 
         self._data = merged
         return dict(self._data)
+
+    # ---------------------------------------------------------
+    # Настройки ИИ-агента «Максимилиан» (раздел agent)
+    # ---------------------------------------------------------
+    def agent_settings(self) -> Dict[str, Any]:
+        """
+        Полный раздел "agent" (отсутствующие ключи — из значений по умолчанию).
+
+        Возвращается копия: правка словаря снаружи не меняет настройки.
+        """
+        return normalize_agent_settings(self._data.get("agent"))
+
+    def agent_setting(self, key: str, default: Any = None) -> Any:
+        """Одно значение раздела "agent" по имени ключа."""
+        settings = self.agent_settings()
+        if default is not None:
+            return settings.get(key, default)
+        return settings.get(key, DEFAULT_AGENT_SETTINGS.get(key, default))
+
+    def agent_enabled(self) -> bool:
+        """
+        Включён ли Максимилиан.
+
+        Отдельный метод, потому что от этого значения зависит многое:
+        иконка, панель, горячая клавиша, запросы к GigaChat и загрузка
+        истории (задание, часть E.4).
+        """
+        return bool(self.agent_setting("enabled", True))
+
+    def update_agent(self, values: Dict[str, Any], save: bool = True) -> bool:
+        """
+        Меняет значения раздела "agent" (остальные настройки не трогаются).
+
+        Ключи, похожие на секрет, отбрасываются: раздел агента — обычные
+        настройки, и ключу GigaChat там не место (он живёт в системном
+        хранилище, см. core/secrets_store.py).
+
+        :return: True, если файл успешно записан (или save=False)
+        """
+        if not isinstance(values, dict):
+            logger.error(
+                "update_agent: ожидался dict, получено %s", type(values).__name__
+            )
+            return False
+
+        safe_values = {}
+        for key, value in values.items():
+            if self.is_secret_key(key):
+                logger.warning(
+                    "agent.%s похож на секрет — в настройки не записывается", key
+                )
+                continue
+            safe_values[key] = value
+
+        merged = self.agent_settings()
+        merged.update(safe_values)
+        merged = normalize_agent_settings(merged)
+
+        self._data["agent"] = merged
+        if not save:
+            return True
+        return self.save()
 
     def reload(self) -> Dict[str, Any]:
         """Перечитывает настройки с диска (изменения применяются без перезапуска)."""
@@ -203,6 +349,11 @@ class SettingsService:
                 continue
             if key in {"document_tesseract", "document_ocr_languages"}:
                 continue
+            # Раздел агента приводится к полному виду: частичный словарь
+            # (например, только {"mode": "icon"}) не должен оставлять
+            # остальные ключи без значений.
+            if key == "agent":
+                value = normalize_agent_settings(value)
             safe_values[key] = value
 
         self._data.update(safe_values)

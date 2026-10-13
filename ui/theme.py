@@ -450,6 +450,41 @@ QProgressBar {{
 QProgressBar::chunk {{ background: {progress_chunk}; border-radius: 4px; }}
 QLabel#mutedLabel {{ color: {text_muted}; }}
 QFrame#divider {{ background: {border}; border: none; max-height: 1px; }}
+
+/* ── Максимилиан: панель агента (Максимилиан v1) ── */
+QFrame#agentPanel {{
+    background: {panel_bg}; border-left: 1px solid {panel_border};
+}}
+QFrame#agentHeader {{ background: transparent; }}
+QLabel#agentName {{ color: {heading}; font-weight: 600; }}
+QToolButton#agentIconButton {{
+    border: none; border-radius: {radius_small}; padding: 2px;
+    background: transparent;
+}}
+QToolButton#agentIconButton:hover {{ background: {hover_bg}; }}
+QScrollArea#agentScroll {{ background: transparent; }}
+QScrollArea#agentScroll > QWidget > QWidget {{ background: transparent; }}
+QLabel#agentBubbleUser {{
+    background: {nav_item_active_bg}; color: {text};
+    border: 1px solid {nav_item_active_border};
+    border-radius: {radius_small}; padding: 8px 10px;
+}}
+QLabel#agentBubbleAgent {{
+    background: {surface_alt}; color: {text};
+    border: 1px solid {border};
+    border-radius: {radius_small}; padding: 8px 10px;
+}}
+QLabel#agentBubbleSystem {{
+    background: {warn_bg}; color: {warn_text};
+    border: 1px solid {warn_border};
+    border-radius: {radius_small}; padding: 8px 10px;
+}}
+QTextEdit#agentInput {{
+    background: {input_bg}; color: {input_text};
+    border: 1px solid {border_input}; border-radius: {radius_input};
+    padding: 6px 8px;
+}}
+QTextEdit#agentInput:focus {{ border: 1px solid {focus_border}; }}
 """
 
 

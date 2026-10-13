@@ -45,6 +45,24 @@ def new_session_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+#: Сессия текущего запуска программы. Одна на процесс: панель может жить в
+#: нескольких окнах (Экспедиторство и окна типов), а история диалога должна
+#: быть одна — иначе «продолжить разговор» после переключения окна не выйдет.
+_SESSION_ID = new_session_id()
+
+
+def current_session_id() -> str:
+    """Идентификатор сессии этого запуска программы (не меняется)."""
+    return _SESSION_ID
+
+
+def reset_session_id() -> str:
+    """Начинает новую сессию (нужно тестам и ручной проверке)."""
+    global _SESSION_ID
+    _SESSION_ID = new_session_id()
+    return _SESSION_ID
+
+
 @dataclass
 class Message:
     """Одно сообщение истории."""
@@ -103,7 +121,7 @@ class AgentMemory:
         repository: Any = None,
         autoload: bool = True,
     ):
-        self.session_id = str(session_id or new_session_id())
+        self.session_id = str(session_id or current_session_id())
         self.max_history = max(1, int(max_history))
         self._repository = repository
         self._messages: List[Message] = []
@@ -225,6 +243,10 @@ class AgentMemory:
             if message.role == "assistant" and message.tool_calls:
                 block_start = len(wire)
                 answered = set()
+            elif message.role == "tool" and block_start is None:
+                # Результат инструмента без своего вызова: так выглядит
+                # история, обрезанная по лимиту. GigaChat такое не примет.
+                continue
 
             if message.role == "tool" and message.tool_call_id:
                 answered.add(message.tool_call_id)
@@ -331,5 +353,7 @@ __all__ = [
     "WIRE_ROLES",
     "AgentMemory",
     "Message",
+    "current_session_id",
     "new_session_id",
+    "reset_session_id",
 ]

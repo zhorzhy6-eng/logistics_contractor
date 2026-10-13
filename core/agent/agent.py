@@ -156,9 +156,12 @@ class Agent:
 
                 # Модель просит инструменты: её ответ обязан попасть в
                 # историю ДО результатов, иначе GigaChat отвергнет запрос.
+                # Текст ответа восстанавливается здесь же: плейсхолдеры в
+                # истории диалога оператору ни к чему, а маску перед
+                # отправкой ставит SafeChat (и повторная маска безвредна).
                 self.memory.add(
                     "assistant",
-                    content,
+                    self.chat.restore(content),
                     tool_calls=[
                         {
                             "id": call["id"],
@@ -177,14 +180,15 @@ class Agent:
                 for raw_call in parsed:
                     call = self._execute(raw_call)
                     calls.append(call)
+                    payload = json.dumps(
+                        call.result if call.result is not None
+                        else {"ok": False, "error": "не выполнено"},
+                        ensure_ascii=False,
+                        default=str,
+                    )
                     self.memory.add(
                         "tool",
-                        json.dumps(
-                            call.result if call.result is not None
-                            else {"ok": False, "error": "не выполнено"},
-                            ensure_ascii=False,
-                            default=str,
-                        ),
+                        payload,
                         tool_name=call.name,
                         tool_call_id=call.call_id,
                     )
@@ -235,6 +239,12 @@ class Agent:
             }
             return call
 
+        # ── Снятие маски с аргументов ──
+        # Модель видела результат прошлого инструмента в маске (`<<PERSON_1>>`
+        # вместо ФИО) и возвращает её же в аргументах. Инструменты работают с
+        # НАСТОЯЩИМИ данными: иначе в форму попадал бы плейсхолдер.
+        call.arguments = self._restore_arguments(call.arguments)
+
         if call.tool.requires_confirmation:
             self.context.notify(f"Нужно подтверждение: {call.tool.summary or name}")
             if not self._ask_confirmation(call.tool, call.arguments):
@@ -254,6 +264,27 @@ class Agent:
             name, "ок" if call.result.get("ok") else call.result.get("error"),
         )
         return call
+
+    def _restore_arguments(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Возвращает оригиналы в аргументах вызова (снимает маску).
+
+        Работает рекурсивно по строкам словаря и списка: значения бывают
+        вложенными (набор полей для формы, блоки тягача и полуприцепа).
+        """
+        if self.chat is None or not self.chat.masked_count:
+            return arguments
+
+        def restore(value: Any) -> Any:
+            if isinstance(value, str):
+                return self.chat.restore(value)
+            if isinstance(value, dict):
+                return {key: restore(item) for key, item in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [restore(item) for item in value]
+            return value
+
+        return restore(arguments)
 
     def _ask_confirmation(self, tool: Tool, arguments: Dict[str, Any]) -> bool:
         """
