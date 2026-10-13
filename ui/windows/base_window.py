@@ -773,6 +773,14 @@ class BaseContractWindow(QMainWindow):
         # (access violation при выходе). Отменяем текущее распознавание, чтобы
         # ожидание было коротким и результат уже не применялся.
         cancel_running_tasks(self, "recognition_task")
+
+        # Максимилиан отпускает свои ресурсы ДО закрытия окна: живой
+        # QShortcut и пул агента, оставленные сборщику мусора, роняют
+        # процесс при завершении (см. ui/agent_widget.py::shutdown).
+        agent_widget = getattr(self, "agent_widget", None)
+        if agent_widget is not None:
+            agent_widget.shutdown()
+
         wait_for_thread_pools(self)
 
         self._force_close = True

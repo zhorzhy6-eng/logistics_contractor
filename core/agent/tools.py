@@ -749,11 +749,11 @@ def _get_schema(contract_type: str = "", window: Any = None, **_) -> Dict[str, A
     """
     from core.contracts.registry import ContractTypeRegistry
 
-    # Реестр наполняется в main.py при старте. Если агент спросили раньше
-    # (панель в тесте, отдельный вызов) — догружаем встроенные типы: без
-    # этого схема показала бы пустой список известных типов.
-    if not ContractTypeRegistry.known_types():
-        ContractTypeRegistry.load_builtin()
+    # Реестр наполняется в main.py при старте. Если агента спросили раньше
+    # (панель в тесте, отдельный вызов) — догружаем встроенные типы. Вызов
+    # безопасен и когда реестр уже наполнен: импортированные модули
+    # пропускаются (см. ContractTypeRegistry.load_builtin).
+    ContractTypeRegistry.load_builtin()
 
     key = str(contract_type or "").strip()
     spec = ContractTypeRegistry.find(key) if key else None

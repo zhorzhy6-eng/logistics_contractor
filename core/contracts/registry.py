@@ -14,6 +14,7 @@ _import_type_module): падение модуля логируется в failur
 
 import importlib
 import logging
+import sys
 from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, Mapping, Optional, Tuple, Type
 
@@ -216,8 +217,17 @@ class ContractTypeRegistry:
 
         Каждый модуль грузится в собственном try/except: ошибка импорта
         одного типа записывается в failures() и не мешает остальным.
+
+        Повторный вызов безопасен: модуль, который уже импортирован,
+        пропускается. Это нужно там, где реестр наполняется ПО ТРЕБОВАНИЮ
+        позже старта приложения (например, инструмент агента
+        `get_schema`): к этому моменту `known_types()` может быть непустым,
+        но неполным (загружен один тип), и проверка «реестр пуст» не
+        сработала бы.
         """
         for module in BUILTIN_TYPE_MODULES:
+            if module in sys.modules:
+                continue
             cls._import_type_module(module)
 
     @classmethod

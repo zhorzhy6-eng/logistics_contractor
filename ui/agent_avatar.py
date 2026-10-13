@@ -366,6 +366,18 @@ class CatAvatar(QWidget):
             self._close_eyes()
             self._schedule_blink()
 
+    def stop_animation(self) -> None:
+        """
+        Останавливает мигание (вызывается при выходе из программы).
+
+        Виджет может быть уже разрушен: тогда таймеры останавливать нечего.
+        """
+        try:
+            self._blink_timer.stop()
+            self._open_timer.stop()
+        except RuntimeError:
+            return
+
     # ---------------------------------------------------------
     # Анимация
     # ---------------------------------------------------------
@@ -418,3 +430,4 @@ __all__ = [
     "avatar_pixmap",
     "paint_cat",
 ]
+

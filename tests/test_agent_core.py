@@ -765,6 +765,67 @@ def test_safe_chat_requires_client_message():
 # 6. Прочее
 # ─────────────────────────────────────────────────────────────
 
+def test_real_windows_expose_tab_keys():
+    """
+    Настоящие окна сами рассказывают агенту про свою раскладку вкладок.
+
+    `MainWindow` и `BaseContractWindow` дают ключи вкладок в одном виде —
+    иначе инструменты формы читали бы раскладку по именам атрибутов, а они
+    у каждого окна свои.
+    """
+    from ui.main_window import MainWindow
+    from ui.windows.base_window import BaseContractWindow
+
+    assert callable(getattr(MainWindow, "_tab_keys", None))
+    assert callable(getattr(BaseContractWindow, "_tab_keys", None))
+
+    keys = MainWindow._tab_keys(object())
+    assert "driver_tab" in keys
+    assert "contract_tab" in keys
+    assert keys == tuple(keys)
+
+    # Окно типа берёт раскладку из своего класса (наследника не создаём:
+    # BaseContractWindow — QMainWindow, а тесты ядра идут без Qt).
+    class Stub:
+        _TAB_KEYS = ("customer_tab", "vehicle_tab")
+        _tab_keys = BaseContractWindow._tab_keys
+
+    assert Stub()._tab_keys() == ("customer_tab", "vehicle_tab")
+
+
+def test_collect_form_data_reads_sections_by_tab_keys():
+    """
+    Чтение формы идёт по ключам вкладок окна, а не по именам атрибутов.
+
+    Псевдо-окно отдаёт ключи явно: инструменты должны спросить их у окна
+    и сложить разделы в словарь «ключ вкладки → поля».
+    """
+    from core.agent.tools import collect_form_data
+
+    class Tab:
+        def __init__(self, data):
+            self.data = data
+
+        def get_data(self):
+            return dict(self.data)
+
+    class Window:
+        def __init__(self):
+            self.tabs = {"driver_tab": Tab({"full_name": "Иванов И.И."}),
+                         "contract_tab": Tab({"number": "1"})}
+
+        def _tab_keys(self):
+            return ("driver_tab", "contract_tab")
+
+        def _tab_by_key(self, key):
+            return self.tabs.get(key)
+
+    sections = collect_form_data(Window())
+
+    assert sections["driver_tab"]["full_name"] == "Иванов И.И."
+    assert sections["contract_tab"]["number"] == "1"
+
+
 def test_message_wire_format():
     """Формат сообщений для GigaChat: роли, инструменты, вызовы."""
     user = Message(role="user", content="привет")

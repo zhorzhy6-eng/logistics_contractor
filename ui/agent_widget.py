@@ -17,9 +17,9 @@
 возвращает ``AgentWidget`` — единственный объект, которым потом управляют
 (настройки, горячая клавиша, закрытие).
 
-Работа с моделью идёт в рабочем потоке (``AgentTask`` в ``QThreadPool``):
+Работа с моделью идёт в отдельном потоке (`AgentWorker` в `QThread`):
 окно не должно замирать на время запроса. Подтверждение опасных действий
-показывает ``ConfirmationDialog`` (задание, часть D.5).
+показывает `ConfirmationDialog` (задание, часть D.5).
 
 Про потоки: агент внутри рабочего потока читает и заполняет форму. Так
 сделано осознанно — операции занимают доли секунды (диалоги Qt в этом же
@@ -31,13 +31,13 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from PyQt5.QtCore import (
-    QEasingCurve, QEvent, QObject, QPropertyAnimation, QSize, Qt, QThreadPool,
-    QTimer, pyqtSignal,
+    QEasingCurve, QEvent, QMetaObject, QObject, QPropertyAnimation, QSize, Qt,
+    Q_ARG, QThread, QTimer, pyqtSignal, pyqtSlot,
 )
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox,
-    QPushButton, QScrollArea, QShortcut, QSizePolicy, QTextEdit, QToolButton,
+    QPushButton, QScrollArea, QSizePolicy, QTextEdit, QToolButton,
     QVBoxLayout, QWidget,
 )
 
@@ -48,7 +48,6 @@ from core.agent.tools import AgentContext, Tool, active_window, set_context_wind
 from core.settings_service import get_settings_service
 from ui import theme
 from ui.agent_avatar import CatAvatar, avatar_icon
-from ui.qt_shutdown import wait_for_thread_pools
 
 logger = logging.getLogger("ui.agent_widget")
 
@@ -77,54 +76,56 @@ class AgentTaskSignals(QObject):
     activity = pyqtSignal(str)
 
 
-class AgentTask:
-    """
-    Запрос к агенту в рабочем потоке.
+class AgentRequest:
+    """Один запрос к агенту: агент, сообщение и признак отмены."""
 
-    Наследник QRunnable создаётся отдельным классом ниже: так задача
-    остаётся простой (только вызов), а сигналы живут в QObject.
-    """
-
-    def __init__(self, agent: Agent, message: str, signals: AgentTaskSignals):
+    def __init__(self, agent: Agent, message: str):
         self.agent = agent
         self.message = message
-        self.signals = signals
+        #: Запрос отменили (выход из программы): результат уже не нужен.
+        self.cancelled = False
 
-    def run(self) -> None:
+
+class AgentWorker(QObject):
+    """
+    Работа с агентом в отдельном потоке.
+
+    Поток — не пул: `QThread` агент создаёт, останавливает и дожидается
+    САМ. Пул (`QThreadPool`) для одного длинного запроса оказался хуже:
+    он живёт до разрушения окна, а окно Qt удаляет отложенно, поэтому
+    пул с потоками доживал до завершения интерпретатора и ронял процесс
+    (`0xC0000005`; проверено A/B-пробой tests/_tmp/_probe_exit_ab.py —
+    с агентом выход падал 4 раза из 4, без агента — 4 из 4 чистых).
+    """
+
+    #: Работа закончена: текст ответа, инструменты, достигнут ли лимит шагов.
+    finished = pyqtSignal(str, list, bool)
+    #: Запрос не удался: текст ошибки.
+    failed = pyqtSignal(str)
+    #: Промежуточный шаг («Выполняю: поиск водителя»).
+    activity = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self._request: Optional[AgentRequest] = None
+
+    @pyqtSlot(object)
+    def process(self, request: AgentRequest) -> None:
         """Выполняет запрос и сообщает результат сигналами."""
         try:
-            reply: AgentReply = self.agent.send(self.message)
+            reply: AgentReply = request.agent.send(request.message)
         except Exception as e:  # noqa: BLE001 — сеть не должна ронять поток
             logger.exception("Запрос к Максимилиану не удался")
-            self.signals.failed.emit(f"{type(e).__name__}: {e}")
+            if not request.cancelled:
+                self.failed.emit(f"{type(e).__name__}: {e}")
             return
-        try:
-            self.signals.finished.emit(
-                reply.text, list(reply.tool_names), bool(reply.step_limit_reached)
-            )
-        except RuntimeError:
-            # Окно уже закрыто — панель результата не ждёт.
-            logger.info("Ответ Максимилиана получен после закрытия панели")
+        if request.cancelled:
+            logger.info("Ответ Максимилиана получен после отмены — не отдаём")
+            return
+        self.finished.emit(
+            reply.text, list(reply.tool_names), bool(reply.step_limit_reached)
+        )
 
-
-def _make_runnable(task: AgentTask):
-    """QRunnable-обёртка над задачей агента (импорт Qt внутри функции)."""
-    from PyQt5.QtCore import QRunnable
-
-    class _Runnable(QRunnable):
-        def __init__(self, inner: AgentTask):
-            super().__init__()
-            self._inner = inner
-
-        def run(self) -> None:
-            self._inner.run()
-
-    return _Runnable(task)
-
-
-# ─────────────────────────────────────────────────────────────
-# Диалог подтверждения (D.5)
-# ─────────────────────────────────────────────────────────────
 
 class ConfirmationDialog(QDialog):
     """
@@ -638,12 +639,22 @@ class AgentWidget(QObject):
         self.panel: Optional[AgentPanel] = None
         self.icon_button: Optional[AgentIconButton] = None
         self.floating: Optional[FloatingCat] = None
-        self.shortcut: Optional[QShortcut] = None
+        #: Горячая клавиша панели (QKeySequence). Оставлено публичным именем
+        #: `shortcut` ради тестов и панели: раньше здесь лежал QShortcut,
+        #: теперь — сочетание, а само нажатие ловит eventFilter.
+        self.shortcut: Optional[QKeySequence] = None
 
         self._agent: Optional[Agent] = None
-        self._thread_pool = QThreadPool(window)
-        self._thread_pool.setMaxThreadCount(1)
-        self._task: Optional[AgentTask] = None
+        #: Завершение уже выполнено (метод shutdown идемпотентен).
+        self._shutdown_done = False
+        #: Сочетание горячей клавиши (None — клавиша выключена).
+        self._hotkey: Optional[QKeySequence] = None
+        #: Текущий запрос к агенту (None — агент не думает).
+        self._request: Optional[AgentRequest] = None
+        #: Рабочий поток агента: создаётся при первом вопросе и живёт до
+        #: выхода из программы (см. AgentWorker: почему QThread, а не пул).
+        self._thread: Optional[QThread] = None
+        self._worker: Optional[AgentWorker] = None
         self._busy = False
 
         self._animation = QPropertyAnimation(self)
@@ -659,6 +670,11 @@ class AgentWidget(QObject):
         self.apply_settings()
         app = QApplication.instance()
         if app is not None:
+            # Страховка на случай выхода, который не идёт через force_close()
+            # окна. Подписка СНИМАЕТСЯ в shutdown(): живая связь с методом
+            # Python, дошедшая до завершения интерпретатора, роняет процесс
+            # (0xC0000005 — проверено пробой tests/_tmp/_probe_exit_launch.py,
+            # это дословный сценарий tests/test_exit_clean.py).
             app.aboutToQuit.connect(self.shutdown)
 
     # ---------------------------------------------------------
@@ -760,20 +776,54 @@ class AgentWidget(QObject):
         self.panel.set_persona(persona_key)
 
     def _apply_hotkey(self, enabled: bool, sequence: str) -> None:
-        """Включает или выключает горячую клавишу панели."""
-        if self.shortcut is not None:
-            self.shortcut.setEnabled(False)
-            self.shortcut.deleteLater()
+        """
+        Включает или выключает горячую клавишу панели.
+
+        Клавиша обрабатывается ФИЛЬТРОМ СОБЫТИЙ, а не `QShortcut`. Причина
+        практическая: `QShortcut` живёт отдельным объектом и на выходе из
+        программы роняет процесс (`0xC0000005`, проверено пробой
+        tests/_tmp/_probe_exit_matrix.py — с `QShortcut` падение повторялось
+        в трёх запусках из трёх, без него выход чистый). Фильтр живёт в
+        самом `AgentWidget`, никаких лишних объектов не создаёт и убирается
+        вместе с окном.
+        """
+        if self._hotkey is not None:
+            try:
+                self.window.removeEventFilter(self)
+            except (TypeError, RuntimeError):
+                pass
+            self._hotkey = None
             self.shortcut = None
-        if not enabled or not str(sequence or "").strip():
+
+        text = str(sequence or "").strip()
+        if not enabled or not text:
             return
-        try:
-            self.shortcut = QShortcut(QKeySequence(str(sequence)), self.window)
-        except Exception as e:  # noqa: BLE001 — плохая клавиша не должна ломать окно
-            logger.warning("Горячая клавиша %r не подключена: %s", sequence, e)
+
+        key = QKeySequence(text)
+        if key.isEmpty() or key.count() == 0:
+            logger.warning("Горячая клавиша %r не разобрана — не подключаю", text)
             return
-        self.shortcut.activated.connect(self.toggle_panel)
-        logger.info("Максимилиан: горячая клавиша %s", sequence)
+
+        self._hotkey = key
+        #: То же сочетание под старым именем (тесты и панель).
+        self.shortcut = QKeySequence(key)
+        self.window.installEventFilter(self)
+        logger.info("Максимилиан: горячая клавиша %s", text)
+
+    def hotkey_sequence(self) -> QKeySequence:
+        """Сочетание горячей клавиши (пустое — клавиша выключена)."""
+        if self._hotkey is None:
+            return QKeySequence()
+        return QKeySequence(self._hotkey)
+
+    def handle_hotkey(self) -> None:
+        """
+        Реакция на горячую клавишу: открыть или закрыть панель.
+
+        Отдельный метод нужен тестам: они вызывают реакцию напрямую,
+        не поднимая настоящее нажатие клавиши.
+        """
+        self.toggle_panel()
 
     def reload_settings(self) -> None:
         """Перечитывает настройки и применяет их (после диалога настроек)."""
@@ -854,6 +904,31 @@ class AgentWidget(QObject):
     # ---------------------------------------------------------
     # Диалог
     # ---------------------------------------------------------
+    def _ensure_worker(self) -> None:
+        """
+        Создаёт рабочий поток агента при первом вопросе.
+
+        Поток живёт до выхода из программы: создавать его на каждый вопрос
+        незачем (запросы идут по одному), а останавливать и ждать его надо
+        явно — это и делает shutdown().
+        """
+        if self._thread is not None:
+            return
+
+        from PyQt5.QtCore import QThread
+
+        self._thread = QThread()
+        self._thread.setObjectName("agentThread")
+        self._worker = AgentWorker()
+        self._worker.moveToThread(self._thread)
+        # Соединения «сигнал → слот» без lambda: замыкания на виджеты дают
+        # цикл ссылок Python ↔ Qt (AGENTS.md § 5.1).
+        self._worker.finished.connect(self._on_finished)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.activity.connect(self._on_activity)
+        self._thread.start()
+        logger.debug("Максимилиан: рабочий поток запущен")
+
     def on_submit(self, message: str) -> None:
         """Отправляет сообщение агенту в рабочем потоке."""
         if self._busy:
@@ -874,20 +949,22 @@ class AgentWidget(QObject):
             self.panel.set_status("", False)
             return
 
-        signals = AgentTaskSignals()
-        signals.finished.connect(self._on_finished)
-        signals.failed.connect(self._on_failed)
-        signals.activity.connect(self._on_activity)
+        self._ensure_worker()
 
         self._busy = True
         self.panel.set_status("Думаю…", True)
-        self._task = AgentTask(self._agent, message, signals)
-        self._thread_pool.start(_make_runnable(self._task))
+        self._request = AgentRequest(self._agent, message)
+        # Вызов уходит в поток агента: там запрос к GigaChat и работа с
+        # инструментами, главный поток остаётся отзывчивым.
+        QMetaObject.invokeMethod(
+            self._worker, "process", Qt.QueuedConnection,
+            Q_ARG(object, self._request),
+        )
 
     def _on_finished(self, text: str, tool_names: List[str], limit: bool) -> None:
         """Ответ агента готов."""
         self._busy = False
-        self._task = None
+        self._request = None
         self.panel.append_message(text, "agent", tool_names)
         status = "Достигнут лимит шагов — уточните запрос" if limit else ""
         self.panel.set_status(status, False)
@@ -895,7 +972,7 @@ class AgentWidget(QObject):
     def _on_failed(self, error: str) -> None:
         """Запрос к агенту не удался: показываем причину."""
         self._busy = False
-        self._task = None
+        self._request = None
         self.panel.set_status("", False)
         self.panel.append_message(f"Ошибка запроса: {error}", "system")
 
@@ -1030,19 +1107,43 @@ class AgentWidget(QObject):
 
     def eventFilter(self, source, event) -> bool:  # noqa: N802 — имя метода Qt
         """
-        Окно изменило размер — панель остаётся у правого края.
+        Горячая клавиша и слежение за размером окна.
 
-        Панель не в раскладке (накладка), поэтому её положение надо
-        пересчитывать самим: иначе при развороте окна на весь экран она
-        осталась бы висеть посередине.
+        Два разных дела в одном фильтре:
+
+          * окно изменило размер — панель (накладка) остаётся у правого края;
+          * нажата горячая клавиша панели — открываем или закрываем её.
+
+        Фильтр стоит на окне, поэтому вызывается и для нажатий внутри
+        дочерних полей: сочетание с Ctrl в поле ввода всё равно должно
+        работать.
         """
-        # getattr, а не self._host: фильтр может сработать на объекте,
-        # который ещё не достроен (настройки ставятся до конца __init__).
         host = getattr(self, "_host", None)
         if source is host and host is not None and event.type() == QEvent.Resize:
             if self.panel is not None and self.panel.isVisible():
                 self._layout_panel()
+            return super().eventFilter(source, event)
+
+        if getattr(self, "_hotkey", None) is not None:
+            if event.type() in (QEvent.ShortcutOverride, QEvent.KeyPress):
+                if self._is_hotkey(event):
+                    if event.type() == QEvent.ShortcutOverride:
+                        # Сообщаем Qt, что сочетание наше: иначе его мог бы
+                        # перехватить обработчик по умолчанию.
+                        event.accept()
+                    else:
+                        self.handle_hotkey()
+                        event.accept()
+                    return True
         return super().eventFilter(source, event)
+
+    def _is_hotkey(self, event) -> bool:
+        """Совпадает ли нажатие с горячей клавишей панели."""
+        pressed = QKeySequence(int(event.modifiers()) | int(event.key()))
+        if pressed.isEmpty():
+            return False
+        # Сравниваем первые сочетания: у нажатия и у настройки они одни.
+        return pressed[0] == self._hotkey[0]
 
     def is_panel_visible(self) -> bool:
         """Открыта ли панель (нужно тестам и горячей клавише)."""
@@ -1071,16 +1172,76 @@ class AgentWidget(QObject):
         """
         Останавливает фоновую работу перед выходом.
 
-        Пул — Qt-ребёнок окна: если его разрушить с работающей задачей,
-        процесс падает при завершении (см. ui/qt_shutdown.py). Поэтому
-        сначала ждём, потом отпускаем ссылки.
+        Вызывается из `force_close()` окна (и из `aboutToQuit` как страховка:
+        метод идемпотентен).
+
+        Что делает и чего НЕ делает:
+
+          * ждёт рабочий поток агента и останавливает его — поток, доживший
+            до завершения интерпретатора, роняет процесс (`0xC0000005`);
+          * останавливает таймеры аватара и анимацию панели;
+          * снимает подписки: горячая клавиша (фильтр событий) и страховка
+            `aboutToQuit` — живая связь с методом Python на завершении тоже
+            роняет процесс;
+          * **не удаляет виджеты**. Их разрушает Qt вместе с окном-родителем
+            в правильном порядке; попытка удалить их здесь (проверено)
+            приводит к повторному удалению и падению `0xC0000005`.
         """
-        try:
-            self._thread_pool.clear()
-            wait_for_thread_pools(self.window)
-        except RuntimeError:
+        if self._shutdown_done:
             return
-        self._task = None
+        self._shutdown_done = True
+        logger.info("Максимилиан: освобождаю ресурсы перед выходом")
+
+        # Сначала замолкает запрос: его сигналы не должны попасть в окно,
+        # которое вот-вот закроется.
+        if self._request is not None:
+            self._request.cancelled = True
+
+        if self._thread is not None:
+            logger.info("Максимилиан: останавливаю рабочий поток")
+            try:
+                self._thread.quit()
+                if not self._thread.wait(5000):
+                    logger.warning(
+                        "Максимилиан: поток не завершился за 5 с — ждём дальше"
+                    )
+                    self._thread.wait()
+            except RuntimeError:
+                # Поток уже разрушен вместе с окном — ждать нечего.
+                pass
+            self._thread = None
+            self._worker = None
+        self._request = None
+
+        try:
+            self._animation.stop()
+        except RuntimeError:
+            pass
+
+        for widget in (self.panel, self.icon_button, self.floating):
+            avatar = getattr(widget, "avatar", None) if widget is not None else None
+            if avatar is not None:
+                avatar.stop_animation()
+
+        if self._hotkey is not None:
+            try:
+                self.window.removeEventFilter(self)
+            except (TypeError, RuntimeError):
+                pass
+            self._hotkey = None
+            self.shortcut = None
+
+        # Снимаем страховочную подписку: связь «сигнал приложения → метод
+        # агента», дожившая до завершения интерпретатора, роняет процесс.
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.aboutToQuit.disconnect(self.shutdown)
+            except (TypeError, RuntimeError):
+                pass
+
+        set_context_window(None)
+        logger.info("Максимилиан: фоновые ресурсы освобождены")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1252,19 +1413,6 @@ def uninstall_agent(window: QWidget) -> None:
     if widget is None:
         return
     widget.shutdown()
-    if widget.panel is not None:
-        widget.panel.hide()
-        widget.panel.deleteLater()
-    if widget.icon_button is not None:
-        widget.icon_button.hide()
-        widget.icon_button.deleteLater()
-    if widget.floating is not None:
-        widget.floating.hide()
-        widget.floating.deleteLater()
-    if widget.shortcut is not None:
-        widget.shortcut.setEnabled(False)
-        widget.shortcut.deleteLater()
-    set_context_window(None)
     window.agent_widget = None
 
 
@@ -1286,9 +1434,9 @@ __all__ = [
     "PANEL_WIDTH",
     "AgentIconButton",
     "AgentPanel",
-    "AgentTask",
-    "AgentTaskSignals",
+    "AgentRequest",
     "AgentWidget",
+    "AgentWorker",
     "ConfirmationDialog",
     "FloatingCat",
     "active_form_window",

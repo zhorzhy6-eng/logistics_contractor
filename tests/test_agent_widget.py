@@ -279,7 +279,9 @@ def test_hotkey_is_installed(app, stub_window, install_service):
     """Горячая клавиша из настроек подключена и переключает панель."""
     widget = install_agent(stub_window, client_factory=lambda: None)
     assert widget.shortcut is not None
-    assert widget.shortcut.key() == QKeySequence("Ctrl+M")
+    assert QKeySequence(widget.shortcut) == QKeySequence("Ctrl+M")
+    # Клавиша ловится фильтром событий окна, а не объектом QShortcut.
+    assert widget._hotkey is not None
 
     QTest.keySequence(stub_window, QKeySequence("Ctrl+M"))
     settle(app, widget)
@@ -297,7 +299,8 @@ def test_hotkey_changes_with_settings(app, stub_window, install_service):
     widget.reload_settings()
 
     assert widget.shortcut is not None
-    assert widget.shortcut.key() == QKeySequence("Ctrl+Shift+K")
+    assert QKeySequence(widget.shortcut) == QKeySequence("Ctrl+Shift+K")
+    assert widget.hotkey_sequence() == QKeySequence("Ctrl+Shift+K")
 
 
 def test_mode_icon_hides_panel_possibility(app, stub_window, install_service):
