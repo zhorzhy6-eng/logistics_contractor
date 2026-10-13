@@ -1144,7 +1144,6 @@ class GigaChatClient:
         )
         return truncated
 
-    @staticmethod
     def complete_chat(
         self,
         messages: list,

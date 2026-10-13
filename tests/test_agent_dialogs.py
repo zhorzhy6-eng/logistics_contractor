@@ -75,11 +75,16 @@ def settings(settings_path):
 # 1. Аватар (задание, часть D.2)
 # ─────────────────────────────────────────────────────────────
 
-def test_four_avatars_are_drawn(app, work_file):
-    """У четырёх образов есть свой рисунок (и они отличаются)."""
-    assert len(avatar_keys()) == 4
+def test_all_avatars_are_drawn(app, work_file):
+    """У каждого образа есть свой рисунок (и они отличаются)."""
+    keys = avatar_keys()
+    assert len(keys) == 5
+    for expected in ("cat_scientist", "cat_logist", "cat_detective",
+                     "cat_keeper", "neutral"):
+        assert expected in keys, f"{expected}: у образа нет рисунка"
+
     digests = set()
-    for key in avatar_keys():
+    for key in keys:
         pixmap = avatar_pixmap(64, key)
         assert pixmap.width() == 64
         assert not pixmap.isNull()
@@ -87,7 +92,39 @@ def test_four_avatars_are_drawn(app, work_file):
         assert pixmap.save(str(path)) is True
         assert path.stat().st_size > 500, f"{key}: картинка подозрительно пуста"
         digests.add(path.read_bytes())
-    assert len(digests) == 4, "образы должны отличаться друг от друга"
+    assert len(digests) == len(keys), "образы должны отличаться друг от друга"
+
+    from core.agent.personas import persona_keys
+
+    assert set(keys) == set(persona_keys()), (
+        "набор образов и набор рисунков разошлись"
+    )
+
+
+def test_every_avatar_draws_in_all_sizes(app):
+    """
+    Каждый образ рисуется в трёх рабочих размерах без ошибок.
+
+    Проверяются и состояния глаз: открыты, мигает, «думает». У 32-пиксельной
+    иконки проверяется, что кот не «пустой»: в ней есть и контур (тёмные
+    точки), и заливка — иначе в углу окна оказалось бы пустое место.
+    """
+    for key in avatar_keys():
+        for size in (32, 64, 96):
+            for eyes in ("open", "closed", "wide"):
+                pixmap = avatar_pixmap(size, key, eyes)
+                assert not pixmap.isNull(), f"{key}@{size} ({eyes})"
+                image = pixmap.toImage()
+                colors = {
+                    image.pixel(x, y)
+                    for x in range(image.width())
+                    for y in range(image.height())
+                    if image.pixelColor(x, y).alpha() > 0
+                }
+                assert len(colors) >= 3, (
+                    f"{key}@{size} ({eyes}): рисунок почти пустой"
+                )
+            assert not avatar_icon(size, key).isNull()
 
 
 def test_avatar_sizes(app):

@@ -5,12 +5,14 @@
 
 Что проверяется
 ---------------
-1. **Иконка и панель.** Иконка стоит в шапке окна, клик открывает и
-   закрывает панель, клик по «✕» закрывает, сообщения видны в истории.
+1. **Иконка и панель.** Иконка стоит в правом нижнем углу окна (статус-бар),
+   клик открывает и закрывает панель, клик по «✕» закрывает, сообщения
+   видны в истории.
 2. **Горячая клавиша.** Сочетание из настроек подключено и переключает
    панель; режимы «только иконка» / «только панель» работают.
 3. **Плавающий кот.** Появляется по настройке, открывает панель,
-   перетаскивается (и перетаскивание не считается кликом).
+   перетаскивается (и перетаскивание не считается кликом), не перекрывает
+   иконку агента.
 4. **Выключение.** ``agent.enabled = false`` — в окне нет ни иконки, ни
    панели, ни кота, ни клавиши (задание, часть E.4).
 5. **Подтверждение.** Опасное действие не выполняется без «да»; диалог
@@ -154,13 +156,27 @@ def panel_bubbles(panel):
 # 1. Иконка и панель
 # ─────────────────────────────────────────────────────────────
 
-def test_icon_is_placed_in_header(app, stub_window, install_service):
-    """Иконка кота встаёт в шапку окна и кликабельна."""
+def test_icon_is_placed_in_bottom_right(app, stub_window, install_service):
+    """
+    Иконка кота встаёт в ПРАВЫЙ НИЖНИЙ угол окна (статус-бар) и кликабельна.
+
+    Статус-бар — нижняя полоса окна, поэтому иконка не перекрывает ни
+    кнопки внизу формы, ни таблицы вкладок.
+    """
     widget = install_agent(stub_window, client_factory=lambda: None)
+    app.processEvents()
     assert widget is not None
     assert widget.icon_button is not None
-    assert widget.icon_button.parentWidget() is stub_window.header
+    assert widget.icon_button.parentWidget() is stub_window.statusBar()
+    assert stub_window.statusBar().isVisible() is True
     assert "Максимилиан" in widget.icon_button.toolTip()
+
+    # Геометрия: иконка ниже середины окна и правее середины.
+    icon = widget.icon_button
+    center = stub_window.rect().center()
+    icon_center = icon.mapTo(stub_window, icon.rect().center())
+    assert icon_center.x() > center.x(), "иконка должна быть справа"
+    assert icon_center.y() > center.y(), "иконка должна быть внизу"
 
     # Клик по иконке открывает панель, второй клик — закрывает.
     widget.icon_button.click()
@@ -170,6 +186,34 @@ def test_icon_is_placed_in_header(app, stub_window, install_service):
     widget.icon_button.click()
     settle(app, widget)
     assert widget.is_panel_visible() is False
+
+
+def test_floating_cat_does_not_cover_icon(app, stub_window, install_service):
+    """
+    Плавающий кот не накладывается на иконку и не сдвигает её.
+
+    Кот встаёт в правом нижнем углу, поднятый над статус-баром: там
+    иконка. Перетаскивание кота иконку не трогает.
+    """
+    install_service.update({"agent": {"show_floating": True}})
+    widget = install_agent(stub_window, client_factory=lambda: None)
+    app.processEvents()
+
+    icon = widget.icon_button
+    assert icon is not None
+    position = icon.mapTo(stub_window, icon.rect().topLeft())
+
+    cat = widget.floating
+    assert cat is not None
+    cat_bottom = cat.y() + cat.height()
+    icon_top = icon.mapToGlobal(icon.rect().topLeft()).y()
+    assert cat_bottom <= icon_top, "кот перекрывает иконку агента"
+
+    # Перетаскивание кота иконку не двигает.
+    cat.move(200, 200)
+    app.processEvents()
+    assert icon.mapTo(stub_window, icon.rect().topLeft()) == position
+    assert icon.parentWidget() is stub_window.statusBar()
 
 
 def test_panel_has_all_parts(app, stub_window, install_service):

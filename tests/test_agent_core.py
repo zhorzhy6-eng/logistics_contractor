@@ -39,7 +39,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.agent.agent import Agent, AgentContext  # noqa: E402
 from core.agent.llm import SafeChat  # noqa: E402
 from core.agent.memory import AgentMemory, Message  # noqa: E402
-from core.agent.personas import DEFAULT_PERSONA, PERSONAS, persona  # noqa: E402
+from core.agent.personas import (  # noqa: E402
+    DEFAULT_PERSONA, PERSONAS, persona, persona_keys,
+)
 from core.agent.prompt import build_system_prompt, load_prompt_template  # noqa: E402
 from core.agent.tools import Tool, ToolRegistry  # noqa: E402
 
@@ -588,13 +590,28 @@ def test_broken_repository_does_not_break_dialog():
 # 4. Образы и промпт
 # ─────────────────────────────────────────────────────────────
 
-def test_personas_are_four_and_have_tone():
-    """Четыре образа, у каждого свой тон и описание."""
-    assert set(PERSONAS) == {"cat_scientist", "cat_logist", "cat_keeper", "neutral"}
+def test_personas_are_five_and_have_tone():
+    """Пять образов, у каждого свой тон и описание."""
+    assert set(PERSONAS) == {"cat_scientist", "cat_logist", "cat_detective",
+                             "cat_keeper", "neutral"}
     for key, item in PERSONAS.items():
         assert item.tone.strip(), key
         assert item.description.strip(), key
         assert item.prompt_block(), key
+
+
+def test_persona_keys_and_avatar_keys_match():
+    """
+    У каждого образа есть свой рисунок — и наоборот.
+
+    Qt здесь не поднимаем: сверяются только списки ключей (рисунок образа
+    проверяет tests/test_agent_dialogs.py). Наборы обязаны совпадать: образ
+    из настроек, для которого нет рисунка, молча показал бы учёного кота,
+    а «висячий» ключ рисования было бы невозможно выбрать в списке.
+    """
+    from ui.agent_avatar import avatar_keys
+
+    assert set(avatar_keys()) == set(persona_keys())
 
 
 def test_persona_falls_back_to_default():

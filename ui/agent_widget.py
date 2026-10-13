@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Виджет Максимилиана: иконка в углу, выезжающая панель, плавающий кот
-(задание, часть D.1).
+Виджет Максимилиана: иконка в правом нижнем углу, выезжающая панель,
+плавающий кот (задание, часть D.1).
 
 Три части, каждая включается настройками:
 
-  * ``AgentIconButton`` — маленький кот в углу окна (D.1.1). Клик
-    открывает и закрывает панель;
+  * ``AgentIconButton`` — маленький кот в правом нижнем углу окна (D.1.1),
+    в статус-баре. Клик открывает и закрывает панель;
   * ``AgentPanel`` — панель справа шириной ~350 px, выезжает анимацией
     200 мс (D.1.2): аватар, история диалога, поле ввода, «Отправить»;
   * ``FloatingCat`` — плавающий кот в правом нижнем углу (D.1.3):
@@ -280,7 +280,7 @@ def ask_confirmation(tool: Tool, arguments: Dict[str, Any], parent=None,
 # ─────────────────────────────────────────────────────────────
 
 class AgentIconButton(QToolButton):
-    """Маленький кот в углу окна: клик открывает и закрывает панель."""
+    """Маленький кот в правом нижнем углу окна: клик открывает панель."""
 
     def __init__(self, persona_key: str = DEFAULT_PERSONA, parent=None):
         super().__init__(parent)
@@ -358,9 +358,16 @@ class FloatingCat(QWidget):
         super().mouseReleaseEvent(event)
 
     def move_to_corner(self, window: Optional[QWidget] = None) -> None:
-        """Ставит кота в правый нижний угол окна (или экрана)."""
+        """
+        Ставит кота в правый нижний угол окна (или экрана).
+
+        Кот поднимается НАД статус-баром: в его правом краю живёт иконка
+        Максимилиана, и накладываться на неё кот не должен (F.3).
+        """
+        reserved = 0
         if window is not None and window.isVisible():
             frame = window.frameGeometry()
+            reserved = _status_bar_height(window)
         else:
             screen = QApplication.primaryScreen()
             frame = screen.availableGeometry() if screen else None
@@ -368,7 +375,7 @@ class FloatingCat(QWidget):
             return
         self.move(
             frame.right() - FLOATING_SIZE - 16,
-            frame.bottom() - FLOATING_SIZE - 16,
+            frame.bottom() - FLOATING_SIZE - 16 - reserved,
         )
 
 
@@ -730,19 +737,16 @@ class AgentWidget(QObject):
         )
 
     def _ensure_icon(self, needed: bool, persona_key: str) -> None:
-        """Создаёт иконку в углу окна, если её ещё нет."""
+        """Создаёт иконку в правом нижнем углу окна, если её ещё нет."""
         if self.icon_button is None:
             if not needed:
                 return
             self.icon_button = AgentIconButton(persona_key, self.window)
             self.icon_button.clicked.connect(self.toggle_panel)
             if not _place_icon(self.window, self.icon_button):
-                # Шапку найти не удалось (другой каркас окна) — иконка
-                # переезжает в статус-бар: агент должен быть доступен.
-                status = getattr(self.window, "statusBar", None)
-                if callable(status):
-                    status().addPermanentWidget(self.icon_button)
-                else:
+                # Статус-бара нет (нестандартный каркас окна) — иконка
+                # переезжает в шапку: агент должен быть доступен.
+                if not _place_icon_in_header(self.window, self.icon_button):
                     logger.warning("Не удалось разместить иконку Максимилиана")
         self.icon_button.set_persona(persona_key)
 
@@ -1257,16 +1261,42 @@ def _current_thread():
 
 def _place_icon(window: QWidget, button: QWidget) -> bool:
     """
-    Ставит иконку в шапку окна (перед селектором типа договора).
+    Ставит иконку в ПРАВЫЙ НИЖНИЙ угол окна — в статус-бар.
 
-    Шапка есть у всех окон (QFrame с именем «appHeader»), но её раскладка
-    не сохраняется атрибутом, поэтому ищем её по имени объекта и вставляем
-    кнопку предпоследней — левее кнопок действий. Не нашли — False, и
-    вызывающий код уводит иконку в статус-бар.
+    Статус-бар и есть нижняя полоса окна: ``addPermanentWidget`` кладёт
+    кнопку в его правый край, а раскладка Qt сама резервирует под неё
+    место. Поэтому иконка ничего не перекрывает — ни сообщения «Готово»,
+    ни полосу прогресса, ни кнопки внизу формы, ни таблицы вкладок (в
+    отличие от накладки поверх содержимого), — и остаётся на месте, пока
+    оператор таскает плавающего кота.
+
+    Возвращает False, если статус-бара нет (нестандартный каркас окна):
+    тогда вызывающий код пробует шапку — агент должен быть доступен.
+    """
+    status = getattr(window, "statusBar", None)
+    if callable(status):
+        bar = status()
+        if bar is not None:
+            bar.addPermanentWidget(button)
+            if not bar.isVisible():
+                # Бар мог быть создан уже после показа окна: сам по себе он
+                # остаётся скрытым, и иконка была бы не видна. Показываем —
+                # окна проекта статус-бар не прячут.
+                bar.show()
+            return True
+    return False
+
+
+def _place_icon_in_header(window: QWidget, button: QWidget) -> bool:
+    """
+    Запасной вариант: иконка встаёт в шапку окна (перед кнопками действий).
+
+    Нужен только окнам без статус-бара. Шапка есть у всех окон (QFrame с
+    именем «appHeader»), но её раскладка не сохраняется атрибутом, поэтому
+    ищем её по имени объекта. Не нашли — False, и вызывающий код пишет
+    предупреждение в лог.
     """
     try:
-        from PyQt5.QtWidgets import QFrame
-
         header = window.findChild(QFrame, "appHeader")
         if header is None:
             return False
@@ -1275,9 +1305,26 @@ def _place_icon(window: QWidget, button: QWidget) -> bool:
             return False
         layout.insertWidget(max(0, layout.count() - 1), button)
         return True
-    except Exception as e:  # noqa: BLE001 — не нашли шапку, найдём статус-бар
+    except Exception as e:  # noqa: BLE001 — не нашли шапку, сообщим в лог
         logger.warning("Иконка Максимилиана не встала в шапку: %s", e)
         return False
+
+
+def _status_bar_height(window: QWidget) -> int:
+    """
+    Высота статус-бара окна (0 — бара нет).
+
+    Нужна плавающему коту: в правом краю статус-бара живёт иконка агента,
+    и кот не должен её закрывать (задание, часть F.3). Пока раскладка не
+    прошла, ``height()`` ещё не настоящая — берём запрошенную высоту.
+    """
+    status = getattr(window, "statusBar", None)
+    if not callable(status):
+        return 0
+    bar = status()
+    if bar is None:
+        return 0
+    return max(0, int(bar.height()), int(bar.sizeHint().height()))
 
 
 def _panel_host(window: QWidget) -> Optional[QWidget]:

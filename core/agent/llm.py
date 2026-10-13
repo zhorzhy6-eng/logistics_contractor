@@ -35,6 +35,35 @@ logger = logging.getLogger("core.agent.llm")
 MASKED_ROLES = ("user", "tool")
 
 
+def ensure_client(client: Any) -> Any:
+    """
+    Проверяет, что пришёл ЭКЗЕМПЛЯР клиента, а не класс.
+
+    Ловушка, из-за которой Максимилиан отвечал «missing 1 required
+    positional argument: 'self'»: в сборку попадал сам класс
+    ``GigaChatClient``. У класса метод ``complete_chat`` остаётся функцией,
+    и первый аргумент ``self`` никто не подставляет — вызов падает уже
+    в момент запроса, когда оператор ждёт ответ.
+
+    Проверка стоит на входе в диалоговый слой: ошибиться в сборке (ui)
+    дёшево, а диагностировать потом дорого, поэтому падаем сразу и с
+    рецептом.
+
+    :return: тот же объект, если он пригоден для запроса.
+    """
+    if isinstance(client, type):
+        raise TypeError(
+            f"Передан класс {client.__name__} вместо экземпляра. "
+            f"Создайте: client = {client.__name__}(...)"
+        )
+    if not callable(getattr(client, "complete_chat", None)):
+        raise TypeError(
+            f"У клиента {type(client).__name__} нет метода complete_chat — "
+            "нужен экземпляр GigaChatClient или подставной объект с этим методом"
+        )
+    return client
+
+
 class SafeChat:
     """
     Обёртка над клиентом GigaChat: маскирование до запроса, снятие после.
@@ -53,7 +82,7 @@ class SafeChat:
     """
 
     def __init__(self, client: Any):
-        self.client = client
+        self.client = ensure_client(client)
         self._pseudonymizer = Pseudonymizer()
         self._mapping: Dict[str, str] = {}
 
@@ -193,4 +222,4 @@ class SafeChat:
         return parsed
 
 
-__all__ = ["MASKED_ROLES", "SafeChat"]
+__all__ = ["MASKED_ROLES", "SafeChat", "ensure_client"]

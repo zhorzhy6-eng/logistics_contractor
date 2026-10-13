@@ -275,13 +275,30 @@ def test_broken_file_uses_defaults(settings_path):
 # ─────────────────────────────────────────────────────────────
 
 def test_project_settings_file_has_agent_section():
-    """В config/settings.json раздел agent есть и читается (часть E.1)."""
+    """
+    В config/settings.json раздел agent есть, полон и читается (часть E.1).
+
+    Значения НЕ сравниваются с умолчаниями: файл рабочий, оператор меняет его
+    из диалога настроек (образ, режим, показ кота), и прогон не должен
+    краснеть из-за выбранного образа. Что умолчания на месте — проверяет
+    `test_example_settings_file_is_valid` по файлу-образцу, который лежит
+    в репозитории.
+    """
+    from core.agent.personas import persona_keys
+    from core.settings_service import AGENT_MODES
+
     project_settings = PROJECT_ROOT / "config" / "settings.json"
     data = json.loads(project_settings.read_text(encoding="utf-8"))
     assert "agent" in data, "раздел agent должен быть в рабочем файле настроек"
-    # Значения совпадают с умолчаниями (оператор их не менял).
-    for key, value in DEFAULT_AGENT_SETTINGS.items():
-        assert data["agent"].get(key, value) == value, key
+
+    agent = data["agent"]
+    for key in DEFAULT_AGENT_SETTINGS:
+        assert key in agent, f"в рабочем файле нет настройки {key!r}"
+
+    assert agent["avatar"] in persona_keys(), agent["avatar"]
+    assert agent["mode"] in AGENT_MODES, agent["mode"]
+    assert isinstance(agent["max_history"], int)
+    assert isinstance(agent["max_tool_steps"], int)
 
 
 def test_example_settings_file_is_valid():
