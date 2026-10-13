@@ -46,7 +46,14 @@
     вывод в UTF-8 (консоль cp1251 падала `UnicodeEncodeError` на стрелках «→»
     в `verdict`, то есть в самом конце многочасового прогона). +5 тестов.
     Размеры подмножеств: паспорт 400, тип ТС 275, банк/директора 108, место
-    рождения 135 — всего 918 запросов, ~4,8 ч при паузе 19 с.
+    рождения 135 — всего 918 запросов, ~4,8 ч при паузе 19 с. Проверка
+    полноты (`tests/_tmp/_probe_coverage.py`): объединение четырёх выборок —
+    660 сценариев, и ВНЕ них не осталось ни одного сценария с полями
+    `driver.passport_series`, `driver.passport_number`,
+    `vehicles.vehicle_type`, `carrier.bank_name`, `carrier.director_name`,
+    `customer.director_name`, `customer.bank_name`, `driver.birth_place`,
+    `driver.passport_code`, `carrier.bank_account` — то есть замер
+    переспросит ровно все сценарии, которых касаются пять правок.
   - **ЧАСТЬ 0 — СЕТЬ (ограничение ночи).** Около 00:45 13.10.2026 хост
     `api.giga.chat` (155.212.234.167) перестал принимать соединения: TCP 443 —
     `ConnectTimeout`, при этом OAuth-хост `ngw.devices.sberbank.ru` и старый
