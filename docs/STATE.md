@@ -53,7 +53,12 @@
     `gigachat.devices.sberbank.ru/api/v1` отвечают. На старом хосте есть
     `GET /models` (200) и модели `GigaChat-2*`, `GigaChat-Pro/Max`, но **нет
     ни одной модели поколения 3** — замер на них сломал бы сравнимость с
-    baseline (`GigaChat-3-Pro`). Поэтому сделан ожидающий перезапрос:
+    baseline (`GigaChat-3-Pro`). Замеры состояния сети в 03:26: ICMP-эхо не
+    приходит, порты 80 и 443 — ConnectTimeout, `tracert` обрывается после
+    пятого хопа (последний ответивший — 91.212.121.213), то есть потеря
+    маршрута за пределами машины и провайдерского узла, а не настройка
+    локального окружения. Публичные DNS (dns.google, cloudflare-dns.com) и
+    api.github.com при этом доступны. Поэтому сделан ожидающий перезапрос:
     `tests/_tmp/_reask_chain.py` (ждёт сеть, требует ЧИСТОЕ дерево, пишет
     `git rev-parse HEAD` перед каждой партией, замок по PID против двойного
     запуска) + дублирующая задача планировщика
@@ -158,7 +163,13 @@
     `_probe_alt_host.py`, `_probe_alt_models.py`, `_probe_alive.py`,
     `_probe_vehicle_local.py` + `_vehicle_type_local.txt`,
     `_reask_chain.py` + `_reask_chain.log`, `_reask_when_online.py`,
+    `_after_measure.py` (итог замера: `--report` + «было -> стало» по 10 полям
+    в `tests/_tmp/_after_measure_report.txt`), `_watch_measure.py`,
+    `_probe_next_bugs.py` + `_next_bugs.txt`,
+    `_probe_passport_code_context.py` + `_passport_code_context.txt`,
     `_split_task2_commit.py`, `_run_night4_chunked.ps1` + `_night4_full_chunk1..4.log`.
+    Отдельным коммитом `a88a9ce` починен прогонщик: `--report` не пробрасывал
+    `--compare-with` / `--compare-fields` в `main_report` (argparse падал).
 
 ### ШАГ «Метрики 1000 и разбор ошибок» (12.10.2026)
 
