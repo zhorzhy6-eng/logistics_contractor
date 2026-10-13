@@ -213,12 +213,32 @@ def token_name(token: str) -> str:
 
 
 def _mapping_index(mapping: Dict[str, str]) -> Dict[str, str]:
-    """Индекс «нормализованное имя токена → оригинал» для быстрого поиска."""
+    """
+    Индекс «нормализованное имя токена → оригинал» для быстрого поиска.
+
+    Кроме точных имён в индекс попадают «шаблонные» варианты, и только когда
+    семья токенов ОДНОЗНАЧНА (в тексте ровно один токен этого вида):
+    ``<<PERSON>>`` и ``<<PERSON_N>>`` для единственного ``<<PERSON_1>>``.
+    Так модель иногда возвращает имя токена: в промпте оно показано образцом
+    вида ``<<PASSPORT_SERIES_N>>``, и модель копирует букву вместо цифры из
+    текста. Если токенов одного вида несколько, подставлять нечего —
+    неоднозначное имя не восстанавливается (значения не выдумываются).
+    """
     index: Dict[str, str] = {}
+    families: Dict[str, List[str]] = {}
     for token, value in (mapping or {}).items():
         name = token_name(token)
-        if name and name not in index:
-            index[name] = "" if value is None else str(value)
+        if not name or name in index:
+            continue
+        index[name] = "" if value is None else str(value)
+        family = name.rsplit("_", 1)[0] if "_" in name else name
+        families.setdefault(family, []).append(name)
+    for family, names in families.items():
+        if len(names) != 1:
+            continue
+        value = index[names[0]]
+        index.setdefault(family, value)
+        index.setdefault(family + "_N", value)
     return index
 
 

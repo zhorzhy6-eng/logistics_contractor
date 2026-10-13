@@ -679,6 +679,41 @@ def test_describe_reports_passport_families_without_values(pseudo):
         assert secret not in described
 
 
+# ── Имя токена, скопированное из промпта («..._N») ────────────
+# В промпте имя показано образцом вида <<PASSPORT_SERIES_N>>, и модель
+# иногда копирует букву вместо цифры из текста. Если токен этого вида в
+# тексте ОДИН, восстановление однозначно; если их несколько — подставлять
+# нечего, значение не выдумывается.
+
+@pytest.mark.parametrize("form", [
+    "<<PASSPORT_SERIES_1>>", "<<PASSPORT_SERIES_N>>", "<<PASSPORT_SERIES>>",
+    "<<PASSPORT_NUMBER_1>>", "<<PASSPORT_NUMBER_N>>", "<<PASSPORT_NUMBER>>",
+])
+def test_template_token_name_is_restored_when_unambiguous(pseudo, form):
+    _, mapping = pseudo.anonymize("Паспорт: 58 38 312160")
+    expected = "58 38" if "SERIES" in form else "312160"
+    assert pseudo.restore(form, mapping) == expected
+
+
+def test_template_token_name_is_not_guessed_when_ambiguous(pseudo):
+    """Два паспорта — какое имя имела в виду модель, неизвестно."""
+    text = "Паспорт: 58 38 312160\nПаспорт: 61 42 445566"
+    _, mapping = pseudo.anonymize(text)
+    assert pseudo.restore("<<PASSPORT_SERIES_N>>", mapping) == ""
+    assert pseudo.restore("<<PASSPORT_NUMBER_N>>", mapping) == ""
+    # А точные имена восстанавливаются как обычно.
+    assert pseudo.restore("<<PASSPORT_SERIES_2>>", mapping) == "61 42"
+    assert pseudo.restore("<<PASSPORT_NUMBER_2>>", mapping) == "445566"
+
+
+def test_template_person_token_is_not_guessed_when_ambiguous(pseudo):
+    text = "Водитель: Иванов Иван Иванович. Директор: Петров Пётр Петрович"
+    _, mapping = pseudo.anonymize(text)
+    assert pseudo.restore("<<PERSON_N>>", mapping) == ""
+    assert pseudo.restore("<<PERSON_1>>", mapping) == "Иванов Иван Иванович"
+    assert pseudo.restore("<<PERSON_2>>", mapping) == "Петров Пётр Петрович"
+
+
 # ─────────────────────────────────────────────────────────────
 # Слой Natasha (опциональный)
 # ─────────────────────────────────────────────────────────────
