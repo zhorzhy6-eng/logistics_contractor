@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Договоры и точки маршрута — таблицы contracts и contract_points.
 
@@ -18,6 +18,7 @@ save_contract_with_details() — одна транзакция на догово
 
 import logging
 import sqlite3
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 from db.connection import get_connection
@@ -161,9 +162,160 @@ def load_contract_points(contract_id: int) -> Dict[str, List[Dict]]:
     return {"loadings": loadings, "unloadings": unloadings}
 
 
+# ─────────────────────────────────────────────────────────────
+# Поиск договоров и сроки (для ИИ-агента «Максимилиан», v1)
+# ─────────────────────────────────────────────────────────────
+# Отдельные функции чтения, а не запросы «на месте» в инструментах агента:
+# правило проекта (AGENTS.md § 4, задание часть B.7) — SQL живёт в db/crud,
+# инструменты только зовут эти функции.
+
+#: Поля договора, которые отдаются наружу вместе с именами сторон.
+CONTRACT_SEARCH_FIELDS = (
+    "c.id", "c.contract_number", "c.contract_date", "c.start_date",
+    "c.end_date", "c.route", "c.price_with_vat", "c.currency",
+    "c.driver_id", "c.customer_id", "c.carrier_id",
+)
+
+#: Имена сторон подставляются подзапросами: JOIN на три таблицы сразу
+#: раздувает выборку, а нужны только названия.
+_SIDE_NAMES_SQL = """
+    (SELECT d.full_name FROM drivers d WHERE d.id = c.driver_id) AS driver_name,
+    (SELECT COALESCE(NULLIF(TRIM(cu.full_name), ''), cu.short_name, '')
+       FROM customers cu WHERE cu.id = c.customer_id) AS customer_name,
+    (SELECT COALESCE(NULLIF(TRIM(ca.full_name), ''), ca.short_name, '')
+       FROM carriers ca WHERE ca.id = c.carrier_id) AS carrier_name
+"""
+
+
+def _iso_date(value: Any) -> str:
+    """
+    Дата договора в ISO (YYYY-MM-DD) — для сравнения в SQL.
+
+    В базе встречаются обе записи: ISO и «01.01.2001». Функция приводит
+    любую разбираемую дату к ISO, а неразбираемую оставляет как есть —
+    сравнение по ней просто не сработает (договор не потеряется из выдачи).
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        from core.dates import to_iso
+        return to_iso(text) or text
+    except Exception:  # noqa: BLE001 — парсер дат не должен ломать поиск
+        return text
+
+
+def search_contracts(
+    search_term: str = "",
+    limit: int = 20,
+    include_names: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Поиск договоров по номеру, дате, маршруту и названиям сторон.
+
+    Пустой запрос отдаёт последние договоры (свежие сверху): агенту нужен
+    обзор, а не пустой список. Регистр по кириллице не важен — сравнение
+    идёт через LIKE, а LIKE в SQLite регистронезависим для латиницы; для
+    кириллицы запрос дополнительно ищется в нижнем регистре обеих сторон.
+
+    :param search_term: номер, дата, маршрут, ФИО водителя, название стороны;
+    :param limit: сколько записей вернуть;
+    :param include_names: добавлять ли имена водителя и сторон.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        columns = ", ".join(CONTRACT_SEARCH_FIELDS)
+        names = ", " + _SIDE_NAMES_SQL if include_names else ""
+        params: List[Any] = []
+
+        where = ""
+        term = str(search_term or "").strip()
+        if term:
+            like = f"%{term}%"
+            where = (
+                "WHERE ("
+                "      COALESCE(c.contract_number, '') LIKE ? "
+                "   OR COALESCE(c.contract_date, '') LIKE ? "
+                "   OR COALESCE(c.start_date, '') LIKE ? "
+                "   OR COALESCE(c.end_date, '') LIKE ? "
+                "   OR COALESCE(c.route, '') LIKE ? "
+                "   OR COALESCE((SELECT d.full_name FROM drivers d "
+                "                WHERE d.id = c.driver_id), '') LIKE ? "
+                "   OR COALESCE((SELECT COALESCE(NULLIF(TRIM(cu.full_name), ''), "
+                "                cu.short_name, '') FROM customers cu "
+                "                WHERE cu.id = c.customer_id), '') LIKE ? "
+                "   OR COALESCE((SELECT COALESCE(NULLIF(TRIM(ca.full_name), ''), "
+                "                ca.short_name, '') FROM carriers ca "
+                "                WHERE ca.id = c.carrier_id), '') LIKE ? "
+                ")"
+            )
+            params.extend([like] * 8)
+
+        cursor.execute(
+            f"SELECT {columns}{names} FROM contracts c {where} "
+            f"ORDER BY c.id DESC LIMIT ?",
+            (*params, max(1, int(limit))),
+        )
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_expiring_contracts(
+    days: int = 30,
+    today: Optional[str] = None,
+    limit: int = 50,
+    include_names: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Договоры, у которых `end_date` истекает в ближайшие `days` дней.
+
+    Уже истёкшие договоры НЕ возвращаются: вопрос оператора — «что скоро
+    закончится», а не «что уже закончилось». Договоры без заполненной
+    `end_date` тоже не возвращаются: сравнивать нечего.
+
+    :param days: горизонт в днях (0 — только сегодняшний день);
+    :param today: «сегодня» в ISO (по умолчанию — системная дата): нужно
+        тестам, чтобы результат не зависел от дня прогона.
+    """
+    base = _iso_date(today) or date.today().isoformat()
+    try:
+        base_date = date.fromisoformat(base)
+    except ValueError:
+        base_date = date.today()
+        base = base_date.isoformat()
+
+    horizon = (base_date + timedelta(days=max(0, int(days)))).isoformat()
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        columns = ", ".join(CONTRACT_SEARCH_FIELDS)
+        names = ", " + _SIDE_NAMES_SQL if include_names else ""
+        cursor.execute(
+            f"SELECT {columns}{names} FROM contracts c "
+            "WHERE TRIM(COALESCE(c.end_date, '')) <> '' "
+            "  AND date(c.end_date) >= date(?) "
+            "  AND date(c.end_date) <= date(?) "
+            "ORDER BY date(c.end_date), c.id LIMIT ?",
+            (base, horizon, max(1, int(limit))),
+        )
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+    finally:
+        conn.close()
+
+
 __all__ = [
+    "CONTRACT_SEARCH_FIELDS",
+    "get_expiring_contracts",
     "load_contract_points",
     "save_contract",
     "save_contract_points",
     "save_contract_with_details",
+    "search_contracts",
 ]

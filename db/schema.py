@@ -17,6 +17,8 @@
 import logging
 import sqlite3
 
+from db.crud import agent_history
+
 logger = logging.getLogger("db.schema")
 
 
@@ -51,6 +53,8 @@ INDEXES = (
     ("idx_counterparties_type",       "counterparties(contract_type)"),
     ("idx_counterparties_role",       "counterparties(contract_type, role)"),
     ("idx_counterparties_active",     "counterparties(is_deleted)"),
+    # История ИИ-агента «Максимилиан» (v1): выборка всегда по сессии.
+    ("idx_agent_history_session",     "agent_history(session_id, id)"),
 )
 
 
@@ -77,6 +81,20 @@ def _index_exists(cursor: sqlite3.Cursor, index_name: str) -> bool:
     cursor.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
         (index_name,),
+    )
+    return cursor.fetchone() is not None
+
+
+def _table_exists(cursor: sqlite3.Cursor, table_name: str) -> bool:
+    """
+    Проверяет, существует ли таблица.
+
+    Нужна миграции: таблицу, добавленную в новой версии (agent_history),
+    на старой базе надо создать, и перед этим делается резервная копия.
+    """
+    cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
     )
     return cursor.fetchone() is not None
 
@@ -282,6 +300,12 @@ def create_all(conn: sqlite3.Connection) -> None:
             UNIQUE(point_type, address)
         )
     """)
+
+    # ── agent_history: история диалога с ИИ-агентом (Максимилиан v1) ──
+    # Таблица агента независима от справочников: агент пишет только сюда и
+    # только свои сообщения. CREATE TABLE IF NOT EXISTS безопасен и на
+    # чистой, и на рабочей базе, поэтому в _needs_migration он не вносится.
+    cursor.execute(agent_history.CREATE_TABLE_SQL)
 
     # ── counterparties: справочник контрагентов (шаг 3 инфраструктуры) ──
     # Таблица независима от carriers/customers и привязана к типу договора

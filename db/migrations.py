@@ -26,7 +26,9 @@ from core.security import backup_size_kb
 from core.security import restrict_to_current_user as _default_restrict
 
 from db import connection, fts, schema
+from db.crud import agent_history
 from db.schema import INDEXES, SOFT_DELETE_TABLES, _column_exists, _index_exists
+from db.schema import _table_exists
 
 logger = logging.getLogger("db.migrations")
 
@@ -88,6 +90,11 @@ def _needs_migration(cursor: sqlite3.Cursor) -> bool:
                     return True
     except Exception:  # noqa: BLE001 — проверка не должна ломать инициализацию
         pass
+
+    # Таблица истории ИИ-агента (Максимилиан v1): её отсутствие — тоже
+    # миграция, поэтому перед первым запуском новой версии делается бэкап.
+    if not _table_exists(cursor, "agent_history"):
+        return True
 
     for index_name, _ in INDEXES:
         if not _index_exists(cursor, index_name):
@@ -243,6 +250,13 @@ def run(
                 logger.info(f"Добавлена колонка address_book.{column}")
             except Exception as e:
                 logger.warning(f"Не удалось добавить {column}: {e}")
+
+    # ── Миграция: история ИИ-агента (Максимилиан v1) ──
+    # Таблица агента отдельная: диалог с Максимилианом не должен попадать
+    # ни в справочники, ни в договоры. Создание идемпотентно (IF NOT EXISTS),
+    # существующие записи не трогаются.
+    if agent_history.ensure_table(conn):
+        logger.info("Таблица agent_history готова (история ИИ-агента)")
 
     # ── Миграция: мягкое удаление (вариант В) ──
     # Существующие записи получают is_deleted = 0, то есть остаются видимыми:

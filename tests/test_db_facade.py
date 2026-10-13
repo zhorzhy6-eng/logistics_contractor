@@ -77,8 +77,13 @@ REQUIRED_NAMES = (
 
 #: Схема чистой базы после init_database(): снимок ДО разбиения файла
 #: (см. «Как пересоздать снимок» в docstring модуля).
-SCHEMA_SHA256 = "876068222aeeb206629ef97d51a8ee1ae6664973b4bbc57967bbd041db244305"
-SCHEMA_OBJECTS = 57
+#:
+#: Обновлён 13.10.2026 шагом «Максимилиан v1»: осознанно добавлены таблица
+#: agent_history и её индекс idx_agent_history_session (история диалога
+#: с ИИ-агентом), поэтому 57 → 59 объектов. Колонки существующих таблиц не
+#: менялись — SCHEMA_COLUMNS прежний.
+SCHEMA_SHA256 = "600045f745eb599a83cf96e4c3da2b90c61967d73ab4e4d5e211f3149aedbf99"
+SCHEMA_OBJECTS = 59
 SCHEMA_COLUMNS = {
     "drivers": 19, "customers": 20, "carriers": 22, "vehicles": 9,
     "driver_vehicles": 10, "driver_carriers": 6, "contracts": 17,
@@ -87,8 +92,9 @@ SCHEMA_COLUMNS = {
 
 #: Модули пакета db/ (кроме фасада) — в них не должно быть импорта фасада.
 DB_MODULES = (
-    "connection", "schema", "migrations", "salons", "fts",
-    "crud.addresses", "crud.carriers", "crud.contracts", "crud.customers",
+    "agent_queries", "connection", "schema", "migrations", "salons", "fts",
+    "crud.addresses", "crud.agent_history", "crud.carriers",
+    "crud.contracts", "crud.customers",
     "crud.counterparties", "crud.drivers", "crud.organizations",
     "crud.search", "crud.vehicles",
 )

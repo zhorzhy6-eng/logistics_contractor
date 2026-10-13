@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Память диалога Максимилиана (задание, части A.4 и F).
+
+Две стороны одной вещи:
+
+  * в ПАМЯТИ — список последних сообщений (по умолчанию 20), из которого
+    собирается запрос к GigaChat;
+  * в БАЗЕ — таблица ``agent_history`` (db/crud/agent_history.py), чтобы
+    история пережила перезапуск программы.
+
+Сессия = один запуск программы (``session_id``). Новая сессия — новая
+история; чистка старых сессий — отдельная операция (кнопка в настройках).
+
+Важное про персональные данные: в истории хранятся НАСТОЯЩИЕ значения —
+это данные оператора в его собственной локальной базе, и без них панель
+не смогла бы показать диалог после перезапуска. Наружу (в GigaChat) уходит
+только маска: её ставит core/agent/llm.py перед каждым запросом, а
+восстановление оригиналов в ответе делает он же. В логи ни текст диалога,
+ни значения полей не пишутся.
+"""
+
+import logging
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence
+
+logger = logging.getLogger("core.agent.memory")
+
+#: Сколько сообщений помним по умолчанию (задание, часть A.4).
+DEFAULT_MAX_HISTORY = 20
+
+#: Роли, которые понимает GigaChat.
+WIRE_ROLES = ("system", "user", "assistant", "tool")
+
+
+def new_session_id() -> str:
+    """
+    Идентификатор сессии — новый на каждый запуск программы.
+
+    Случайный, а не по времени: две сессии в одну секунду (перезапуск)
+    не должны склеиться в одну историю.
+    """
+    return uuid.uuid4().hex[:12]
+
+
+@dataclass
+class Message:
+    """Одно сообщение истории."""
+
+    role: str
+    content: str = ""
+    tool_name: Optional[str] = None
+    #: Вызовы инструментов в ответе модели (только для role="assistant").
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    #: ID вызова, на который отвечает сообщение role="tool".
+    tool_call_id: Optional[str] = None
+
+    def wire(self) -> Dict[str, Any]:
+        """
+        Сообщение в формате запроса к GigaChat.
+
+        Пустые необязательные поля не добавляются: GigaChat строг к составу
+        сообщения, а лишний ``tool_calls: []`` у пользовательского сообщения
+        ломает запрос.
+        """
+        item: Dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.role == "assistant" and self.tool_calls:
+            item["tool_calls"] = self.tool_calls
+        if self.role == "tool":
+            item["name"] = self.tool_name or "tool"
+            if self.tool_call_id:
+                item["tool_call_id"] = self.tool_call_id
+        return item
+
+
+def _as_text(value: Any, limit: int = 4000) -> str:
+    """Строка из любого значения с ограничением длины (защита от «полотна»)."""
+    text = "" if value is None else str(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
+
+
+class AgentMemory:
+    """
+    История диалога: в памяти — последние N сообщений, в базе — все.
+
+    Репозиторий (``repository``) — необязательный объект с методами
+    ``append``/``load``/``clear_session``/``purge_other_sessions``. По
+    умолчанию берётся db/crud/agent_history.py, но его можно подменить
+    (нужно тестам, чтобы не поднимать базу).
+
+    Любая ошибка записи в базу не прерывает диалог: история остаётся
+    доступной в памяти (в лог идёт предупреждение).
+    """
+
+    def __init__(
+        self,
+        session_id: Optional[str] = None,
+        max_history: int = DEFAULT_MAX_HISTORY,
+        repository: Any = None,
+        autoload: bool = True,
+    ):
+        self.session_id = str(session_id or new_session_id())
+        self.max_history = max(1, int(max_history))
+        self._repository = repository
+        self._messages: List[Message] = []
+
+        if autoload:
+            self.load()
+
+    # ---------------------------------------------------------
+    # Репозиторий
+    # ---------------------------------------------------------
+    @property
+    def repository(self) -> Any:
+        """Репозиторий истории: подставной или таблица agent_history."""
+        if self._repository is None:
+            from db.crud import agent_history
+
+            self._repository = agent_history
+        return self._repository
+
+    # ---------------------------------------------------------
+    # Чтение
+    # ---------------------------------------------------------
+    def load(self) -> List[Message]:
+        """
+        Загружает историю текущей сессии из базы.
+
+        В память берутся последние ``max_history`` записей. Загруженные
+        сообщения возвращаются, а не только кладутся в память: панели нужно
+        сразу показать диалог после перезапуска.
+        """
+        try:
+            rows = self.repository.load(self.session_id, self.max_history + 1)
+        except Exception as e:  # noqa: BLE001 — история не должна ронять панель
+            logger.warning("История агента не загружена: %s", e)
+            return []
+
+        restored = [self._from_row(row) for row in rows or ()]
+        # Хвост мог оборваться на промежуточном шаге работы инструментов
+        # (историю обрезали по лимиту или закрыли программу посреди ответа):
+        # «висячие» результаты инструментов в начало не ставим — GigaChat
+        # такой истории не примет (см. wire_messages).
+        self._messages = restored[-self.max_history:]
+        self._messages = self._complete_tail(self._messages)
+        return list(self._messages)
+
+    def _complete_tail(self, messages: List[Message]) -> List[Message]:
+        """
+        Убирает из начала «висячие» сообщения инструментов.
+
+        Сообщение role="tool" обязано идти после вызова инструмента моделью.
+        Если начало истории обрезано и первым идёт результат инструмента,
+        запрос к GigaChat будет отвергнут — такие сообщения отбрасываются.
+        """
+        index = 0
+        while index < len(messages) and messages[index].role == "tool":
+            index += 1
+        return messages[index:]
+
+    @staticmethod
+    def _from_row(row: Dict[str, Any]) -> Message:
+        """Запись базы → сообщение. Формат записи описан в db/crud/agent_history.py."""
+        role = str(row.get("role") or "").strip()
+        content = str(row.get("content") or "")
+        tool_name = row.get("tool_name") or None
+
+        # Запись ассистента с вызовами инструментов писалась JSON-ом в
+        # tool_name — так таблица осталась в схеме задания (F.1).
+        tool_calls: List[Dict[str, Any]] = []
+        if role == "assistant" and tool_name:
+            import json
+
+            try:
+                loaded = json.loads(str(tool_name))
+            except (TypeError, ValueError):
+                loaded = None
+            if isinstance(loaded, list):
+                tool_calls = [call for call in loaded if isinstance(call, dict)]
+                tool_name = None
+
+        return Message(role=role, content=content, tool_name=tool_name,
+                       tool_calls=tool_calls)
+
+    @property
+    def messages(self) -> List[Message]:
+        """История в памяти (копия списка)."""
+        return list(self._messages)
+
+    @property
+    def is_empty(self) -> bool:
+        """Диалог ещё не начинался."""
+        return not self._messages
+
+    def wire_messages(self, system_prompt: str = "") -> List[Dict[str, Any]]:
+        """
+        История в формате запроса к GigaChat.
+
+        Системный промпт идёт первым (если задан). Незавершённый хвост
+        отбрасывается: ответ ассистента с вызовами инструментов без
+        результатов этих вызовов GigaChat не принимает, а обрыв случается
+        штатно — например, оператор закрыл программу посреди ответа.
+        """
+        wire: List[Dict[str, Any]] = []
+        if system_prompt:
+            wire.append({"role": "system", "content": system_prompt})
+
+        # Начало незавершённого блока: ответ ассистента с вызовами и ответы
+        # инструментов на них. Если блок не закрылся — он в запрос не идёт.
+        block_start: Optional[int] = None
+        answered: set = set()
+
+        for message in self._messages:
+            if block_start is not None and message.role != "tool":
+                # Блок закрылся: все вызовы получили ответы (иначе — выбросить).
+                if not self._all_answered(self._messages[block_start], answered):
+                    del wire[block_start:]
+                block_start = None
+                answered = set()
+
+            if message.role == "assistant" and message.tool_calls:
+                block_start = len(wire)
+                answered = set()
+
+            if message.role == "tool" and message.tool_call_id:
+                answered.add(message.tool_call_id)
+
+            wire.append(message.wire())
+
+        if block_start is not None and not self._all_answered(
+            self._messages[-1], answered
+        ):
+            del wire[block_start:]
+        return wire
+
+    @staticmethod
+    def _all_answered(assistant: Optional[Message], answered: set) -> bool:
+        """Все ли вызовы инструментов этого ответа получили результат."""
+        if assistant is None or not assistant.tool_calls:
+            return True
+        expected = {
+            str(call.get("id") or "")
+            for call in assistant.tool_calls
+            if isinstance(call, dict)
+        }
+        expected.discard("")
+        return expected.issubset(answered)
+
+    # ---------------------------------------------------------
+    # Запись
+    # ---------------------------------------------------------
+    def add(self, role: str, content: str, tool_name: Optional[str] = None,
+            tool_calls: Optional[Sequence[Dict[str, Any]]] = None,
+            tool_call_id: Optional[str] = None,
+            persist: bool = True) -> Message:
+        """
+        Добавляет сообщение в память (и, по умолчанию, в базу).
+
+        :param persist: False — сообщение нужно только для текущего запроса
+            (промежуточные результаты инструментов в истории не сохраняются).
+        """
+        role_value = str(role or "").strip()
+        if role_value not in WIRE_ROLES:
+            logger.warning("Память агента: неизвестная роль %r — пропущено", role)
+            return Message(role="assistant", content="")
+
+        message = Message(
+            role=role_value,
+            content=_as_text(content),
+            tool_name=tool_name,
+            tool_calls=[dict(call) for call in (tool_calls or ())],
+            tool_call_id=tool_call_id,
+        )
+        self._messages.append(message)
+        self._trim()
+
+        if persist:
+            self._persist(message)
+        return message
+
+    def _persist(self, message: Message) -> None:
+        """Пишет сообщение в базу; ошибка не прерывает диалог."""
+        tool_name = message.tool_name
+        if message.role == "assistant" and message.tool_calls:
+            import json
+
+            tool_name = json.dumps(message.tool_calls, ensure_ascii=False)
+        try:
+            self.repository.append(
+                self.session_id, message.role, message.content, tool_name=tool_name
+            )
+        except Exception as e:  # noqa: BLE001 — база не должна ронять диалог
+            logger.warning("Сообщение агента не сохранено: %s", e)
+
+    def _trim(self) -> None:
+        """Оставляет последние ``max_history`` сообщений."""
+        if len(self._messages) > self.max_history:
+            self._messages = self._messages[-self.max_history:]
+
+    # ---------------------------------------------------------
+    # Очистка
+    # ---------------------------------------------------------
+    def clear(self) -> int:
+        """
+        Очищает историю ТЕКУЩЕЙ сессии (кнопка «Очистить историю»).
+
+        :return: сколько записей удалено из базы (-1 — не удалось)
+        """
+        self._messages = []
+        try:
+            return int(self.repository.clear_session(self.session_id))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("История агента не очищена: %s", e)
+            return -1
+
+    def purge_other_sessions(self) -> int:
+        """Удаляет истории прошлых сессий (кнопка в настройках)."""
+        try:
+            return int(self.repository.purge_other_sessions(self.session_id))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Старые сессии агента не удалены: %s", e)
+            return -1
+
+
+__all__ = [
+    "DEFAULT_MAX_HISTORY",
+    "WIRE_ROLES",
+    "AgentMemory",
+    "Message",
+    "new_session_id",
+]

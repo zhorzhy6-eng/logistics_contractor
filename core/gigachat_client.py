@@ -1145,6 +1145,163 @@ class GigaChatClient:
         return truncated
 
     @staticmethod
+    def complete_chat(
+        self,
+        messages: list,
+        tools: Optional[list] = None,
+        temperature: float = 0.2,
+        max_tokens: Optional[int] = None,
+        retries: Optional[int] = None,
+    ) -> dict:
+        """
+        Один запрос в режиме диалога (function calling) — для ИИ-агента.
+
+        Отличие от recognize_text: наружу отдаётся СООБЩЕНИЕ модели как есть
+        (текст + запрошенные вызовы инструментов), а не разобранный JSON.
+        Поэтому здесь НЕТ ни парсинга ответа, ни восстановления плейсхолдеров:
+        маскированием и восстановлением занимается агент
+        (core/agent/llm.py) — у него маппинг живёт на всю сессию, а не на
+        один запрос.
+
+        Логика сети, повторов, 401/429/5xx и таймаутов — та же, что у
+        recognize_text: клиент остаётся единственным местом, где живут
+        адрес API, токен и правила повторов.
+
+        messages — список сообщений в формате OpenAI-совместимого API
+        (``{"role": "system"|"user"|"assistant"|"tool", "content": …}``);
+        tools — список описаний функций в формате JSON Schema.
+
+        :return: словарь сообщения модели: ``{"role": "assistant",
+            "content": str, "tool_calls": list}``.
+        """
+        max_retries = self.MAX_RETRIES if retries is None else max(0, int(retries))
+
+        payload = {
+            "model": self.model,
+            "messages": list(messages or []),
+            "temperature": temperature,
+            "max_tokens": int(max_tokens or self.MAX_TOKENS),
+        }
+        if tools:
+            payload["tools"] = list(tools)
+            # Выбор инструмента оставляем за моделью: жёсткий tool_choice
+            # заставлял бы её звать функцию даже на «что такое ИНН?».
+            payload["tool_choice"] = "auto"
+
+        url = f"{self.BASE_URL}/chat/completions"
+        logger.info(
+            "GigaChat (агент): сообщений=%s, инструментов=%s",
+            len(payload["messages"]), len(tools or ()),
+        )
+
+        auth_retry_used = False
+        retry_index = 0
+
+        for attempt in range(max_retries + 1):
+            token = self._get_token()
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+            try:
+                resp = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=self.timeout,
+                    verify=self._verify(),
+                )
+            except requests.exceptions.Timeout as exc:
+                if attempt < max_retries:
+                    delay = self._backoff_delay(retry_index)
+                    retry_index += 1
+                    logger.warning(
+                        f"GigaChat (агент): таймаут ({self.timeout} сек), "
+                        f"повтор через {delay:.0f} сек"
+                    )
+                    interruptible_sleep(delay, None)
+                    continue
+                raise RuntimeError(
+                    f"GigaChat: превышено время ожидания ({self.timeout} сек) "
+                    f"после {max_retries + 1} попыток"
+                ) from exc
+            except requests.exceptions.SSLError as exc:
+                raise _request_error(exc, "/chat/completions") from exc
+            except requests.exceptions.ConnectionError as exc:
+                if attempt < max_retries:
+                    delay = self._backoff_delay(retry_index)
+                    retry_index += 1
+                    logger.warning(
+                        f"GigaChat (агент): ошибка соединения, повтор через "
+                        f"{delay:.0f} сек"
+                    )
+                    interruptible_sleep(delay, None)
+                    continue
+                raise _request_error(exc, "/chat/completions") from exc
+            except (requests.exceptions.RequestException, OSError) as exc:
+                raise _request_error(exc, "/chat/completions") from exc
+
+            if resp.status_code == 401 and not auth_retry_used:
+                logger.warning(
+                    "GigaChat (агент) вернул 401 — сбрасываем токен и повторяем"
+                )
+                self._invalidate_token()
+                auth_retry_used = True
+                continue
+
+            if resp.status_code in self.RETRYABLE_STATUSES and attempt < max_retries:
+                delay = self._backoff_delay(retry_index)
+                retry_index += 1
+                logger.warning(
+                    f"GigaChat (агент) вернул {resp.status_code} — повтор через "
+                    f"{delay:.0f} сек"
+                )
+                interruptible_sleep(delay, None)
+                continue
+
+            if resp.status_code == 400:
+                raise RuntimeError(
+                    f"GigaChat вернул 400 (неверный запрос): {resp.text[:300]}"
+                )
+            if resp.status_code == 404:
+                raise RuntimeError(
+                    f"GigaChat вернул 404: модель '{self.model}' не найдена. "
+                    "Проверьте gigachat_model в config/settings.json."
+                )
+            if resp.status_code == 401:
+                raise RuntimeError(
+                    "GigaChat вернул 401: неверный или просроченный access_token."
+                )
+            if resp.status_code == 429:
+                raise RuntimeError(
+                    "GigaChat вернул 429: превышен лимит запросов. "
+                    f"Повторы исчерпаны ({max_retries}). Подождите и повторите."
+                )
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"GigaChat вернул ошибку {resp.status_code}: {resp.text[:300]}"
+                )
+
+            break
+
+        data = resp.json()
+        message = (
+            data.get("choices", [{}])[0].get("message", {}) or {}
+        )
+        content = message.get("content") or ""
+        tool_calls = message.get("tool_calls") or []
+        logger.info(
+            "GigaChat (агент): ответ получен | символов=%s | вызовов инструментов=%s",
+            len(content), len(tool_calls),
+        )
+        return {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": tool_calls,
+        }
+
+    @staticmethod
     def _backoff_delay(attempt: int) -> float:
         """Задержка перед повтором: 1с → 2с → 4с."""
         return GigaChatClient.RETRY_BASE_DELAY * (2 ** attempt)

@@ -31,10 +31,12 @@ from db.crud.addresses import (
     update_address,
 )
 from db.crud.contracts import (
+    get_expiring_contracts,
     load_contract_points,
     save_contract,
     save_contract_points,
     save_contract_with_details,
+    search_contracts,
 )
 from db.crud.counterparties import (
     COUNTERPARTY_FIELDS,
@@ -93,6 +95,7 @@ __all__ = [
     "get_all_organizations",
     "get_carrier_drivers",
     "get_driver_carriers",
+    "get_expiring_contracts",
     "import_addresses_from_list",
     "link_driver_to_carrier",
     "load_contract_points",
@@ -114,6 +117,7 @@ __all__ = [
     "save_organization",
     "save_vehicles",
     "search_counterparties",
+    "search_contracts",
     "search_drivers",
     "search_organizations",
     "set_default_carrier",
