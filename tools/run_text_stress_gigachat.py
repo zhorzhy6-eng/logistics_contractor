@@ -522,6 +522,13 @@ def build_selection(args, all_meta, scenarios) -> List[int]:
         wanted = set(args.with_field)
         selection = [i for i in selection
                      if wanted & scenario_field_keys(scenarios[all_meta[i]["number"]])]
+    # --skip — номера сценариев, которые НЕ отправлять. Нужен, когда сценарий
+    # задевает рабочую базу оператора (проверка безопасности останавливает
+    # прогон целиком): сам сценарий не ослабляет проверку, а просто не входит
+    # в партию — это видно в отчёте как «исключено N сценариев».
+    if args.skip:
+        excluded = set(int(number) for number in args.skip)
+        selection = [i for i in selection if all_meta[i]["number"] not in excluded]
     # --limit — потолок ИМЕННО этого запуска, поэтому применяется последним:
     # иначе «--with-field … --limit 8» отсекал бы сценарии до фильтра и мог
     # оставить пустую выборку (проверено: у первых восьми сценариев паспорта нет).
@@ -1309,6 +1316,11 @@ def main(argv=None) -> int:
     parser.add_argument("--reask", action="store_true",
                         help="сбросить сохранённые ответы модели по выборке и "
                              "переспросить их заново (для замера фикса)")
+    parser.add_argument("--skip", action="append", default=[], type=int,
+                        help="номер сценария, который НЕ отправлять (можно "
+                             "несколько раз): например, совпавший с рабочей "
+                             "базой оператора — проверка безопасности иначе "
+                             "остановит весь прогон")
     parser.add_argument("--compare-with", default="",
                         help="с --report: второй файл прогресса, печатать "
                              "«было -> стало» по полям и по общим метрикам")

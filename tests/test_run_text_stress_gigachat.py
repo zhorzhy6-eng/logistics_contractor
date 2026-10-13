@@ -522,3 +522,46 @@ def test_comparison_is_empty_when_nothing_changed():
     progress = {"results": {
         "1": _progress_row(1, "driver.birth_place", found=True, matched=True)}}
     assert comparison_rows(progress, progress) == []
+
+
+def test_skip_excludes_scenarios_from_selection():
+    """
+    --skip: сценарий не входит в партию (совпал с рабочей базой оператора).
+
+    Проверка безопасности при совпадении останавливает прогон целиком, но
+    ослаблять её нельзя: сценарий просто исключается из выборки.
+    """
+    from types import SimpleNamespace
+    from tools.make_text_scenarios import SEEDS_PATH, load_seeds, scenario_from_seed
+    import tools.run_text_stress_gigachat as runner
+
+    seeds = load_seeds(SEEDS_PATH)
+    all_meta = seeds["scenarios"]
+    scenarios = {}
+    for seed, meta in zip(seeds["seeds"], all_meta):
+        scenarios[meta["number"]] = scenario_from_seed(seed, meta["kind"], meta["level"])
+
+    base = dict(sample=0, limit=0, kind=[], level=[],
+                with_field=["driver.birth_place"], skip=[])
+    without = runner.build_selection(SimpleNamespace(**base), all_meta, scenarios)
+
+    skipped_number = all_meta[without[0]]["number"]
+    with_skip = runner.build_selection(
+        SimpleNamespace(**{**base, "skip": [skipped_number]}), all_meta, scenarios)
+
+    assert len(without) == len(with_skip) + 1
+    assert all(all_meta[index]["number"] != skipped_number for index in with_skip)
+
+
+def test_skip_of_unknown_number_changes_nothing():
+    from types import SimpleNamespace
+    from tools.make_text_scenarios import SEEDS_PATH, load_seeds, scenario_from_seed
+    import tools.run_text_stress_gigachat as runner
+
+    seeds = load_seeds(SEEDS_PATH)
+    all_meta = seeds["scenarios"]
+    scenarios = {meta["number"]: scenario_from_seed(seed, meta["kind"], meta["level"])
+                 for seed, meta in zip(seeds["seeds"], all_meta)}
+    args = dict(sample=0, limit=5, kind=[], level=[], with_field=[], skip=[99999])
+    selection = runner.build_selection(SimpleNamespace(**args), all_meta, scenarios)
+    assert len(selection) == 5
