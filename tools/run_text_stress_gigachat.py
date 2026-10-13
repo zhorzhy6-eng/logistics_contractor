@@ -1309,11 +1309,20 @@ def main(argv=None) -> int:
     parser.add_argument("--reask", action="store_true",
                         help="сбросить сохранённые ответы модели по выборке и "
                              "переспросить их заново (для замера фикса)")
+    parser.add_argument("--compare-with", default="",
+                        help="с --report: второй файл прогресса, печатать "
+                             "«было -> стало» по полям и по общим метрикам")
+    parser.add_argument("--compare-fields", default="",
+                        help="с --compare-with: какие поля печатать "
+                             "(через запятую)")
     args = parser.parse_args(argv)
 
     if args.report:
-        return main_report(["--progress", str(PROGRESS_PATH),
-                            "--out", str(METRICS_1000_PATH)])
+        forwarded = ["--progress", str(PROGRESS_PATH), "--out", str(METRICS_1000_PATH)]
+        if args.compare_with:
+            forwarded += ["--compare-with", args.compare_with,
+                          "--compare-fields", args.compare_fields]
+        return main_report(forwarded)
 
     if not SEEDS_PATH.exists():
         print(f"Нет файла зёрен: {SEEDS_PATH}\n"
