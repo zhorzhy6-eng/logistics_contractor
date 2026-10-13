@@ -291,7 +291,6 @@ def test_local_fallback_is_visible_in_tree(dialog):
 def test_transfer_takes_every_recognized_field_without_checkboxes(dialog, window, monkeypatch):
     """Сигнал результата содержит ВСЕ распознанные поля — без галочек."""
     import ui.document_import_dialog as module
-    from core.document_import_service import SCHEMA
     captured = []
     monkeypatch.setattr(module, "apply_approved", lambda w, changes: captured.extend(changes))
     load(dialog, driver_evidence())
