@@ -44,8 +44,9 @@ from PyQt5.QtWidgets import (
 from core.agent.agent import Agent, AgentReply
 from core.agent.memory import DEFAULT_MAX_HISTORY, AgentMemory
 from core.agent.personas import DEFAULT_PERSONA, persona
+from core.agent import proactivity
 from core.agent.tools import AgentContext, Tool, active_window, set_context_window
-from core.settings_service import get_settings_service
+from core.settings_service import AGENT_NAME, get_settings_service
 from ui import theme
 from ui.agent_avatar import CatAvatar, avatar_icon
 
@@ -59,6 +60,13 @@ PANEL_ANIMATION_MS = 200
 ICON_SIZE = 32
 PANEL_AVATAR_SIZE = 64
 FLOATING_SIZE = 96
+#: Как часто проверять, есть ли что подсказать без вопроса (часть 4), мс.
+#: Сама подсказка показывается не чаще, чем разрешает настройка
+#: `proactive_interval` (по умолчанию 5 минут) — см. proactivity.py.
+SUGGESTION_CHECK_MS = 5000
+#: Пауза после действия оператора перед проверкой формы, мс: оператор
+#: заполняет поля подряд, и подсказка посреди ввода только мешала бы.
+SUGGESTION_IDLE_MS = 2000
 
 
 # ─────────────────────────────────────────────────────────────
@@ -678,6 +686,23 @@ class AgentWidget(QObject):
         self._animation.setEasingCurve(QEasingCurve.OutCubic)
         self._animation.valueChanged.connect(self._on_panel_width)
 
+        #: Подсказки без вопроса (задание, часть 4): движок решает «не рано
+        #: ли снова», таймер периодически смотрит форму. Родитель таймеров —
+        #: сам AgentWidget: они живут ровно столько же, сколько окно.
+        self._suggestions: Optional[Any] = None
+        self._suggestion_timer = QTimer(self)
+        self._suggestion_timer.setInterval(SUGGESTION_CHECK_MS)
+        self._suggestion_timer.timeout.connect(self._check_suggestions)
+        #: Тишина после последнего действия оператора, прежде чем
+        #: подсказывать: во время заполнения формы подсказка мешает.
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.setInterval(SUGGESTION_IDLE_MS)
+        app_for_actions = QApplication.instance()
+        actions_logger = getattr(app_for_actions, "_action_logger", None)
+        if actions_logger is not None:
+            actions_logger.action_recorded.connect(self._on_operator_action)
+
         #: Виджет окна, в котором сейчас лежит панель. Ставится ДО
         #: apply_settings: показ панели «при старте» вешает фильтр событий
         #: на этот виджет, и он должен быть определён заранее.
@@ -725,6 +750,8 @@ class AgentWidget(QObject):
             enabled and bool(values["show_floating"]), persona_key
         )
         self._apply_hotkey(enabled and show_panel_possible, values["hotkey"])
+        # Подсказки без вопроса (часть 4): только у включённого помощника.
+        self._apply_proactive(values if enabled else {"proactive": False})
 
         if self.icon_button is not None:
             self.icon_button.setVisible(show_icon)
@@ -732,7 +759,7 @@ class AgentWidget(QObject):
         # Панель: создаём при первой необходимости, дальше только правим.
         if show_panel_possible:
             self._ensure_panel(
-                str(values["name"]), persona_key,
+                AGENT_NAME, persona_key,
                 int(values["max_history"]), int(values["max_tool_steps"]),
             )
             if bool(values["show_panel_on_start"]) and not self.panel.isVisible():
@@ -785,7 +812,9 @@ class AgentWidget(QObject):
             self._animation.setTargetObject(self.panel)
             self._animation.setPropertyName(b"maximumWidth")
             self._load_history(max_history, max_tool_steps)
-        self.panel.set_agent_name(name)
+        # Имя всегда одно и то же (AGENT_NAME): панель подписывается им
+        # даже если в старом файле настроек лежало другое значение.
+        self.panel.set_agent_name(AGENT_NAME)
         self.panel.set_persona(persona_key)
 
     def _apply_hotkey(self, enabled: bool, sequence: str) -> None:
@@ -848,12 +877,7 @@ class AgentWidget(QObject):
     # ---------------------------------------------------------
     def _make_agent(self, max_history: int, max_tool_steps: int) -> Agent:
         """Создаёт агента: клиент, контекст окна, история диалога."""
-        context = AgentContext(
-            window=self.window,
-            contract_type=str(getattr(self.window, "CONTRACT_TYPE", "") or ""),
-            confirm=self._confirm,
-            on_activity=self._on_activity,
-        )
+        context = self._context()
         memory = AgentMemory(max_history=max_history)
         agent = Agent(
             client=None,
@@ -888,6 +912,21 @@ class AgentWidget(QObject):
         if messages:
             self.panel.set_history(messages)
 
+    def _context(self) -> AgentContext:
+        """
+        Контекст агента: окно, тип договора, подтверждение, шаги.
+
+        Отдельный метод, потому что контекст нужен в двух местах: агенту
+        (инструменты формы) и подсказкам без вопроса (часть 4) — они
+        смотрят ту же форму.
+        """
+        return AgentContext(
+            window=self.window,
+            contract_type=str(getattr(self.window, "CONTRACT_TYPE", "") or ""),
+            confirm=self._confirm,
+            on_activity=self._on_activity,
+        )
+
     def _confirm(self, tool: Tool, arguments: Dict[str, Any]) -> bool:
         """Подтверждение опасного действия (задание, часть D.5)."""
         parent = self.panel if self.panel is not None else self.window
@@ -899,6 +938,87 @@ class AgentWidget(QObject):
         if self.panel is None:
             return
         self._panel_call(self.panel.set_status, message, True)
+
+    # ---------------------------------------------------------
+    # Подсказки без вопроса (задание, часть 4)
+    # ---------------------------------------------------------
+    def _apply_proactive(self, values: Dict[str, Any]) -> None:
+        """
+        Включает или выключает подсказки без вопроса по настройкам.
+
+        Подсказки проверяются таймером: смотреть форму на каждое изменение
+        полей дорого, а оператору всё равно — он видит результат раз в
+        несколько секунд. Пауза между САМИМИ подсказками задаётся
+        настройкой (по умолчанию 5 минут, см. proactivity.SuggestionEngine).
+        """
+        enabled = bool(values.get("proactive", False))
+        try:
+            interval = float(values.get(
+                "proactive_interval", proactivity.SUGGESTION_INTERVAL
+            ))
+        except (TypeError, ValueError):
+            interval = proactivity.SUGGESTION_INTERVAL
+
+        if self._suggestions is None:
+            from core.agent.proactivity import SuggestionEngine
+
+            self._suggestions = SuggestionEngine(enabled=enabled,
+                                                 interval=interval)
+        else:
+            self._suggestions.configure(enabled, interval)
+
+        if enabled:
+            self._ensure_panel(
+                AGENT_NAME, values["avatar"],
+                int(values["max_history"]), int(values["max_tool_steps"]),
+            )
+            if not self._suggestion_timer.isActive():
+                self._suggestion_timer.start()
+            return
+
+        self._suggestion_timer.stop()
+
+    def _check_suggestions(self) -> None:
+        """
+        Проверяет, есть ли что подсказать, и показывает это в панели.
+
+        Подсказка появляется ТОЛЬКО когда панель открыта: молчаливое
+        всплывание поверх формы — именно та навязчивость, которой задание
+        просит избегать. И только после паузы тишины (`_idle_timer`):
+        подсказка посреди заполнения формы мешает.
+        """
+        engine = self._suggestions
+        if engine is None or not engine.enabled:
+            return
+        if self.panel is None or not self.panel.isVisible():
+            return
+        if self._idle_timer.isActive():
+            return
+
+        from core.agent.proactivity_tools import proactive_text
+
+        try:
+            text = proactive_text(self._context())
+        except Exception as e:  # noqa: BLE001 — подсказка не должна ломать окно
+            logger.warning("Подсказка не собрана: %s", e)
+            return
+
+        offer = engine.offer(text)
+        if not offer:
+            return
+        self.panel.append_message(offer, author="agent")
+        self.panel.set_status("Подсказка", False)
+        logger.info("Максимилиан: показана подсказка без вопроса")
+
+    def _on_operator_action(self, *_args: Any) -> None:
+        """
+        Оператор что-то нажал: подсказку откладываем до паузы в работе.
+
+        Слот принимает лишние аргументы (сигнал журнала может передать
+        их): `lambda` в связях запрещены (AGENTS.md § 5.1).
+        """
+        if self._suggestions is not None and self._suggestions.enabled:
+            self._idle_timer.start()
 
     def _panel_call(self, func, *args) -> None:
         """
@@ -1230,6 +1350,14 @@ class AgentWidget(QObject):
             self._animation.stop()
         except RuntimeError:
             pass
+
+        # Подсказки без вопроса (часть 4): таймеры обязаны замолчать до
+        # закрытия окна — иначе они дёрнут закрытую панель.
+        for timer in (self._suggestion_timer, self._idle_timer):
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
 
         for widget in (self.panel, self.icon_button, self.floating):
             avatar = getattr(widget, "avatar", None) if widget is not None else None

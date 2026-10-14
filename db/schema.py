@@ -17,7 +17,7 @@
 import logging
 import sqlite3
 
-from db.crud import agent_history
+from db.crud import agent_history, agent_memory
 
 logger = logging.getLogger("db.schema")
 
@@ -55,6 +55,10 @@ INDEXES = (
     ("idx_counterparties_active",     "counterparties(is_deleted)"),
     # История ИИ-агента «Максимилиан» (v1): выборка всегда по сессии.
     ("idx_agent_history_session",     "agent_history(session_id, id)"),
+    # Память ИИ-агента (часть 5): алиасы, привычки и исправления ищутся
+    # парой «вид + ключ», оценки — по сообщению истории.
+    ("idx_agent_memory_kind",         "agent_memory(kind, key)"),
+    ("idx_agent_feedback_message",    "agent_feedback(message_id)"),
 )
 
 
@@ -306,6 +310,12 @@ def create_all(conn: sqlite3.Connection) -> None:
     # только свои сообщения. CREATE TABLE IF NOT EXISTS безопасен и на
     # чистой, и на рабочей базе, поэтому в _needs_migration он не вносится.
     cursor.execute(agent_history.CREATE_TABLE_SQL)
+
+    # ── agent_memory и agent_feedback: память ИИ-агента (часть 5) ──
+    # Алиасы, привычки, исправления и оценки ответов. Тоже отдельные
+    # таблицы агента: «Забыть всё» чистит только их.
+    cursor.execute(agent_memory.CREATE_TABLE_SQL)
+    cursor.execute(agent_memory.CREATE_FEEDBACK_SQL)
 
     # ── counterparties: справочник контрагентов (шаг 3 инфраструктуры) ──
     # Таблица независима от carriers/customers и привязана к типу договора

@@ -49,6 +49,56 @@ def _carrier_id_or_none(value: Any) -> Optional[int]:
     return number if number > 0 else None
 
 
+def get_expiring_licenses(
+    days: int = 30,
+    today: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """
+    Водители, у которых срок действия ВУ истекает в ближайшие ``days`` дней.
+
+    Задание, часть 4 («warn_expiring»): оператору важно увидеть это заранее.
+    Уже просроченные удостоверения НЕ попадают в этот список (для них есть
+    отдельный вопрос «у кого ВУ просрочено», см. db/crud/analytics.py), а
+    записи без заполненного срока не возвращаются: сравнивать нечего.
+
+    :param days: горизонт в днях (0 — только сегодняшний день);
+    :param today: «сегодня» в ISO (по умолчанию — системная дата): нужно
+        тестам, чтобы результат не зависел от дня прогона;
+    :param limit: сколько записей вернуть.
+    """
+    base = str(today or "").strip() or datetime.date.today().isoformat()
+    try:
+        base_date = datetime.date.fromisoformat(base[:10])
+    except ValueError:
+        base_date = datetime.date.today()
+        base = base_date.isoformat()
+
+    horizon = (base_date + datetime.timedelta(days=max(0, int(days)))).isoformat()
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT d.id, d.full_name, d.license_series, d.license_number,"
+            "       d.license_expiry_date, d.phone,"
+            "       (SELECT COALESCE(NULLIF(TRIM(ca.full_name), ''), "
+            "                ca.short_name, '') FROM carriers ca "
+            "         WHERE ca.id = d.default_carrier_id) AS carrier_name "
+            "FROM drivers d "
+            "WHERE d.is_deleted = 0 "
+            "  AND TRIM(COALESCE(d.license_expiry_date, '')) <> '' "
+            "  AND date(d.license_expiry_date) >= date(?) "
+            "  AND date(d.license_expiry_date) <= date(?) "
+            "ORDER BY date(d.license_expiry_date), d.id LIMIT ?",
+            (base, horizon, max(1, int(limit))),
+        )
+        columns = [desc[0] for desc in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
 def save_driver(driver_data: Dict[str, Any]) -> int:
     conn = get_connection()
     cursor = conn.cursor()
@@ -704,6 +754,7 @@ __all__ = [
     "get_all_drivers",
     "get_carrier_drivers",
     "get_driver_carriers",
+    "get_expiring_licenses",
     "link_driver_to_carrier",
     "load_driver",
     "restore_driver",

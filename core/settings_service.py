@@ -36,10 +36,19 @@ ENV_PATH = "LOGISTICS_SETTINGS_PATH"
 # ключами agent_*: так видно, что это настройки одной подсистемы, и
 # существующие ключи не пересекаются с ними по имени.
 
+#: Имя помощника. ЕДИНСТВЕННЫЙ источник: имя не настраивается и не может
+#: быть изменено — ни через диалог настроек, ни через файл settings.json.
+#: Раньше имя лежало в разделе "agent" и правилось оператором; теперь это
+#: константа (см. normalize_agent_settings).
+AGENT_NAME = "Максимилиан"
+
 #: Значения по умолчанию для раздела "agent" (задание, часть E.1).
 DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
     "enabled": True,
-    "name": "Максимилиан",
+    #: Имя помощника. ОНО НЕ НАСТРАИВАЕТСЯ: Максимилиан — всегда
+    #: Максимилиан. Ключ остался ради совместимости со старыми файлами
+    #: настроек и всегда приводится к этому значению.
+    "name": AGENT_NAME,
     "avatar": "cat_scientist",
     "mode": "hybrid",
     "show_floating": False,
@@ -47,6 +56,11 @@ DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
     "hotkey": "Ctrl+M",
     "max_history": 20,
     "max_tool_steps": 5,
+    #: Подсказки без вопроса (задание, часть 4). Выключены по умолчанию:
+    #: помощник не должен встревать, пока оператор сам этого не попросил.
+    "proactive": False,
+    #: Пауза между подсказками в секундах («не больше одной в 5 минут»).
+    "proactive_interval": 300,
 }
 
 #: Режимы показа агента: только иконка, только панель, и то и другое.
@@ -56,7 +70,11 @@ AGENT_MODES = ("icon", "panel", "hybrid")
 AGENT_LIMITS = {
     "max_history": (1, 200),
     "max_tool_steps": (1, 20),
+    "proactive_interval": (30, 3600),
 }
+
+#: Поля-числа с дробным значением (остальные — целые).
+AGENT_FLOAT_KEYS = ("proactive_interval",)
 
 
 def normalize_agent_settings(values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -72,12 +90,22 @@ def normalize_agent_settings(values: Optional[Dict[str, Any]] = None) -> Dict[st
     if isinstance(values, dict):
         result.update(values)
 
-    for key in ("enabled", "show_floating", "show_panel_on_start"):
+    for key in ("enabled", "show_floating", "show_panel_on_start", "proactive"):
         value = result.get(key)
         if not isinstance(value, bool):
             result[key] = str(value).strip().lower() in ("1", "true", "yes", "да", "on")
 
-    for key in ("name", "avatar", "hotkey"):
+    # Имя помощника НЕ берётся из настроек: Максимилиан — всегда
+    # Максимилиан. Значение в файле (старое или правленое руками)
+    # игнорируется, чтобы имя нельзя было поменять в обход интерфейса.
+    if str(result.get("name") or "").strip() != AGENT_NAME:
+        logger.info(
+            "agent.name=%r игнорируется: имя помощника зафиксировано (%s)",
+            result.get("name"), AGENT_NAME,
+        )
+    result["name"] = AGENT_NAME
+
+    for key in ("avatar", "hotkey"):
         result[key] = str(result.get(key) or "").strip() or DEFAULT_AGENT_SETTINGS[key]
 
     mode = str(result.get("mode") or "").strip().lower()
@@ -90,8 +118,9 @@ def normalize_agent_settings(values: Optional[Dict[str, Any]] = None) -> Dict[st
     result["mode"] = mode
 
     for key, (low, high) in AGENT_LIMITS.items():
+        as_float = key in AGENT_FLOAT_KEYS
         try:
-            number = int(result.get(key))
+            number = float(result.get(key)) if as_float else int(result.get(key))
         except (TypeError, ValueError):
             number = DEFAULT_AGENT_SETTINGS[key]
         if not low <= number <= high:

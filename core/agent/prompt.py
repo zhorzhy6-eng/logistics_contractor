@@ -113,6 +113,7 @@ def build_system_prompt(
     persona_key: str = DEFAULT_PERSONA,
     max_tool_steps: int = 5,
     path: Optional[str] = None,
+    memory: str = "",
 ) -> str:
     """
     Собирает системный промпт: шаблон + образ + инструменты + лимит шагов.
@@ -120,7 +121,9 @@ def build_system_prompt(
     :param tools: инструменты (объекты Tool или пары «имя, описание»);
     :param persona_key: ключ образа из core/agent/personas.py;
     :param max_tool_steps: лимит вызовов инструментов на один запрос;
-    :param path: переопределение файла промпта (нужно тестам).
+    :param path: переопределение файла промпта (нужно тестам);
+    :param memory: блок «что помню» (core/agent/long_memory.py) — TOP-5
+        релевантных записей памяти. Пусто — блок не добавляется.
     """
     template = load_prompt_template(path)
     persona_data = persona(persona_key)
@@ -128,7 +131,7 @@ def build_system_prompt(
     # Ошибка форматирования (в тексте промпта осталась чужая фигурная скобка)
     # не должна ронять панель: подставляем блокирующим способом.
     try:
-        return template.format(
+        prompt = template.format(
             persona=persona_data.prompt_block(),
             tools=_tools_block(tools),
             tool_steps=int(max_tool_steps),
@@ -139,13 +142,21 @@ def build_system_prompt(
             "Шаблон промпта содержит неизвестную подстановку (%s) — "
             "подставляем образ и инструменты без форматирования", e
         )
-        return (
+        prompt = (
             template
             + "\n\n" + persona_data.prompt_block()
             + "\n\nДоступные инструменты:\n" + _tools_block(tools)
             + f"\n\nНе больше {int(max_tool_steps)} вызовов инструментов "
               f"на один запрос.\n"
         )
+
+    # Память добавляется ОТДЕЛЬНЫМ блоком в конце: она меняется от запроса к
+    # запросу, а шаблон — нет. Если вспомнить нечего, блок не появляется
+    # вовсе (пустой раздел только сбивал бы модель).
+    block = str(memory or "").strip()
+    if block:
+        prompt = prompt + "\n\n" + block + "\n"
+    return prompt
 
 
 def prompt_files() -> Tuple[str, ...]:

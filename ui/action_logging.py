@@ -6,7 +6,7 @@ import time
 from collections import deque
 from typing import Deque, Dict, List, Tuple
 
-from PyQt5.QtCore import QEvent, QObject
+from PyQt5.QtCore import QEvent, QObject, pyqtSignal
 from PyQt5.QtWidgets import QAbstractButton, QApplication, QWidget
 
 from core import audit
@@ -58,6 +58,12 @@ def _button_name(button: QAbstractButton) -> str:
 
 class ActionLogger(QObject):
     """Подписывается на clicked у видимых и позднее созданных кнопок."""
+
+    #: Оператор нажал кнопку: (надпись кнопки). Слушателю нужен только
+    #: факт «оператор работает», поэтому значение из формы сюда не идёт.
+    #: Подсказки Максимилиана (часть 4) по этому сигналу ждут паузы в
+    #: работе оператора, прежде чем что-то предлагать.
+    action_recorded = pyqtSignal(str)
 
     def __init__(self, app: QApplication):
         super().__init__(app)
@@ -144,7 +150,10 @@ class ActionLogger(QObject):
         """Кладёт нажатие в кольцевой буфер последних действий."""
         window = button.window()
         context = type(window).__name__ if window is not None else "unknown"
-        self._recent.append((time.monotonic(), _button_name(button), context))
+        label = _button_name(button)
+        self._recent.append((time.monotonic(), label, context))
+        # Слушатели (подсказки агента, часть 4) узнают, что оператор работает.
+        self.action_recorded.emit(label)
 
 
 def recent_actions(seconds: float = 300.0) -> List[Dict[str, object]]:

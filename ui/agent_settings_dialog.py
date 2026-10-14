@@ -5,11 +5,18 @@
 
 Диалог правит ТОЛЬКО раздел ``agent`` (core/settings_service.py):
 включение, образ, режим показа, плавающий кот, запуск с открытой панелью,
-горячая клавиша и лимиты. Существующие настройки программы (провайдер,
-тема, ключи) здесь не трогаются — они живут в общем диалоге настроек.
+горячая клавиша, лимиты и подсказки без вопроса. Существующие настройки
+программы (провайдер, тема, ключи) здесь не трогаются — они живут в общем
+диалоге настроек.
+
+ИМЯ ПОМОЩНИКА ЗДЕСЬ НЕ РЕДАКТИРУЕТСЯ: Максимилиан — всегда Максимилиан
+(core/settings_service.py::AGENT_NAME). Поля «Имя» в диалоге нет вовсе;
+значение из старого файла настроек игнорируется.
 
 Кнопка «Очистить историю диалога» удаляет историю ТЕКУЩЕЙ сессии; вторая
 кнопка — «Удалить прошлые сессии» — чистит истории прежних запусков.
+Отдельный раздел «Что Максимилиан помнит» показывает алиасы, привычки и
+исправления (часть 5): их можно удалить по одному или забыть все сразу.
 """
 
 import logging
@@ -17,16 +24,17 @@ from typing import Any, Dict
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout,
-    QKeySequenceEdit, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox,
-    QVBoxLayout,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout, QGroupBox,
+    QHBoxLayout, QHeaderView, QKeySequenceEdit, QLabel, QMessageBox,
+    QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
+from core.agent import long_memory
 from core.agent.memory import AgentMemory
 from core.agent.personas import PERSONAS, persona_keys
 from core.agent.tools import build_registry
 from core.settings_service import (
-    AGENT_LIMITS, AGENT_MODES, DEFAULT_AGENT_SETTINGS,
+    AGENT_LIMITS, AGENT_MODES, AGENT_NAME, DEFAULT_AGENT_SETTINGS,
 )
 from ui import theme
 
@@ -64,9 +72,14 @@ class AgentSettingsDialog(QDialog):
         )
         form.addRow("", self.enabled)
 
-        self.name_edit = QLineEdit(str(self._settings.get("name", "Максимилиан")))
-        self.name_edit.setToolTip("Как подписывать помощника в панели")
-        form.addRow("Имя:", self.name_edit)
+        # ── Имя помощника: только показ, менять нельзя (часть B) ──
+        # Поля ввода здесь НЕТ намеренно: имя зафиксировано (AGENT_NAME),
+        # и редактировать его нечем — ни в диалоге, ни в файле настроек.
+        self.name_label = QLabel(AGENT_NAME)
+        self.name_label.setToolTip(
+            "Имя помощника зафиксировано: Максимилиан — всегда Максимилиан."
+        )
+        form.addRow("Имя:", self.name_label)
 
         self.avatar_combo = QComboBox()
         for key in persona_keys():
@@ -104,6 +117,33 @@ class AgentSettingsDialog(QDialog):
         form.addRow("", self.show_on_start)
 
         layout.addWidget(main_group)
+
+        # ── Подсказки без вопроса (задание, часть 4) ──
+        hints_group = QGroupBox("Подсказки без вопроса")
+        hints_form = QFormLayout(hints_group)
+
+        self.proactive = QCheckBox("Подсказывать, чего не хватает в форме")
+        self.proactive.setChecked(bool(self._settings.get("proactive", False)))
+        self.proactive.setToolTip(
+            "Максимилиан сам заметит незаполненные обязательные поля и "
+            "истекающие сроки. Подсказка показывается не чаще одной в "
+            "заданный интервал."
+        )
+        hints_form.addRow("", self.proactive)
+
+        self.proactive_interval = QSpinBox()
+        low, high = AGENT_LIMITS["proactive_interval"]
+        self.proactive_interval.setRange(low, high)
+        self.proactive_interval.setSuffix(" с")
+        self.proactive_interval.setValue(int(self._settings.get(
+            "proactive_interval", DEFAULT_AGENT_SETTINGS["proactive_interval"]
+        )))
+        self.proactive_interval.setToolTip(
+            "Пауза между подсказками: одна подсказка в этот интервал"
+        )
+        hints_form.addRow("Пауза между подсказками:", self.proactive_interval)
+
+        layout.addWidget(hints_group)
 
         # ── Клавиша и лимиты ──
         limits_group = QGroupBox("Клавиша и лимиты")
@@ -166,10 +206,14 @@ class AgentSettingsDialog(QDialog):
 
         layout.addWidget(history_group)
 
+        # ── Что Максимилиан помнит (часть 5) ──
+        layout.addWidget(self._build_memory_group())
+
         # ── Подсказка про возможности v1 ──
         abilities = QLabel(
             "💡 Максимилиан умеет: объяснять поля, искать в справочниках, "
-            "подтягивать записи в форму и распознавать документы.\n"
+            "подтягивать записи в форму, распознавать документы, считать "
+            "суммы и топы.\n"
             "Он не создаёт договоры, не удаляет данные и не меняет "
             "настройки программы. Заполнение формы всегда требует "
             "подтверждения."
@@ -191,6 +235,132 @@ class AgentSettingsDialog(QDialog):
         layout.addLayout(dialog_buttons)
 
         logger.debug("AgentSettingsDialog инициализирован")
+
+    # ---------------------------------------------------------
+    # Что Максимилиан помнит (часть 5)
+    # ---------------------------------------------------------
+    def _build_memory_group(self) -> QGroupBox:
+        """
+        Раздел «Что Максимилиан помнит»: список, удаление, «Забыть всё».
+
+        Показываются все записи памяти (алиасы, привычки, исправления) с
+        пояснением вида. Удалить можно по одной строке или всё сразу —
+        справочники и договоры это не затрагивает: у помощника своя
+        таблица (db/crud/agent_memory.py).
+        """
+        group = QGroupBox("Что Максимилиан помнит")
+        layout = QVBoxLayout(group)
+
+        hint = QLabel(
+            "Память помощника: алиасы («Ромашка» = ООО «Ромашка»), привычки "
+            "(«всегда НДС 20 % для Ромашки») и исправления. Она подсказывает "
+            "помощнику, как вы называете записи, и не меняет данные в базе."
+        )
+        hint.setObjectName("mutedLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.memory_table = QTableWidget(0, 3)
+        self.memory_table.setHorizontalHeaderLabels(["Вид", "Что", "Значение"])
+        self.memory_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.memory_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.memory_table.setWordWrap(False)
+        self.memory_table.verticalHeader().setVisible(False)
+        header = self.memory_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        self.memory_table.setMinimumHeight(140)
+        layout.addWidget(self.memory_table)
+
+        self.memory_hint = QLabel("")
+        self.memory_hint.setObjectName("mutedLabel")
+        layout.addWidget(self.memory_hint)
+
+        buttons = QHBoxLayout()
+        self.btn_forget = theme.danger_button(
+            "Удалить запись", tooltip="Удалить выбранную запись из памяти"
+        )
+        self.btn_forget.clicked.connect(self._on_forget_selected)
+        buttons.addWidget(self.btn_forget)
+
+        self.btn_forget_all = theme.danger_button(
+            "Забыть всё", tooltip="Очистить память помощника целиком"
+        )
+        self.btn_forget_all.clicked.connect(self._on_forget_all)
+        buttons.addWidget(self.btn_forget_all)
+
+        self.btn_refresh_memory = theme.secondary_button(
+            "Обновить", tooltip="Перечитать память из базы"
+        )
+        self.btn_refresh_memory.clicked.connect(self.reload_memory)
+        buttons.addWidget(self.btn_refresh_memory)
+
+        buttons.addStretch()
+        layout.addLayout(buttons)
+
+        self.reload_memory()
+        return group
+
+    def reload_memory(self) -> None:
+        """Перечитывает память из базы и заполняет таблицу."""
+        try:
+            records = long_memory.list_records()
+        except Exception as e:  # noqa: BLE001 — настройки не должны падать
+            logger.warning("Память агента не прочитана: %s", e)
+            records = []
+
+        self.memory_table.setRowCount(len(records))
+        for row, item in enumerate(records):
+            kind_item = QTableWidgetItem(str(item.get("kind_title") or ""))
+            kind_item.setToolTip(str(item.get("kind_hint") or ""))
+            name_item = QTableWidgetItem(str(item.get("key") or ""))
+            value_item = QTableWidgetItem(str(item.get("value") or ""))
+            #: ID записи — в данных строки: по нему удаляем.
+            kind_item.setData(Qt.UserRole, item.get("id"))
+            self.memory_table.setItem(row, 0, kind_item)
+            self.memory_table.setItem(row, 1, name_item)
+            self.memory_table.setItem(row, 2, value_item)
+
+        self.memory_hint.setText(
+            f"Записей в памяти: {len(records)}" if records
+            else "Пока ничего не запомнил."
+        )
+
+    def _selected_memory_id(self) -> Any:
+        """ID выбранной записи памяти (None — ничего не выбрано)."""
+        row = self.memory_table.currentRow()
+        if row < 0:
+            return None
+        item = self.memory_table.item(row, 0)
+        return None if item is None else item.data(Qt.UserRole)
+
+    def _on_forget_selected(self) -> None:
+        """Удаляет выбранную запись памяти."""
+        record_id = self._selected_memory_id()
+        if record_id is None:
+            QMessageBox.information(
+                self, "Память", "Выберите запись в списке."
+            )
+            return
+        long_memory.forget(int(record_id))
+        self.reload_memory()
+
+    def _on_forget_all(self) -> None:
+        """Очищает память помощника целиком («Забыть всё»)."""
+        answer = QMessageBox.question(
+            self, "Память",
+            "Забыть всё, что Максимилиан запомнил?\n\n"
+            "Справочники, договоры и история диалога не затрагиваются.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        removed = long_memory.forget_all()
+        self.reload_memory()
+        QMessageBox.information(
+            self, "Память", f"Удалено записей: {removed}."
+        )
 
     # ---------------------------------------------------------
     # Вспомогательное
@@ -253,7 +423,8 @@ class AgentSettingsDialog(QDialog):
         hotkey = self.hotkey_edit.keySequence().toString()
         return {
             "enabled": self.enabled.isChecked(),
-            "name": self.name_edit.text().strip() or DEFAULT_AGENT_SETTINGS["name"],
+            # Имя всегда одно и то же: поля ввода в диалоге нет (часть B).
+            "name": AGENT_NAME,
             "avatar": self.avatar_combo.currentData() or DEFAULT_AGENT_SETTINGS["avatar"],
             "mode": self.mode_combo.currentData() or DEFAULT_AGENT_SETTINGS["mode"],
             "show_floating": self.show_floating.isChecked(),
@@ -261,6 +432,8 @@ class AgentSettingsDialog(QDialog):
             "hotkey": hotkey or DEFAULT_AGENT_SETTINGS["hotkey"],
             "max_history": self.max_history.value(),
             "max_tool_steps": self.max_steps.value(),
+            "proactive": self.proactive.isChecked(),
+            "proactive_interval": self.proactive_interval.value(),
         }
 
 

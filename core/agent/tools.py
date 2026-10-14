@@ -2256,6 +2256,85 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
             summary=spec["summary"],
         ))
 
+    # ── 4. Проактивность: что дальше (Часть 4) ──
+    # Тоже только чтение: подсказка — предложение, а не действие. Логика
+    # «что обязательно и что дальше» живёт в core/agent/proactivity.py,
+    # сроки берутся из db/crud/*.
+    from core.agent import proactivity_tools  # локальный импорт: без цикла
+
+    def suggest_next_field(**_):
+        return proactivity_tools.suggest_next_field(ctx)
+
+    def check_required(section: str = "", **_):
+        return proactivity_tools.check_required(ctx, section=section)
+
+    def warn_expiring(days: int = 30, entity_type: str = "all", **_):
+        return proactivity_tools.warn_expiring(days=days, entity_type=entity_type)
+
+    def suggest_from_history(**_):
+        return proactivity_tools.suggest_from_history(ctx)
+
+    registry.register(Tool(
+        name="suggest_next_field",
+        description=(
+            "Что логично заполнить в открытой форме дальше. Смотри сюда, "
+            "когда оператор спрашивает «что дальше?», «чего не хватает?», "
+            "«чем продолжить?» — или когда сам видишь, что форма заполнена "
+            "наполовину."
+        ),
+        parameters=_json_schema({}),
+        function=suggest_next_field,
+        summary="Подсказать следующее поле",
+    ))
+    registry.register(Tool(
+        name="check_required",
+        description=(
+            "Какие ОБЯЗАТЕЛЬНЫЕ поля открытой формы пусты. Отличие от "
+            "проверки формы: здесь только обязательные поля, списком, с "
+            "указанием раздела. Можно ограничить одним разделом."
+        ),
+        parameters=_json_schema({"section": {
+            "type": "string",
+            "description": "раздел формы; пусто — все разделы",
+        }}),
+        function=check_required,
+        summary="Проверить обязательные поля",
+    ))
+    registry.register(Tool(
+        name="warn_expiring",
+        description=(
+            "Что истекает в ближайшие дни: водительские удостоверения и "
+            "договоры. Например, «что скоро закончится», «у кого ВУ "
+            "заканчивается», «какие договоры заканчиваются в этом месяце»."
+        ),
+        parameters=_json_schema({
+            "days": {
+                "type": "integer",
+                "description": "горизонт в днях (по умолчанию 30)",
+                "minimum": 0,
+                "maximum": 365,
+            },
+            "entity_type": {
+                "type": "string",
+                "enum": ["all", "drivers", "contracts"],
+                "description": "что проверять",
+            },
+        }),
+        function=warn_expiring,
+        summary="Предупредить об истекающих сроках",
+    ))
+    registry.register(Tool(
+        name="suggest_from_history",
+        description=(
+            "Что оператор обычно делает в этом месте формы: подсказка по "
+            "последним действиям и привычкам. Нужна на вопрос «что обычно "
+            "тут делают дальше?» и для подсказок без вопроса."
+        ),
+        parameters=_json_schema({}),
+        function=suggest_from_history,
+        summary="Подсказать по истории действий",
+    ))
+
     return registry
 
 

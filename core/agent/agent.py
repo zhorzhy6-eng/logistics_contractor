@@ -26,6 +26,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from core.agent.llm import SafeChat
+from core.agent.long_memory import (
+    extract, memory_block, recall, remember_facts,
+)
 from core.agent.memory import DEFAULT_MAX_HISTORY, AgentMemory
 from core.agent.personas import DEFAULT_PERSONA
 from core.agent.prompt import build_system_prompt
@@ -63,6 +66,10 @@ class AgentReply:
     step_limit_reached: bool = False
     #: Сколько шагов (запросов к модели) понадобилось.
     steps: int = 0
+    #: Что помощник запомнил из этой фразы (задание, часть 5).
+    remembered: List[Dict[str, Any]] = field(default_factory=list)
+    #: Что помощник вспомнил перед ответом (TOP-5 записей памяти).
+    recalled: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def tool_names(self) -> List[str]:
@@ -104,13 +111,34 @@ class Agent:
     # ---------------------------------------------------------
     # Промпт
     # ---------------------------------------------------------
-    def system_prompt(self) -> str:
-        """Системный промпт: файл + образ + список инструментов."""
+    def system_prompt(self, query: str = "") -> str:
+        """
+        Системный промпт: файл + образ + список инструментов + память.
+
+        :param query: сообщение оператора: по нему отбирается TOP-5
+            релевантных записей памяти (задание, часть 5). Без запроса
+            память в промпт не подкладывается — иначе в контекст попадут
+            случайные факты.
+        """
         return build_system_prompt(
             tools=self.registry.prompt_lines(),
             persona_key=self.persona_key,
             max_tool_steps=self.max_tool_steps,
+            memory=memory_block(recall(query)) if query else "",
         )
+
+    def memory_facts(self, query: str) -> List[Dict[str, Any]]:
+        """
+        Что помощник вспомнил на этот запрос (для панели и тестов).
+
+        Отдельный метод, потому что панель показывает оператору, на что
+        опирался ответ, а тесты проверяют отбор без запроса к модели.
+        """
+        try:
+            return recall(query)
+        except Exception as e:  # noqa: BLE001 — память не должна ронять ответ
+            logger.warning("Память недоступна: %s", e)
+            return []
 
     # ---------------------------------------------------------
     # Ответ на сообщение оператора
@@ -136,6 +164,12 @@ class Agent:
 
         self.memory.add("user", text)
 
+        # Что помощник помнит об этом операторе (задание, часть 5): TOP-5
+        # релевантных записей. Отбор идёт ДО запроса к модели и попадает в
+        # системный промпт, а не в историю диалога.
+        recalled = self.memory_facts(text)
+        remembered = self._remember_from(text)
+
         calls: List[ToolCall] = []
         steps = 0
         limit_reached = False
@@ -144,7 +178,7 @@ class Agent:
         try:
             while True:
                 steps += 1
-                prompt = self.system_prompt()
+                prompt = self.system_prompt(text)
                 message_data = self.chat.complete(
                     self.memory.wire_messages(prompt),
                     tools=self.registry.schemas(),
@@ -155,7 +189,8 @@ class Agent:
                 if not parsed:
                     answer = self.chat.restore(content)
                     self.memory.add("assistant", answer)
-                    return AgentReply(text=answer, calls=calls, steps=steps)
+                    return AgentReply(text=answer, calls=calls, steps=steps,
+                                      remembered=remembered, recalled=recalled)
 
                 # Модель просит инструменты: её ответ обязан попасть в
                 # историю ДО результатов, иначе GigaChat отвергнет запрос.
@@ -210,10 +245,31 @@ class Agent:
                     self.memory.add("assistant", answer)
                     return AgentReply(
                         text=answer, calls=calls, step_limit_reached=True,
-                        steps=steps,
+                        steps=steps, remembered=remembered, recalled=recalled,
                     )
         finally:
             self.chat.end_turn()
+
+    def _remember_from(self, message: str) -> List[Dict[str, Any]]:
+        """
+        Запоминает то, о чём оператор прямо попросил (задание, часть 5).
+
+        Записываются только явные просьбы («запомни…», «всегда…») и
+        исправления — угадывать за оператора нельзя. Значения с паспортом,
+        телефоном или длинным числом не запоминаются (см.
+        core/agent/long_memory.py::look_sensitive).
+        """
+        try:
+            facts = extract(message)
+            if not facts:
+                return []
+            written = remember_facts(facts)
+            if written:
+                logger.info("Память: записано фактов %s", len(written))
+            return facts if written else []
+        except Exception as e:  # noqa: BLE001 — память не должна ронять ответ
+            logger.warning("Память: запись не удалась (%s)", e)
+            return []
 
     # ---------------------------------------------------------
     # Выполнение инструмента

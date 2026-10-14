@@ -10,13 +10,10 @@
   "gigachat_verify_ssl": true,
   "gigachat_ca_bundle": "",
   "document_soffice": "",
-
   "dadata_timeout": 10,
-
   "ollama_url": "http://127.0.0.1:11434",
   "ollama_model": "qwen2.5:7b",
   "ollama_timeout": 150,
-
   "_agent_comment": "Максимилиан — ИИ-ассистент внутри программы. mode: icon (только иконка), panel (только панель), hybrid (иконка и панель).",
   "agent": {
     "enabled": true,
@@ -27,6 +24,8 @@
     "show_panel_on_start": false,
     "hotkey": "Ctrl+M",
     "max_history": 20,
-    "max_tool_steps": 5
+    "max_tool_steps": 5,
+    "proactive": false,
+    "proactive_interval": 300
   }
 }

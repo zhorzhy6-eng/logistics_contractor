@@ -26,7 +26,7 @@ from core.security import backup_size_kb
 from core.security import restrict_to_current_user as _default_restrict
 
 from db import connection, fts, schema
-from db.crud import agent_history
+from db.crud import agent_history, agent_memory
 from db.schema import INDEXES, SOFT_DELETE_TABLES, _column_exists, _index_exists
 from db.schema import _table_exists
 
@@ -94,6 +94,14 @@ def _needs_migration(cursor: sqlite3.Cursor) -> bool:
     # Таблица истории ИИ-агента (Максимилиан v1): её отсутствие — тоже
     # миграция, поэтому перед первым запуском новой версии делается бэкап.
     if not _table_exists(cursor, "agent_history"):
+        return True
+
+    # Таблицы памяти ИИ-агента (Максимилиан v2, часть 5): алиасы, привычки,
+    # исправления и оценки ответов. Как и история, это отдельные таблицы
+    # агента, и их отсутствие — тоже миграция со своей резервной копией.
+    if not _table_exists(cursor, "agent_memory"):
+        return True
+    if not _table_exists(cursor, "agent_feedback"):
         return True
 
     for index_name, _ in INDEXES:
@@ -257,6 +265,13 @@ def run(
     # существующие записи не трогаются.
     if agent_history.ensure_table(conn):
         logger.info("Таблица agent_history готова (история ИИ-агента)")
+
+    # ── Миграция: память ИИ-агента (Максимилиан, часть 5) ──
+    # Таблицы agent_memory и agent_feedback: алиасы, привычки, исправления
+    # и оценки ответов. Создание идемпотентно (IF NOT EXISTS), справочники
+    # и договоры не трогаются.
+    if agent_memory.ensure_tables(conn):
+        logger.info("Таблицы памяти агента готовы (agent_memory, agent_feedback)")
 
     # ── Миграция: мягкое удаление (вариант В) ──
     # Существующие записи получают is_deleted = 0, то есть остаются видимыми:
