@@ -1052,21 +1052,6 @@ def _to_number(value: Any) -> Optional[float]:
         return None
 
 
-def _value_of(spec: FieldSpec, value: Any) -> Any:
-    """
-    Значение поля с приведением по типу.
-
-    Числовые поля возвращаются числом (в базе они бывают записаны строкой с
-    пробелами), даты — в ISO, текстовые — строкой без краевых пробелов.
-    """
-    kind = spec["type"]
-    if kind == TYPE_NUMBER:
-        return _to_number(value)
-    if kind == TYPE_DATE:
-        return _iso(value) or None
-    return None if value is None else str(value).strip()
-
-
 # ─────────────────────────────────────────────────────────────
 # Публичные функции
 # ─────────────────────────────────────────────────────────────
