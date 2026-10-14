@@ -56,7 +56,12 @@ FUR = QColor("#E8A24A")
 FUR_DARK = QColor("#C97F2C")
 MUZZLE = QColor("#FBEEDC")
 EYE = QColor("#2B2118")
-IRIS = QColor("#F2B33D")
+#: Радужка заметно темнее прежней (#F2B33D → #B87A22). Причина в размере
+#: 32–48 px: на нём зрачок-щель шириной 2.6 единицы занимает меньше точки
+#: экрана, и на светлой радужке глаз выглядел пустым — тот самый
+#: «гипнотический» вид. Тёмная радужка даёт глазу опору даже тогда, когда
+#: щель ещё не прорисовалась.
+IRIS = QColor("#B87A22")
 OUTLINE = QColor("#4A3520")
 WHISKER = QColor("#6B5334")
 NOSE = QColor("#D96A78")
@@ -64,8 +69,58 @@ GLASS = QColor("#7FD3F7")
 METAL = QColor("#B9C4D2")
 VEST = QColor("#3F7FBF")
 TABLET = QColor("#DCE6F2")
-HAT = QColor("#5A4632")
-HAT_BAND = QColor("#7A5C3E")
+HAT = QColor("#6E6250")
+HAT_BAND = QColor("#8A7C64")
+
+
+class Coat:
+    """
+    Окрас кота: шерсть, тень, морда и отметины.
+
+    Зачем отдельный тип, а не три константы. Раньше все пять образов были
+    ОДНИМ рыжим котом с разными атрибутами (очки, шляпа, жилет), и в
+    маленьком размере они не различались вовсе. Окрас — самый заметный
+    признак: его видно и на 32 px, где очков и шляпы уже не разобрать.
+
+    :param fur: основной цвет шерсти;
+    :param dark: цвет тени (полоски, контур морды);
+    :param muzzle: цвет морды (у тёмных окрасов она заметно светлее);
+    :param stripes: рисовать ли полоски на лбу и щеках;
+    :param blaze: рисовать ли белую отметину от лба к носу
+        («рыжий с белой мордой» — так задан образ учёного кота).
+    """
+
+    __slots__ = ("fur", "dark", "muzzle", "stripes", "blaze")
+
+    def __init__(self, fur: str, dark: str, muzzle: str,
+                 stripes: bool = False, blaze: bool = False):
+        self.fur = QColor(fur)
+        self.dark = QColor(dark)
+        self.muzzle = QColor(muzzle)
+        self.stripes = bool(stripes)
+        self.blaze = bool(blaze)
+
+
+#: Окрасы по образам (задание, часть 2, B.1).
+#:
+#:   * cat_scientist — рыжий с белой мордой (краснее «нейтрального», чтобы
+#:     образы различались не только очками);
+#:   * cat_logist    — полосатый серо-коричневый;
+#:   * cat_keeper    — чёрный с белой грудью (спит, глаза закрыты);
+#:   * cat_detective — серый британец;
+#:   * neutral       — нейтральный, без атрибутов и отметин.
+COATS = {
+    "cat_scientist": Coat("#D2822F", "#9C5A18", "#FFF6E8", blaze=True),
+    "cat_logist": Coat("#A9927A", "#7C6449", "#E6DCCC", stripes=True),
+    "cat_keeper": Coat("#2E2A28", "#151312", "#F3EFE7"),
+    "cat_detective": Coat("#9AA3AC", "#6E777F", "#E4E9ED"),
+    "neutral": Coat("#E8A24A", "#C97F2C", "#FBEEDC", stripes=True),
+}
+
+
+def coat_for(persona_key: str) -> Coat:
+    """Окрас образа (у неизвестного — нейтральный)."""
+    return COATS.get(_norm(persona_key), COATS["neutral"])
 
 #: Толщина линии, ниже которой рисунок рассыпается: одна точка экрана.
 MIN_DEVICE_PX = 0.9
@@ -79,16 +134,21 @@ BLINK_MAX_MS = 10000
 BLINK_HOLD_MS = 130
 
 #: Геометрия глаз: смещение от центра и высота (в системе 100×100).
+#: Глаза уменьшены на 20 % (задание, часть 2, A.1): прежние 9.6 при
+#: расстоянии 15 смотрелись как два блюдца, и морда выглядела «гипнотической».
 EYE_DX = 15.0
 EYE_Y = 50.0
-EYE_R = 9.6
-EYE_R_WIDE = 10.8
-IRIS_R = 6.4
-#: Зрачок-щель: вертикальный, а не кружок.
+EYE_R = 7.7
+EYE_R_WIDE = 8.4
+IRIS_R = 5.6
+#: Зрачок-щель: вертикальный, не круглый. Сужается к концам (см. _pupil_path):
+#: ровный овал читается как «точка», а именно он и давал гипнотический взгляд.
+#: Ширина 3.0 — компромисс: на 192 px щель видна отчётливо, на 32 px
+#: превращается в тёмное пятно в центре радужки, а не исчезает.
 PUPIL_W = 3.0
-PUPIL_H = 9.4
+PUPIL_H = 8.4
 #: Радиус линзы очков.
-LENS_R = 13.6
+LENS_R = 12.4
 
 
 def avatar_keys() -> tuple:
@@ -164,6 +224,7 @@ def paint_cat(
     rect = rect or QRectF(0, 0, size, size)
     unit = min(rect.width(), rect.height()) / 100.0
     persona = _norm(persona_key)
+    coat = coat_for(persona)
 
     painter.save()
     painter.setRenderHint(QPainter.Antialiasing, True)
@@ -176,10 +237,10 @@ def paint_cat(
 
     # Порядок важен: туловище — позади головы, шляпа и очки — поверх морды.
     if persona == "cat_logist":
-        _paint_shoulders(painter, unit)
-    _paint_ears(painter, unit)
-    _paint_head(painter, unit)
-    _paint_face(painter, unit, eyes)
+        _paint_shoulders(painter, unit, coat)
+    _paint_ears(painter, unit, coat)
+    _paint_head(painter, unit, coat)
+    _paint_face(painter, unit, eyes, coat)
 
     if persona == "cat_scientist":
         _paint_glasses(painter, unit)
@@ -196,9 +257,9 @@ def paint_cat(
     painter.restore()
 
 
-def _paint_ears(painter: QPainter, unit: float) -> None:
+def _paint_ears(painter: QPainter, unit: float, coat: Coat) -> None:
     """Уши: острые треугольники торчком, внутри — розовая раковина."""
-    painter.setBrush(QBrush(FUR))
+    painter.setBrush(QBrush(coat.fur))
     painter.setPen(_pen(OUTLINE, CONTOUR, unit))
     for sign in (1, -1):
         outer = LEFT_EAR if sign > 0 else _mirror(LEFT_EAR)
@@ -207,16 +268,17 @@ def _paint_ears(painter: QPainter, unit: float) -> None:
         painter.setBrush(QBrush(NOSE.lighter(135)))
         painter.setPen(Qt.NoPen)
         painter.drawPath(_path(inner))
-        painter.setBrush(QBrush(FUR))
+        painter.setBrush(QBrush(coat.fur))
         painter.setPen(_pen(OUTLINE, CONTOUR, unit))
 
 
-def _paint_head(painter: QPainter, unit: float) -> None:
+def _paint_head(painter: QPainter, unit: float, coat: Coat) -> None:
     """
     Голова: шире, чем выше, со скулами и чуть заострённым подбородком.
 
     Одна замкнутая кривая — если рисовать эллипс и подбородок отдельно,
-    на морде останется видимый шов.
+    на морде останется видимый шов. Полоски на лбу рисуются ПОСЛЕ головы,
+    но ДО морды: они часть шерсти, а не отдельный предмет.
     """
     head = QPainterPath()
     head.moveTo(14, 52)
@@ -227,14 +289,87 @@ def _paint_head(painter: QPainter, unit: float) -> None:
     head.cubicTo(32, 82, 14, 72, 14, 52)     # подбородок → левая скула
     head.closeSubpath()
 
-    painter.setBrush(QBrush(FUR))
+    painter.setBrush(QBrush(coat.fur))
     painter.setPen(_pen(OUTLINE, CONTOUR, unit))
     painter.drawPath(head)
 
+    _paint_head_shadow(painter, unit, coat)
+    if coat.stripes:
+        _paint_stripes(painter, unit, coat)
 
-def _paint_face(painter: QPainter, unit: float, eyes: str) -> None:
+
+def _paint_head_shadow(painter: QPainter, unit: float, coat: Coat) -> None:
+    """
+    Объём головы: мягкая тень сверху и по бокам.
+
+    Без неё морда выглядит плоской аппликацией (проблема #10). Тень —
+    несколько полупрозрачных дуг по краю головы, а не сплошная заливка:
+    сплошная превратила бы кота в пятно.
+    """
+    painter.setBrush(Qt.NoBrush)
+    painter.setPen(_pen(QColor(0, 0, 0, 26), 5.0, unit, min_px=1.0))
+    top = QPainterPath()
+    top.moveTo(20, 46)
+    top.cubicTo(22, 31, 34, 28, 44, 28)
+    painter.drawPath(top)
+
+    painter.setPen(_pen(QColor(0, 0, 0, 20), 4.5, unit, min_px=1.0))
+    side = QPainterPath()
+    side.moveTo(84, 44)
+    side.cubicTo(86, 62, 76, 76, 66, 82)
+    painter.drawPath(side)
+
+    # Тень под подбородком: отделяет голову от шеи и добавляет объём.
+    painter.setPen(_pen(QColor(0, 0, 0, 30), 4.0, unit, min_px=1.0))
+    chin = QPainterPath()
+    chin.moveTo(38, 84)
+    chin.quadTo(50, 90, 62, 84)
+    painter.drawPath(chin)
+
+    # Тень от шерсти на светлой морде почти не видна, но у тёмных окрасов
+    # (чёрный хранитель) именно она отделяет морду от головы.
+    painter.setPen(_pen(coat.dark, 1.6, unit, min_px=0.9))
+    muzzle_edge = QPainterPath()
+    muzzle_edge.moveTo(31, 66)
+    muzzle_edge.cubicTo(34, 58, 42, 56, 50, 56)
+    muzzle_edge.cubicTo(58, 56, 66, 58, 69, 66)
+    painter.drawPath(muzzle_edge)
+
+
+#: Полоски на лбу: (начало, конец) в системе 100×100. Симметричны
+#: относительно центра (x=50).
+FOREHEAD_STRIPES = (
+    ((44.0, 36.0), (40.0, 30.5)),
+    ((50.0, 34.5), (50.0, 28.5)),
+    ((56.0, 36.0), (60.0, 30.5)),
+    ((38.0, 40.0), (32.0, 36.0)),
+    ((62.0, 40.0), (68.0, 36.0)),
+)
+
+
+def _paint_stripes(painter: QPainter, unit: float, coat: Coat) -> None:
+    """
+    Полоски на лбу и щеках — признак полосатого окраса.
+
+    Рисуются тенью окраса: у рыжего они темнее рыжего, у серо-коричневого
+    — темнее серо-коричневого. Отдельный «цвет полосок» не нужен, поэтому
+    окрас остаётся одним объектом.
+    """
+    painter.setBrush(Qt.NoBrush)
+    painter.setPen(_pen(coat.dark, 2.2, unit, min_px=1.0))
+    for start, end in FOREHEAD_STRIPES:
+        painter.drawLine(QPointF(*start), QPointF(*end))
+
+
+def _paint_face(painter: QPainter, unit: float, eyes: str, coat: Coat) -> None:
     """Светлая морда, нос-треугольник, рот «ω», усы и глаза."""
+    # Отметина на лбу — часть окраса, поэтому идёт под мордой.
+    if coat.blaze:
+        _paint_blaze(painter, unit, coat)
+
     # ── Морда: светлое пятно шире, чем выше, с подбородком ──
+    # Контур не линией, а мягкой тенью (проблема #10, E.3): линия делила
+    # морду на «наклейку» и голову, тень же читается как объём.
     muzzle = QPainterPath()
     muzzle.moveTo(31, 69)
     muzzle.cubicTo(31, 61, 40, 59, 50, 59)
@@ -242,24 +377,80 @@ def _paint_face(painter: QPainter, unit: float, eyes: str) -> None:
     muzzle.cubicTo(69, 79, 58, 85, 50, 87)
     muzzle.cubicTo(42, 85, 31, 79, 31, 69)
     muzzle.closeSubpath()
-    painter.setBrush(QBrush(MUZZLE))
+    painter.setBrush(QBrush(QColor(0, 0, 0, 22)))
     painter.setPen(Qt.NoPen)
+    painter.drawPath(_offset_path(muzzle, 0.0, 1.6))
+    painter.setBrush(QBrush(coat.muzzle))
     painter.drawPath(muzzle)
 
     _paint_eyes(painter, unit, eyes)
     _paint_nose_and_mouth(painter, unit)
-    _paint_whiskers(painter, unit)
+    _paint_whiskers(painter, unit, coat)
+
+
+def _paint_blaze(painter: QPainter, unit: float, coat: Coat) -> None:
+    """
+    Белая отметина от лба к носу — «рыжий с белой мордой».
+
+    Рисуется ДО морды, чтобы светлое пятно морды осталось сверху: отметина
+    продолжает его вверх по лбу и связывает морду с головой.
+    """
+    blaze = QPainterPath()
+    blaze.moveTo(50, 30)
+    blaze.cubicTo(45, 38, 44, 50, 45.5, 60)
+    blaze.cubicTo(48, 63, 52, 63, 54.5, 60)
+    blaze.cubicTo(56, 50, 55, 38, 50, 30)
+    blaze.closeSubpath()
+    painter.setBrush(QBrush(coat.muzzle))
+    painter.setPen(Qt.NoPen)
+    painter.drawPath(blaze)
+
+
+def _offset_path(path: QPainterPath, dx: float, dy: float) -> QPainterPath:
+    """Копия пути, сдвинутая на (dx, dy) — для мягкой тени под фигурой."""
+    moved = QPainterPath(path)
+    moved.translate(dx, dy)
+    return moved
+
+
+def _pupil_path(cx: float, cy: float, width: float, height: float) -> QPainterPath:
+    """
+    Зрачок-щель: вертикальный, заострённый к концам.
+
+    Ровный овал с теми же размерами читается как «точка» и вместе с
+    крупными глазами давал гипнотический взгляд (проблема #6). Заострение
+    к концам превращает его в кошачью щель — взгляд становится спокойным.
+    """
+    half_w = width / 2.0
+    half_h = height / 2.0
+    path = QPainterPath()
+    path.moveTo(cx, cy - half_h)
+    path.cubicTo(cx + half_w, cy - half_h * 0.45,
+                 cx + half_w, cy + half_h * 0.45,
+                 cx, cy + half_h)
+    path.cubicTo(cx - half_w, cy + half_h * 0.45,
+                 cx - half_w, cy - half_h * 0.45,
+                 cx, cy - half_h)
+    path.closeSubpath()
+    return path
 
 
 def _paint_eyes(painter: QPainter, unit: float, eyes: str) -> None:
-    """Большие круглые глаза с вертикальным зрачком-щелью."""
+    """
+    Глаза: прищуренные, с вертикальным зрачком-щелью и веком.
+
+    Что изменилось против первой версии (проблемы #6): глаза меньше на
+    20 %, зрачок заострён к концам, сверху добавлено веко — тень, из-за
+    которой глаз выглядит прищуренным, а не вытаращенным. Блик остался
+    маленькой точкой: он даёт «живость», но не увеличивает глаз.
+    """
     for sign in (-1, 1):
         cx = 50 + sign * EYE_DX
         if eyes == "closed":
             # Закрытый глаз — дуга «∩»: кот жмурится или спит.
             lid = QPainterPath()
-            lid.moveTo(cx - 9, 53)
-            lid.quadTo(cx, 43.5, cx + 9, 53)
+            lid.moveTo(cx - 8, 53)
+            lid.quadTo(cx, 44.5, cx + 8, 53)
             painter.setBrush(Qt.NoBrush)
             painter.setPen(_pen(OUTLINE, 1.8, unit, min_px=1.0))
             painter.drawPath(lid)
@@ -268,20 +459,35 @@ def _paint_eyes(painter: QPainter, unit: float, eyes: str) -> None:
         radius = EYE_R_WIDE if eyes == "wide" else EYE_R
         # Белок
         painter.setBrush(QBrush(QColor("#FFF8EC")))
-        painter.setPen(_pen(OUTLINE, 1.4, unit, min_px=0.9))
+        painter.setPen(_pen(OUTLINE, 1.3, unit, min_px=0.9))
         painter.drawEllipse(QRectF(cx - radius, EYE_Y - radius, radius * 2, radius * 2))
         # Радужка
         painter.setBrush(QBrush(IRIS))
         painter.setPen(Qt.NoPen)
         painter.drawEllipse(QRectF(cx - IRIS_R, EYE_Y - IRIS_R, IRIS_R * 2, IRIS_R * 2))
-        # Зрачок-щель: вертикальный, а не круглый «пятачок»
+        # Зрачок-щель: вертикальный, заострённый к концам
         painter.setBrush(QBrush(EYE))
-        painter.drawEllipse(
-            QRectF(cx - PUPIL_W / 2, EYE_Y - PUPIL_H / 2, PUPIL_W, PUPIL_H)
-        )
-        # Блик
+        painter.drawPath(_pupil_path(cx, EYE_Y, PUPIL_W, PUPIL_H))
+        # Верхнее веко: полупрозрачная тень поверх верхней части глаза —
+        # взгляд становится прищуренным, а не «гипнотическим».
+        painter.setBrush(QBrush(QColor(0, 0, 0, 38)))
+        painter.setPen(Qt.NoPen)
+        painter.drawPath(_upper_lid(cx, radius))
+        # Блик — маленькая белая точка
         painter.setBrush(QBrush(QColor("#FFFFFF")))
-        painter.drawEllipse(QRectF(cx - radius * 0.55, EYE_Y - radius * 0.72, 3.2, 3.2))
+        painter.drawEllipse(
+            QRectF(cx - radius * 0.5, EYE_Y - radius * 0.62, 2.4, 2.4)
+        )
+
+
+def _upper_lid(cx: float, radius: float) -> QPainterPath:
+    """Тень верхнего века: сегмент круга глаза над центром."""
+    lid = QPainterPath()
+    lid.moveTo(cx - radius * 0.96, EYE_Y - radius * 0.28)
+    lid.quadTo(cx, EYE_Y - radius * 1.5, cx + radius * 0.96, EYE_Y - radius * 0.28)
+    lid.quadTo(cx, EYE_Y - radius * 0.55, cx - radius * 0.96, EYE_Y - radius * 0.28)
+    lid.closeSubpath()
+    return lid
 
 
 def _paint_nose_and_mouth(painter: QPainter, unit: float) -> None:
@@ -305,16 +511,23 @@ def _paint_nose_and_mouth(painter: QPainter, unit: float) -> None:
     painter.drawPath(right)
 
 
-def _paint_whiskers(painter: QPainter, unit: float) -> None:
-    """Усы: по три с каждой стороны, тонкие и чуть изогнутые."""
+def _paint_whiskers(painter: QPainter, unit: float, coat: Coat) -> None:
+    """
+    Усы: по три с каждой стороны, КОРОТКИЕ и чуть поднятые вверх.
+
+    Прежние усы уходили почти к краям квадрата и загибались вниз — кот
+    выглядел как морж (проблема #9). Теперь они в 1.5–2 раза короче,
+    тоньше и загнуты ВВЕРХ: так рисуют довольную кошку.
+    """
     painter.setBrush(Qt.NoBrush)
-    painter.setPen(_pen(WHISKER, 1.1, unit, min_px=0.7))
+    painter.setPen(_pen(WHISKER, 1.0, unit, min_px=0.6))
 
     #: (начало, контрольная точка изгиба, конец) для левой стороны.
+    #: Концы подняты выше начала — усы «улыбаются», а не свисают.
     left_side = (
-        ((40.0, 66.0), (24.0, 60.0), (9.0, 59.0)),
-        ((39.0, 71.0), (23.0, 69.0), (7.0, 69.0)),
-        ((40.0, 76.0), (24.0, 78.0), (9.0, 80.0)),
+        ((40.0, 66.0), (32.0, 62.5), (23.0, 61.5)),
+        ((39.0, 70.5), (31.0, 69.0), (21.5, 67.0)),
+        ((40.0, 75.0), (32.0, 76.0), (23.0, 74.0)),
     )
     for start, control, end in left_side:
         right_side = _mirror((start, control, end))
@@ -355,33 +568,69 @@ def _paint_magnifier(painter: QPainter, unit: float) -> None:
 
 
 def _paint_hat(painter: QPainter, unit: float) -> None:
-    """Шляпа детектива: поля и тулья с лентой (уши остаются видны сверху)."""
+    """
+    Кепка Шерлока (deerstalker): купол, козырёк и клетка.
+
+    Прежняя шляпа была ковбойской — с широкими полями и высокой тульей
+    (проблема #8). У кепки Шерлока узнаваемые признаки другие: низкий
+    купол, ПАРА КОЗЫРЬКОВ (спереди и сзади) и клетчатая ткань. Клетка
+    рисуется тонкими линиями поверх купола: сплошной узор на 32 px
+    превратился бы в грязь, а редкие линии читаются.
+    """
+    # ── Купол: низкий и округлый, СИДИТ ВЫШЕ ГЛАЗ ──
+    # Нижняя граница купола — y=27, а глаза начинаются с y=42: между ними
+    # остаётся лоб. Иначе кепка наезжает на глаза и кот выглядит спящим.
     crown = QPainterPath()
-    crown.moveTo(26, 31)
-    crown.cubicTo(27, 17, 30, 11, 35, 10)
-    crown.lineTo(65, 10)
-    crown.cubicTo(70, 11, 73, 17, 74, 31)
+    crown.moveTo(26, 27)
+    crown.cubicTo(26, 12, 34, 5, 50, 5)
+    crown.cubicTo(66, 5, 74, 12, 74, 27)
     crown.closeSubpath()
 
     painter.setBrush(QBrush(HAT))
     painter.setPen(_pen(OUTLINE, 1.8, unit))
     painter.drawPath(crown)
+
+    # ── Клетка: редкие линии по куполу ──
+    painter.setBrush(Qt.NoBrush)
+    painter.setPen(_pen(HAT_BAND, 1.0, unit, min_px=0.7))
+    for x in (36.0, 50.0, 64.0):
+        painter.drawLine(QPointF(x, 8.0), QPointF(x, 26.0))
+    for y in (14.0, 20.5):
+        painter.drawLine(QPointF(28.0, y), QPointF(72.0, y))
+
+    # ── Лента по краю купола ──
     painter.setBrush(QBrush(HAT_BAND))
     painter.setPen(Qt.NoPen)
-    painter.drawRect(QRectF(26, 23, 48, 5.5))
+    painter.drawRect(QRectF(26.0, 23.5, 48.0, 3.4))
+
+    # ── Козырёк: один, спереди (у кепки Шерлока он узнаётся по нему) ──
+    painter.setBrush(QBrush(HAT.darker(115)))
+    painter.setPen(_pen(OUTLINE, 1.6, unit))
+    visor = QPainterPath()
+    visor.moveTo(29, 27)
+    visor.cubicTo(37, 31, 63, 31, 71, 27)
+    visor.cubicTo(63, 36, 37, 36, 29, 27)
+    visor.closeSubpath()
+    painter.drawPath(visor)
+
+    # ── Задний козырёк и «хвостики» кепки поверх ушей ──
     painter.setBrush(QBrush(HAT))
-    painter.setPen(_pen(OUTLINE, 1.8, unit))
-    painter.drawEllipse(QRectF(12, 26, 76, 12))
+    back = QPainterPath()
+    back.moveTo(32, 7)
+    back.cubicTo(40, 2, 60, 2, 68, 7)
+    back.cubicTo(60, 11, 40, 11, 32, 7)
+    back.closeSubpath()
+    painter.drawPath(back)
 
 
-def _paint_shoulders(painter: QPainter, unit: float) -> None:
+def _paint_shoulders(painter: QPainter, unit: float, coat: Coat) -> None:
     """Плечи кота-логиста: жилету нужна фигура, а не пустота под головой."""
     shoulders = QPainterPath()
     shoulders.moveTo(10, 100)
     shoulders.cubicTo(12, 89, 26, 84, 50, 84)
     shoulders.cubicTo(74, 84, 88, 89, 90, 100)
     shoulders.closeSubpath()
-    painter.setBrush(QBrush(FUR))
+    painter.setBrush(QBrush(coat.fur))
     painter.setPen(_pen(OUTLINE, CONTOUR, unit))
     painter.drawPath(shoulders)
 
