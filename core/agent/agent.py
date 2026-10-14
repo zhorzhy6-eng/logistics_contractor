@@ -124,7 +124,10 @@ class Agent:
         """
         text = "" if message is None else str(message).strip()
         if not text:
-            return AgentReply(text="Сообщение пустое — напишите вопрос.")
+            # Формулировка совпадает с подсказкой панели (AgentPanel.
+            # EMPTY_INPUT_HINT): оператор видит один и тот же текст, откуда
+            # бы ни пришёл пустой запрос — из панели или из скрипта.
+            return AgentReply(text="Введите запрос.")
         if self.chat is None:
             return AgentReply(
                 text="Максимилиан не подключён к GigaChat: "

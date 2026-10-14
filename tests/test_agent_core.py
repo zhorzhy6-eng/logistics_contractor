@@ -328,7 +328,12 @@ def test_step_limit_stops_tool_calls():
 
 
 def test_empty_message_does_not_reach_model():
-    """Пустое сообщение не уходит в модель вовсе."""
+    """
+    Пустое сообщение не уходит в модель, а получает понятную подсказку.
+
+    Формулировка совпадает с подсказкой панели (AgentPanel.EMPTY_INPUT_HINT):
+    оператор видит один и тот же текст, откуда бы ни пришёл пустой запрос.
+    """
     chat = MockChat([text_reply("не должно случиться")])
     agent = Agent(client=chat, memory=AgentMemory(repository=FakeRepository(),
                                                   autoload=False),
@@ -337,7 +342,7 @@ def test_empty_message_does_not_reach_model():
     reply = agent.send("   ")
 
     assert chat.requests == []
-    assert "пустое" in reply.text.lower()
+    assert reply.text == "Введите запрос."
 
 
 def test_agent_without_client_reports_clearly():

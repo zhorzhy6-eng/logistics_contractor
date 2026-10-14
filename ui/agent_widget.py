@@ -577,16 +577,25 @@ class AgentPanel(QFrame):
         self.name_label.setText(name)
 
     # ── Ввод ──
+    #: Что показывается при попытке отправить пустое сообщение.
+    EMPTY_INPUT_HINT = "Введите запрос."
+
     def emit_submitted(self) -> None:
         """
         Отправляет текст из поля ввода.
 
-        Пустое сообщение не уходит: кнопка нажата случайно.
+        Пустое сообщение НЕ уходит и НЕ молчит (проблема #15): раньше
+        нажатие «Отправить» с пустым полем не делало ничего, и оператор
+        не понимал, сломалось ли что-то. Теперь панель показывает
+        «Введите запрос.» и возвращает фокус в поле.
         """
         text = self.input.toPlainText().strip()
         if not text:
+            self.set_status(self.EMPTY_INPUT_HINT)
+            self.input.setFocus()
             return
         self.input.clear()
+        self.set_status("")
         self.submitted.emit(text)
 
     def eventFilter(self, source, event) -> bool:  # noqa: N802 — имя метода Qt
