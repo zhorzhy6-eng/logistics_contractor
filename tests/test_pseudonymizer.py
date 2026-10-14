@@ -214,8 +214,11 @@ def test_mapping_is_not_stored_in_instance(pseudo, caplog):
     with caplog.at_level(logging.DEBUG, logger="core.pseudonymizer"):
         safe, mapping = pseudo.anonymize(FULL_TEXT)
         pseudo.restore(safe, mapping)
-    # Маппинг живёт только у вызывающей стороны.
-    assert vars(pseudo) == {}
+    # Маппинг живёт только у вызывающей стороны. В объекте допустима ровно
+    # одна запись — настройка mask_addresses (она задаётся при создании и
+    # не меняется); никаких найденных значений там быть не должно.
+    assert set(vars(pseudo)) <= {"mask_addresses"}
+    assert mapping, "маппинг должен был получиться — иначе проверка пустая"
     for token, value in mapping.items():
         assert value not in caplog.text
 
@@ -336,7 +339,9 @@ def test_single_instance_is_safe_for_parallel_use(pseudo):
     for thread in threads:
         thread.join()
     assert results == texts
-    assert vars(pseudo) == {}
+    # Параллельные вызовы ничего не оставили в объекте: единственная
+    # допустимая запись — настройка mask_addresses, заданная при создании.
+    assert set(vars(pseudo)) <= {"mask_addresses"}
 
 
 def test_describe_reports_kinds_without_values(pseudo):

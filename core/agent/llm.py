@@ -83,7 +83,13 @@ class SafeChat:
 
     def __init__(self, client: Any):
         self.client = ensure_client(client)
-        self._pseudonymizer = Pseudonymizer()
+        # Адреса в диалоге НЕ маскируются (в отличие от распознавания
+        # документов): адрес — то, с чем Максимилиан работает (проверка
+        # через DaData, подстановка в форму). В маске инструмент вернул бы
+        # модели «<<ADDRESS_1>>, <<ADDRESS_2>>» вместо адреса, и ответ
+        # оператору стал бы неразборчивым. ФИО, паспорта и телефоны
+        # маскируются как прежде.
+        self._pseudonymizer = Pseudonymizer(mask_addresses=False)
         self._mapping: Dict[str, str] = {}
 
     # ---------------------------------------------------------

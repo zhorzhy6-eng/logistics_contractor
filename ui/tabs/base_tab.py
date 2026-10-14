@@ -226,6 +226,23 @@ DADATA_CHANNELS: Dict[str, Dict[str, str]] = {
             "Проверьте код подразделения или заполните поле вручную."
         ),
     },
+    "name": {
+        # Поиск организации по НАЗВАНИЮ среди всех действующих юрлиц России.
+        # Нужен, когда перевозчика ещё нет в справочнике: по ИНН искать
+        # нечего, а название оператор помнит («ФассТранс», «Ромашка»).
+        "method": "suggest_parties",
+        "query_field": "full_name",
+        "query_title": "название организации",
+        "action": "Найти организацию по названию",
+        "tooltip": "Найти организацию по названию в ЕГРЮЛ (DaData)",
+        "button_attr": "btn_find_by_name",
+        "start_log": "организации по названию",
+        "not_found_title": "Ничего не найдено",
+        "not_found": (
+            "Организация с таким названием не найдена в ЕГРЮЛ.\n\n"
+            "Проверьте написание или заполните поля вручную."
+        ),
+    },
 }
 
 
@@ -320,12 +337,14 @@ class _DadataChannelMixin(TabMixin):
         "party": "_apply_dadata",
         "bank": "_apply_dadata_bank",
         "fms": "_apply_dadata_fms",
+        "name": "_apply_dadata_party_choice",
     }
     #: Проверки значений по каналам
     DADATA_VALIDATORS: Dict[str, str] = {
         "party": "_validate_inn",
         "bank": "_validate_bic",
         "fms": "_validate_fms_code",
+        "name": "_validate_company_name",
     }
 
     #: Человекочитаемые названия полей для диалогов
@@ -1049,6 +1068,96 @@ class DadataDriverMixin(_DadataChannelMixin):
         )
         lines = self._dadata_summary_lines(filled, replaced, skipped)
         self._show_dadata_summary(lines)
+
+
+class DadataNameMixin(DadataFillMixin):
+    """
+    Кнопка «🔎» у поля наименования: поиск организации по НАЗВАНИЮ.
+
+    Зачем отдельная кнопка, если есть поиск по ИНН. У нового перевозчика
+    ИНН ещё неизвестен — известна только фирма, как её помнит оператор
+    («ФассТранс», «Ромашка»). Этот канал ищет по названию среди всех
+    действующих юрлиц России (ЕГРЮЛ через DaData) и подставляет реквизиты
+    выбранного.
+
+    По названию в стране находится несколько юрлиц, поэтому при нескольких
+    подсказках оператор выбирает из списка, а при полном совпадении одного
+    названия значение подставляется сразу — без лишнего вопроса.
+
+    Наследование от ``DadataFillMixin`` неслучайно: применение результата
+    (какие поля заполнять, что делать с уже введённым, как показать итог)
+    у поиска по названию ровно такое же, как у поиска по ИНН. Своего здесь
+    только выбор одной карточки из списка.
+    """
+
+    DADATA_CHANNEL = "name"
+
+    def _setup_dadata_name_fill(self, name_field: QWidget) -> QWidget:
+        """
+        Создаёт кнопку «🔎» рядом с полем наименования.
+
+        :param name_field: виджет поля full_name (PasteableLineEdit)
+        :return: контейнер «поле + кнопка» для QFormLayout.addRow
+        """
+        return self._setup_dadata_button("name", name_field)
+
+    @staticmethod
+    def _validate_company_name(name: str) -> str:
+        """Текст проблемы с названием или пустая строка, если всё в порядке."""
+        text = str(name or "").strip()
+        if not text:
+            return (
+                "Поле наименования пустое.\n\n"
+                "Введите название организации («ФассТранс», «Ромашка») — "
+                "можно неполное."
+            )
+        if len(text) < 3:
+            return (
+                "Слишком короткое название для поиска: нужно хотя бы "
+                "три символа.\n\nУточните название организации."
+            )
+        return ""
+
+    def _apply_dadata_party_choice(self, data: Any) -> None:
+        """
+        Показывает найденные организации и заполняет форму выбранной.
+
+        Одна подсказка — подставляется сразу. Несколько — оператор выбирает
+        из списка: по названию «Ромашка» в стране действительно несколько
+        юрлиц, и угадывать за него нельзя.
+        """
+        rows = [item for item in (data or []) if isinstance(item, dict)]
+        if not rows:
+            spec = DADATA_CHANNELS["name"]
+            QMessageBox.information(self, spec["not_found_title"], spec["not_found"])
+            return
+
+        logger.info("DaData: по названию найдено организаций: %s", len(rows))
+
+        if len(rows) == 1:
+            chosen = rows[0]
+        else:
+            labels = []
+            for item in rows:
+                name = str(item.get("short_name") or item.get("full_name") or "").strip()
+                inn = str(item.get("inn") or "").strip()
+                address = str(item.get("legal_address") or "").strip()
+                label = f"{name} — ИНН {inn}" if inn else name
+                if address:
+                    label = f"{label} ({_shorten(address, 40)})"
+                labels.append(label or "без названия")
+
+            picked, accepted = QInputDialog.getItem(
+                self, "Найдено несколько организаций",
+                "Выберите нужную организацию:",
+                labels, 0, False,
+            )
+            if not accepted:
+                logger.info("DaData: выбор организации отменён оператором")
+                return
+            chosen = rows[labels.index(picked)] if picked in labels else rows[0]
+
+        self._apply_dadata(chosen)
 
 
 def _shorten(value: str, limit: int = 60) -> str:

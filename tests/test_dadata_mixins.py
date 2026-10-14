@@ -109,21 +109,47 @@ def click(tab, method, qt_app):
 # ─────────────────────────────────────────────────────────────
 
 def test_carrier_mro_has_single_handler(qt_app):
-    """Обработчик клика один — в _DadataChannelMixin, а не в миксинах-каналах."""
+    """
+    Обработчик клика один — в _DadataChannelMixin, а не в миксинах-каналов.
+
+    Порядок миксинов задан явно: первым идёт поиск по названию
+    (DadataNameMixin наследует DadataFillMixin — применение результата у
+    них общее), затем заполнение по ИНН и банк по БИК. Слот кнопки при
+    этом ровно один и живёт в _DadataChannelMixin.
+    """
     names = [cls.__name__ for cls in CarrierTab.__mro__]
     assert names[:4] == [
-        "CarrierTab", "DadataFillMixin", "DadataBankMixin", "_DadataChannelMixin",
+        "CarrierTab", "DadataNameMixin", "DadataFillMixin", "DadataBankMixin",
     ]
+    # Все каналы сходятся в одну общую инфраструктуру.
+    assert "_DadataChannelMixin" in names
     # Ни один наследник не переопределяет обработчик
+    assert "_on_dadata_button_clicked" not in vars(base_tab.DadataNameMixin)
     assert "_on_dadata_button_clicked" not in vars(base_tab.DadataFillMixin)
     assert "_on_dadata_button_clicked" not in vars(base_tab.DadataBankMixin)
     assert "_on_dadata_button_clicked" in vars(base_tab._DadataChannelMixin)
+
+
+def test_name_channel_is_declared_and_documented(qt_app):
+    """Канал поиска по названию объявлен и указывает на поле наименования."""
+    spec = base_tab.DADATA_CHANNELS["name"]
+
+    assert spec["method"] == "suggest_parties"
+    assert spec["query_field"] == "full_name"
+    assert spec["button_attr"] == "btn_find_by_name"
+    # Валидатор и применитель канала существуют и находятся на вкладке.
+    validator = base_tab._DadataChannelMixin.DADATA_VALIDATORS["name"]
+    applier = base_tab._DadataChannelMixin.DADATA_APPLIERS["name"]
+    carrier = CarrierTab()
+    assert callable(getattr(carrier, validator, None))
+    assert callable(getattr(carrier, applier, None))
 
 
 @pytest.mark.parametrize("channel,field", [
     ("party", "inn"),
     ("bank", "bik"),
     ("fms", "passport_code"),
+    ("name", "full_name"),
 ])
 def test_query_field_names_exist_on_tabs(channel, field):
     """Имя поля в DADATA_CHANNELS совпадает с реальным полем формы."""

@@ -1957,6 +1957,115 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         summary="Последние действия оператора",
     ))
 
+    # ── 2. DaData: реквизиты, поиск по названию, адрес, сверка (Часть 2) ──
+    # Наружу уходят только публичные данные (ЕГРЮЛ): ИНН, ОГРН, название,
+    # адрес. Проверка ИНН внутри инструментов не даёт отправить в DaData
+    # ничего другого — ФИО и паспорта водителей сюда попасть не могут.
+    # Ответы кэшируются на час: см. core/agent/dadata_tools.py.
+    from core.agent.dadata_tools import (  # локальный импорт: без цикла модулей
+        check_address_dadata as dadata_address,
+        check_inn_dadata as dadata_inn,
+        compare_with_dadata as dadata_compare,
+        search_company_dadata as dadata_search,
+    )
+
+    def check_inn_dadata(inn: str = "", **_):
+        """Реквизиты организации по ИНН (ЕГРЮЛ)."""
+        return dadata_inn(inn=inn)
+
+    def search_company_dadata(query: str = "", limit: int = 5, **_):
+        """Поиск организации по названию в ЕГРЮЛ."""
+        return dadata_search(query=query, limit=limit)
+
+    def check_address_dadata(address: str = "", **_):
+        """Стандартный вид адреса по данным DaData."""
+        return dadata_address(address=address)
+
+    def compare_with_dadata(entity_type: str = "carrier", entity_id: int = 0,
+                            query: str = "", **_):
+        """Сверка записи базы с ЕГРЮЛ (по ID или по названию)."""
+        return dadata_compare(entity_type=entity_type, entity_id=entity_id,
+                              query=query)
+
+    registry.register(Tool(
+        name="check_inn_dadata",
+        description=(
+            "Проверить организацию по ИНН в ЕГРЮЛ (через DaData): "
+            "наименование, ОГРН, КПП, юридический адрес, руководитель, "
+            "статус (действует или ликвидирована). Только публичные данные."
+        ),
+        parameters=_json_schema({"inn": {
+            "type": "string",
+            "description": "ИНН организации: 10 цифр (12 у ИП)",
+        }}, required=["inn"]),
+        function=check_inn_dadata,
+        summary="Проверка ИНН в DaData",
+    ))
+    registry.register(Tool(
+        name="search_company_dadata",
+        description=(
+            "Найти организацию по НАЗВАНИЮ среди всех действующих юрлиц "
+            "России (ЕГРЮЛ, через DaData). Нужно, когда перевозчика ещё нет "
+            "в справочнике, а реквизиты нужны."
+        ),
+        parameters=_json_schema({
+            "query": {
+                "type": "string",
+                "description": "название организации, можно неполное",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "сколько вариантов вернуть (1..10)",
+                "minimum": 1,
+                "maximum": 10,
+            },
+        }, required=["query"]),
+        function=search_company_dadata,
+        summary="Поиск организации в ЕГРЮЛ по названию",
+    ))
+    registry.register(Tool(
+        name="check_address_dadata",
+        description=(
+            "Привести адрес к стандартному виду (ФИАС) через DaData: "
+            "«г москва ул тестовая д 1» → «г Москва». Показывает, что "
+            "распознано точно, а что приблизительно."
+        ),
+        parameters=_json_schema({"address": {
+            "type": "string",
+            "description": "адрес как его ввёл оператор",
+        }}, required=["address"]),
+        function=check_address_dadata,
+        summary="Стандартизация адреса в DaData",
+    ))
+    registry.register(Tool(
+        name="compare_with_dadata",
+        description=(
+            "Сверить запись базы (перевозчика или заказчика) с данными "
+            "ЕГРЮЛ: какие поля расходятся и что там на самом деле. "
+            "Запись указывается ЛИБО entity_id (ID из результата поиска), "
+            "ЛИБО query (название) — второе удобнее, когда ID неизвестен. "
+            "Только чтение — ничего не исправляет."
+        ),
+        parameters=_json_schema({
+            "entity_type": {
+                "type": "string",
+                "enum": ["carrier", "customer"],
+                "description": "кого сверяем",
+            },
+            "entity_id": {
+                "type": "integer",
+                "description": "ID записи из результата поиска (если известен)",
+            },
+            "query": {
+                "type": "string",
+                "description": "название организации для поиска в базе "
+                               "(если ID неизвестен)",
+            },
+        }, required=["entity_type"]),
+        function=compare_with_dadata,
+        summary="Сверка записи базы с ЕГРЮЛ",
+    ))
+
     return registry
 
 

@@ -858,7 +858,18 @@ class Pseudonymizer:
     Экземпляр не хранит состояния: маппинг возвращается вызывающей стороне
     и живёт только в её локальной переменной. Один экземпляр можно
     безопасно использовать из нескольких потоков.
+
+    :param mask_addresses: маскировать ли улицу, дом и квартиру. По
+        умолчанию True — так работает распознавание документов. Диалог с
+        Максимилианом ставит False: адрес — это данные, с которыми он
+        РАБОТАЕТ (стандартизация через DaData, подстановка в форму), а в
+        маске инструмент возвращал бы модели ``<<ADDRESS_1>>`` вместо
+        адреса — и ответ становился неразборчивым. Города и регионы не
+        маскируются и по умолчанию: они не идентифицируют человека.
     """
+
+    def __init__(self, mask_addresses: bool = True):
+        self.mask_addresses = bool(mask_addresses)
 
     def anonymize(self, text: str) -> Tuple[str, Dict[str, str]]:
         """
@@ -874,6 +885,11 @@ class Pseudonymizer:
             return "", {}
 
         candidates = _detect(original)
+        if not self.mask_addresses:
+            # Адрес оставляем открытым: с ним работает агент. Остальные
+            # сущности (ФИО, паспорта, телефоны) маскируются как обычно.
+            candidates = [item for item in candidates
+                          if item.kind.replace("_NATASHA", "") != "ADDRESS"]
         if not candidates:
             logger.debug("Обезличивание: сущностей не найдено")
             return original, {}

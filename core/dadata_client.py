@@ -90,7 +90,12 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from core.secrets_store import MISSING_DADATA_KEY_MESSAGE, get_dadata_key
+from core.secrets_store import (
+    MISSING_DADATA_KEY_MESSAGE,
+    MISSING_DADATA_SECRET_MESSAGE,
+    get_dadata_key,
+    get_dadata_secret,
+)
 from core.text_normalize import normalize_position as _normalize_position
 
 logger = logging.getLogger(__name__)
@@ -107,6 +112,21 @@ FIND_BANK_URL = (
 SUGGEST_FMS_URL = (
     "https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/fms_unit"
 )
+#: Эндпоинт поиска организации по НАЗВАНИЮ (то, как его помнит оператор).
+SUGGEST_PARTY_URL = (
+    "https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/party"
+)
+#: Эндпоинт подсказок по адресу: разбирает адрес и отдаёт готовые части.
+SUGGEST_ADDRESS_URL = (
+    "https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address"
+)
+#: Эндпоинт СЕРВИСА ОЧИСТКИ адресов: приводит запись к стандартному виду.
+#:
+#: Требует СЕКРЕТНЫЙ ключ (заголовок ``X-Secret``) и принимает ровно одну
+#: запись за вызов — иначе 400 «Only one record allowed». Проверено живьём
+#: 24.10.2026: «Пятигорск Ленина 5» → «Ставропольский край, г Пятигорск,
+#: пл Ленина, д 5»; «г москва ул тестовая д 1» → «г Москва».
+CLEAN_ADDRESS_URL = "https://cleaner.dadata.ru/api/v1/clean/address"
 
 #: Должность руководителя у индивидуального предпринимателя.
 IP_DIRECTOR_POSITION = "Индивидуальный предприниматель"
@@ -239,7 +259,8 @@ class DadataClient:
     #: Значение branch_type: только головное подразделение, без филиалов.
     BRANCH_TYPE = "MAIN"
 
-    def __init__(self, api_key: Optional[str] = None, timeout: int = 10):
+    def __init__(self, api_key: Optional[str] = None, timeout: int = 10,
+                 secret: Optional[str] = None):
         self.api_key = (api_key or "").strip()
 
         # ── Ключ: аргумент → системное хранилище ──
@@ -247,6 +268,16 @@ class DadataClient:
             self.api_key = (get_dadata_key() or "").strip()
             if self.api_key:
                 logger.info("Ключ DaData получен из системного хранилища")
+
+        # ── Секретный ключ: нужен ТОЛЬКО очистке адресов ──
+        # Он необязателен: без него работает всё остальное (реквизиты по
+        # ИНН, поиск по названию, банк, ФМС), а clean_address() честно
+        # скажет, что секрета нет.
+        self.secret = (secret or "").strip()
+        if not self.secret:
+            self.secret = (get_dadata_secret() or "").strip()
+            if self.secret:
+                logger.info("Секретный ключ DaData получен из системного хранилища")
 
         self.timeout = timeout
 
@@ -289,6 +320,171 @@ class DadataClient:
         if parsed is None:
             logger.info("DaData: в подсказке нет реквизитов — считаем, что не найдено")
         return parsed
+
+    # ---------------------------------------------------------
+    # Поиск организации по названию
+    # ---------------------------------------------------------
+    def suggest_parties(self, query: str, count: int = 5,
+                        active_only: bool = True) -> List[Dict[str, Any]]:
+        """
+        Ищет организации по НАЗВАНИЮ (не по ИНН).
+
+        Отличие от ``find_party_by_inn``: там запрос — точный
+        идентификатор (ИНН или ОГРН), а здесь — то, как название помнит
+        оператор: «ФассТранс», «ромашка», «сбербанк». Отвечает DaData
+        списком подсказок, отсортированных по близости, поэтому
+        возвращается СПИСОК, а не одна запись: выбирать — дело оператора.
+
+        :param query: название словами;
+        :param count: сколько подсказок запросить (1..10);
+        :param active_only: True — только действующие организации;
+        :return: список разобранных карточек (см. ``_parse_suggestion``);
+                 пустой список, если ничего не найдено
+        :raises ValueError: если название не передано
+        :raises RuntimeError: при сетевой ошибке / ошибке API
+        """
+        text = (query or "").strip()
+        if not text:
+            raise ValueError("DaData: название не указано — запрос не отправлен.")
+
+        # Само название в лог не пишем: это может быть фамилия («Иванов»)
+        # или адрес, а лог обезличен. Длины достаточно для диагностики.
+        logger.info("DaData: поиск организации по названию (длина=%s)", len(text))
+
+        payload: Dict[str, Any] = {
+            "query": text,
+            "count": max(1, min(10, int(count))),
+            "branch_type": self.BRANCH_TYPE,
+        }
+        if active_only:
+            # Действующие: ликвидированные и обанкротившиеся в справочник
+            # перевозчиков не нужны, они только путают выдачу.
+            payload["status"] = ["ACTIVE"]
+
+        suggestions = self._request_suggestions(SUGGEST_PARTY_URL, payload)
+        found: List[Dict[str, Any]] = []
+        for suggestion in suggestions:
+            if not isinstance(suggestion, dict):
+                continue
+            parsed = self._parse_suggestion(suggestion)
+            if parsed is not None:
+                found.append(parsed)
+        logger.info("DaData: найдено организаций по названию: %s", len(found))
+        return found
+
+    # ---------------------------------------------------------
+    # Стандартизация адреса
+    # ---------------------------------------------------------
+    def clean_address(self, address: str) -> Optional[Dict[str, Any]]:
+        """
+        Приводит адрес к стандартному виду через сервис очистки DaData.
+
+        Почему отдельный сервис. Подсказки по адресу (suggest/address)
+        отдают город и улицу только когда DaData уверена в разборе, а на
+        бытовой записи «г москва ул тестовая д 1» возвращают пустой
+        список — проверено живьём 24.10.2026. Сервис очистки
+        (cleaner.dadata.ru/api/v1/clean/address) разбирает такую запись
+        и отдаёт готовую строку:
+
+            «г москва ул тестовая д 1» → «г Москва»
+            «Пятигорск Ленина 5» → «Ставропольский край, г Пятигорск,
+                                    пл Ленина, д 5»
+
+        ВАЖНО: очистка требует СЕКРЕТНЫЙ ключ (заголовок ``X-Secret``) и
+        принимает РОВНО ОДНУ запись за запрос — иначе отвечает
+        400 «Only one record allowed». Секретный ключ хранится в системном
+        хранилище рядом с обычным (core/secrets_store.py).
+
+        :param address: адрес как его ввёл оператор;
+        :return: словарь с полями ``value`` (стандартный вид), ``city``,
+            ``street``, ``house``, ``flat``, ``region``, ``postal_code``,
+            ``fias_id``, ``geo_lat``, ``geo_lon``, ``qc_geo`` (точность
+            определения координат: 0 — точно, выше — приблизительно);
+            None, если разобрать не удалось
+        :raises ValueError: если адрес не передан
+        :raises RuntimeError: при сетевой ошибке / ошибке API
+        """
+        text = (address or "").strip()
+        if not text:
+            raise ValueError("DaData: адрес не указан — запрос не отправлен.")
+
+        secret = (self.secret or "").strip()
+        if not secret:
+            raise RuntimeError(MISSING_DADATA_SECRET_MESSAGE)
+
+        # Адрес — персональные данные: в лог уходит только длина.
+        logger.info("DaData: очистка адреса (длина=%s)", len(text))
+
+        headers = self._headers()
+        headers["X-Secret"] = secret
+        # Одна запись за запрос: сервис очистки иначе отвечает 400
+        # «Only one record allowed». Ответ — МАССИВ разобранных записей.
+        response = self._post(CLEAN_ADDRESS_URL, headers, [text])
+        status = response.status_code
+        logger.debug("DaData: ответ очистки адреса | статус=%s", status)
+
+        if status in (401, 403):
+            logger.error("DaData: HTTP %s — ключ или секрет не принят", status)
+            raise RuntimeError(
+                "DaData: неверный или отозванный ключ (секрет) DaData.\n\n"
+                "Проверьте ключи: python set_dadata_key.py --check и "
+                "python set_dadata_secret.py --check"
+            )
+        if status == 429:
+            logger.error("DaData: HTTP 429 — превышен лимит запросов")
+            raise RuntimeError(
+                f"DaData: превышен лимит запросов ({RATE_LIMIT_HINT}). "
+                f"Подождите и повторите."
+            )
+        if 500 <= status < 600:
+            logger.error("DaData: HTTP %s — сервер недоступен", status)
+            raise RuntimeError(
+                f"DaData: сервер DaData недоступен (HTTP {status}), "
+                f"повторите позже."
+            )
+        if not 200 <= status < 300:
+            logger.error("DaData: HTTP %s — неожиданный ответ очистки", status)
+            raise RuntimeError(
+                f"DaData: ошибка API очистки адреса (HTTP {status}). "
+                f"Подробности — в logs/errors.log."
+            )
+
+        try:
+            body = response.json()
+        except ValueError as exc:
+            logger.error("DaData: ответ очистки не является JSON (%s)",
+                         type(exc).__name__)
+            raise RuntimeError(
+                "DaData: некорректный ответ API (не JSON). Повторите позже."
+            ) from exc
+
+        if not isinstance(body, list) or not body:
+            logger.info("DaData: адрес не разобран (пустой ответ очистки)")
+            return None
+
+        item = body[0]
+        if not isinstance(item, dict):
+            logger.warning("DaData: неожиданный формат ответа очистки адреса")
+            return None
+
+        value = _clean(item.get("result"))
+        if not value:
+            logger.info("DaData: в ответе очистки нет разобранного адреса")
+            return None
+
+        return {
+            "value": value,
+            "city": _clean(item.get("city")),
+            "street": _clean(item.get("street_with_type") or item.get("street")),
+            "house": _clean(item.get("house")),
+            "flat": _clean(item.get("flat")),
+            "region": _clean(item.get("region_with_type") or item.get("region")),
+            "postal_code": _clean(item.get("postal_code")),
+            "fias_id": _clean(item.get("fias_id")),
+            "geo_lat": _clean(item.get("geo_lat")),
+            "geo_lon": _clean(item.get("geo_lon")),
+            "qc_geo": item.get("qc_geo"),
+        }
 
     # ---------------------------------------------------------
     # Поиск банка по БИК
@@ -599,21 +795,52 @@ def suggest_fms_unit(code: str, api_key: Optional[str] = None,
     return DadataClient(api_key=api_key, timeout=timeout).suggest_fms_unit(code)
 
 
+def suggest_parties(query: str, api_key: Optional[str] = None,
+                    timeout: int = 10, count: int = 5,
+                    active_only: bool = True) -> List[Dict[str, Any]]:
+    """Удобная обёртка: разовый поиск организаций по названию."""
+    return DadataClient(api_key=api_key, timeout=timeout).suggest_parties(
+        query, count=count, active_only=active_only
+    )
+
+
+def suggest_addresses(query: str, api_key: Optional[str] = None,
+                      timeout: int = 10, count: int = 5) -> List[Dict[str, Any]]:
+    """Удобная обёртка: разовые подсказки по адресу (разбор на части)."""
+    return DadataClient(api_key=api_key, timeout=timeout).suggest_addresses(
+        query, count=count
+    )
+
+
+def clean_address(address: str, api_key: Optional[str] = None,
+                  secret: Optional[str] = None,
+                  timeout: int = 10) -> Optional[Dict[str, Any]]:
+    """Удобная обёртка: разовая стандартизация адреса (нужен секрет)."""
+    return DadataClient(api_key=api_key, timeout=timeout,
+                        secret=secret).clean_address(address)
+
+
 __all__: List[str] = [
     "BANK_STATUS_TITLES",
+    "CLEAN_ADDRESS_URL",
     "DadataClient",
     "FIND_BANK_URL",
     "FIND_PARTY_URL",
     "FMS_CODE_MIN_DIGITS",
     "IP_DIRECTOR_POSITION",
     "STATUS_TITLES",
+    "SUGGEST_ADDRESS_URL",
     "SUGGEST_FMS_URL",
+    "SUGGEST_PARTY_URL",
     "bank_status_warning",
+    "clean_address",
     "find_bank_by_bic",
     "find_party_by_inn",
     "normalize_fms_code",
     "normalize_position",
     "status_warning",
+    "suggest_addresses",
     "suggest_fms_unit",
+    "suggest_parties",
     "_normalize_position",
 ]

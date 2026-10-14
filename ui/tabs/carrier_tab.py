@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QDate, pyqtSignal
 
 from ui import theme
-from ui.tabs.base_tab import DadataBankMixin, DadataFillMixin
+from ui.tabs.base_tab import DadataBankMixin, DadataFillMixin, DadataNameMixin
 from ui.widgets import PasteableLineEdit, PasteableTextEdit, PasteableDateEdit, RecognitionPanel
 
 logger = logging.getLogger("ui.tabs.carrier_tab")
@@ -47,7 +47,7 @@ def _normalize_digits(value: Any) -> str:
     return re.sub(r"\D", "", "" if value is None else str(value))
 
 
-class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
+class CarrierTab(DadataNameMixin, DadataFillMixin, DadataBankMixin, QWidget):
     """
     Вкладка с данными перевозчика (исполнителя).
 
@@ -60,9 +60,11 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
     выбирают на вкладке «Договор» полями «Форма» и «Ставка НДС». Значения
     скрытых полей живые — их отдают `get_data()` и `apply_entity_type()`.
 
-    Кнопки «🔎» из DaData: у поля ИНН — реквизиты организации
-    (DadataFillMixin), у поля БИК — банк и корр. счёт (DadataBankMixin).
-    Обе срабатывают только по явному нажатию, без автозаполнения при вводе.
+    Кнопки «🔎» из DaData: у поля ИНН — реквизиты организации по ИНН
+    (DadataFillMixin), у поля наименования — поиск по названию в ЕГРЮЛ
+    (DadataNameMixin: нужен, когда ИНН ещё неизвестен), у поля БИК — банк
+    и корр. счёт (DadataBankMixin). Все срабатывают только по явному
+    нажатию, без автозаполнения при вводе.
     """
 
     recognize_requested = pyqtSignal(str)
@@ -143,8 +145,12 @@ class CarrierTab(DadataFillMixin, DadataBankMixin, QWidget):
 
         self.full_name = PasteableLineEdit("ООО «Транс-Логистик»")
         self.full_name.set_required(True)
+        # Две кнопки у наименования: «🔎» — найти организацию по названию
+        # в ЕГРЮЛ (DaData), когда ИНН ещё неизвестен, и «📋»/«🧠» из самого
+        # поля. Запрос уходит только по нажатию.
         general_layout.addRow(
-            theme.required_label("Полное наименование"), self.full_name
+            theme.required_label("Полное наименование"),
+            self._setup_dadata_name_fill(self.full_name),
         )
 
         self.short_name = PasteableLineEdit("ООО «Транс-Логистик»")

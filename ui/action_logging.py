@@ -44,7 +44,9 @@ def _button_name(button: QAbstractButton) -> str:
     tooltip = button.toolTip()
     if tooltip in {"Вставить из буфера обмена", "Вставить дату из буфера обмена",
                    "Распознать через GigaChat",
-                   "Заполнить реквизиты по ИНН через DaData"}:
+                   "Заполнить реквизиты по ИНН через DaData",
+                   "Заполнить банк и корр. счёт по БИК через DaData",
+                   "Найти организацию по названию в ЕГРЮЛ (DaData)"}:
         return tooltip
     if re.fullmatch(r"Показать ещё \d+", label):
         return "Показать ещё"
