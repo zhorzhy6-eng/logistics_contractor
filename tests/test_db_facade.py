@@ -82,8 +82,13 @@ REQUIRED_NAMES = (
 #: agent_history и её индекс idx_agent_history_session (история диалога
 #: с ИИ-агентом), поэтому 57 → 59 объектов. Колонки существующих таблиц не
 #: менялись — SCHEMA_COLUMNS прежний.
-SCHEMA_SHA256 = "600045f745eb599a83cf96e4c3da2b90c61967d73ab4e4d5e211f3149aedbf99"
-SCHEMA_OBJECTS = 59
+#:
+#: Обновлён 14.10.2026 шагом «Максимилиан: память (часть 5)»: осознанно
+#: добавлены таблицы agent_memory (алиасы, привычки, исправления) и
+#: agent_feedback (оценки ответов) с их индексами — 59 → 63 объекта.
+#: Колонки существующих таблиц снова не менялись.
+SCHEMA_SHA256 = "8aba6348fcd9cf224246437c0eea82a42770c5c78babb84818c1070a09cd4596"
+SCHEMA_OBJECTS = 63
 SCHEMA_COLUMNS = {
     "drivers": 19, "customers": 20, "carriers": 22, "vehicles": 9,
     "driver_vehicles": 10, "driver_carriers": 6, "contracts": 17,
@@ -93,7 +98,8 @@ SCHEMA_COLUMNS = {
 #: Модули пакета db/ (кроме фасада) — в них не должно быть импорта фасада.
 DB_MODULES = (
     "agent_queries", "connection", "schema", "migrations", "salons", "fts",
-    "crud.addresses", "crud.agent_history", "crud.carriers",
+    "crud.addresses", "crud.agent_history", "crud.agent_memory",
+    "crud.analytics", "crud.carriers",
     "crud.contracts", "crud.customers",
     "crud.counterparties", "crud.drivers", "crud.organizations",
     "crud.search", "crud.vehicles",

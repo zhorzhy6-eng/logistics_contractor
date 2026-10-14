@@ -343,19 +343,39 @@ def test_extract_alias_phrase():
 
 
 def test_extract_habit_phrase():
-    """«Всегда НДС 20 % для Ромашки» даёт привычку."""
+    """«Всегда НДС 20 % для Ромашки» даёт привычку без служебного слова."""
     facts = long_memory.extract("Всегда НДС 20 % для Ромашки")
     assert len(facts) == 1
     assert facts[0]["kind"] == "habit"
     assert facts[0]["key"] == "Ромашки"
-    assert "НДС" in facts[0]["value"]
+    # Служебное «Всегда» в значение не попадает.
+    assert facts[0]["value"] == "НДС 20 %"
 
 
 def test_extract_correction_phrase():
-    """Исправление помечается своим видом."""
+    """Исправление помечается своим видом и не тянет служебные слова."""
     facts = long_memory.extract("Неправильно, ИНН с пробелами — без пробелов")
     assert len(facts) == 1
     assert facts[0]["kind"] == "correction"
+    assert facts[0]["key"] == "ИНН с пробелами"
+    assert facts[0]["value"] == "без пробелов"
+
+
+def test_extract_strips_leading_cues():
+    """Служебные слова из начала фразы в запись не входят."""
+    assert long_memory.extract("Учти, Фасстранс — это ООО «ФассТранс»")[0][
+        "key"] == "Фасстранс"
+    assert long_memory.extract("На будущее: Ромашка — это ООО Ромашка")[0][
+        "value"] == "ООО Ромашка"
+
+
+def test_recall_matches_cases_by_stem(memory_db):
+    """Падежи сходятся: запись «для Ромашки» находится запросом «Ромашка»."""
+    long_memory.remember_habit("Ромашки", "НДС 20 %")
+    assert long_memory.recall("заполни Ромашка")
+    assert long_memory.recall("что там по Ромашке")
+    # Чужая запись не подтягивается.
+    assert long_memory.recall("что там по Васильку") == []
 
 
 def test_extract_plain_question_is_empty():

@@ -64,6 +64,17 @@ CORRECTION_CUES = (
     "на самом деле", "вообще-то", "неверно", "это не",
 )
 
+#: Служебные слова в НАЧАЛЕ фразы: в ключ и значение они не входят.
+#: Длинные идут первыми, чтобы «не так» не съело «не так-то».
+LEADING_CUES: Tuple[str, ...] = (
+    "запомни, что", "запомни:", "запомни", "учти, что", "учти",
+    "имей в виду", "имей ввиду", "на будущее", "в дальнейшем",
+    "всегда", "по умолчанию",
+    "это не", "неправильно", "неверно", "не так", "ошибка", "ошибся",
+    "исправь", "поправь", "на самом деле", "вообще-то",
+    "надо", "нужно",
+)
+
 #: Шаблон «X — это Y» / «X = Y»: так оператор объясняет алиас.
 _ALIAS_PATTERNS: Tuple[re.Pattern, ...] = (
     re.compile(r"^(?P<key>[^:=]{2,80}?)\s*(?:—|–|-|=|это)\s*(?P<value>.{2,})$"),
@@ -125,6 +136,11 @@ def relevance(record: Dict[str, Any], tokens: Sequence[str]) -> float:
     Считается просто и предсказуемо: совпадение в ключе весит больше, чем в
     значении; за каждое использование запись получает небольшой плюс —
     подтверждённое оператором полезнее случайного.
+
+    Падежи сравниваются ПАДЕЖНОЙ ОСНОВОЙ (`core/fuzzy.py::stem`), той же,
+    что и нечёткий поиск по базе: «Ромашка» находит запись «Ромашки».
+    Сначала проверяется слово как есть — точное совпадение всегда сильнее
+    «догадки», — и только потом основа.
     """
     if not tokens:
         return 0.0
@@ -133,9 +149,10 @@ def relevance(record: Dict[str, Any], tokens: Sequence[str]) -> float:
 
     score = 0.0
     for token in tokens:
-        if token in key:
+        stem = _stem(token)
+        if token in key or (stem and stem in key):
             score += 3.0
-        elif token in value:
+        elif token in value or (stem and stem in value):
             score += 1.0
     if score == 0:
         return 0.0
@@ -149,6 +166,17 @@ def relevance(record: Dict[str, Any], tokens: Sequence[str]) -> float:
     # Свежее чуть полезнее старого: правки оператора важнее давних записей.
     kind_bonus = 0.3 if str(record.get("kind")) == "correction" else 0.0
     return score + kind_bonus
+
+
+def _stem(word: str) -> str:
+    """Падежная основа слова (пусто — основа не отличается от слова)."""
+    try:
+        from core.fuzzy import stem
+
+        base = str(stem(word) or "")
+    except Exception:  # noqa: BLE001 — без морфологии память работает как есть
+        return ""
+    return base if base and base != word else ""
 
 
 def rank(records: Sequence[Dict[str, Any]], query: str,
@@ -304,13 +332,9 @@ def extract(message: str) -> List[Dict[str, str]]:
         return []
 
     facts: List[Dict[str, str]] = []
-    body = text
-    for cue in ("запомни, что", "запомни:", "запомни", "учти, что", "учти",
-                "имей в виду", "имей ввиду", "на будущее", "в дальнейшем"):
-        if cue in lowered:
-            index = lowered.index(cue)
-            body = text[index + len(cue):].strip(" ,:—-")
-            break
+    body = _strip_cues(text)
+    if not body:
+        return []
 
     key, value = _split_fact(body)
     if not key or not value:
@@ -318,13 +342,51 @@ def extract(message: str) -> List[Dict[str, str]]:
     if look_sensitive(value):
         return []
 
+    # `_strip_cues` уже убрал служебные слова из начала, поэтому «Всегда НДС
+    # 20 % для Ромашки» разбирается как «НДС 20 %» (значение) и «Ромашки»
+    # (ключ), а не как фраза целиком.
+    cleaned = clean_key(key)
     if is_correction:
-        facts.append({"kind": "correction", "key": key, "value": value})
+        facts.append({"kind": "correction", "key": cleaned, "value": value})
     elif is_habit:
-        facts.append({"kind": "habit", "key": key, "value": value})
+        facts.append({"kind": "habit", "key": cleaned, "value": value})
     else:
-        facts.append({"kind": "alias", "key": key, "value": value})
+        facts.append({"kind": "alias", "key": cleaned, "value": value})
     return facts
+
+
+def _strip_cues(text: str) -> str:
+    """
+    Убирает служебные слова из начала фразы.
+
+    «Всегда НДС 20 % для Ромашки» → «НДС 20 % для Ромашки»;
+    «Неправильно, ИНН с пробелами — без пробелов» → «ИНН с пробелами —
+    без пробелов». Без этого служебное слово попадало в ключ или значение
+    записи памяти, и подсказка помощнику звучала бы странно.
+    """
+    body = " ".join(str(text or "").split()).strip(" ,:—-")
+    changed = True
+    while changed and body:
+        changed = False
+        lowered = body.lower()
+        for cue in LEADING_CUES:
+            if lowered.startswith(cue):
+                body = body[len(cue):].strip(" ,:—-")
+                changed = True
+                break
+    return body
+
+
+def clean_key(key: str) -> str:
+    """
+    Приводит ключ записи к аккуратному виду.
+
+    Падежи здесь НЕ приводятся: «Ромашки» и «Ромашка» сводятся друг к другу
+    при ПОИСКЕ — той же падежной основой, что и нечёткий поиск по базе
+    (core/fuzzy.py::stem). Так память и поиск используют одно правило, и
+    отдельная морфология (pymorphy2 не работает на Python 3.14) не нужна.
+    """
+    return " ".join(str(key or "").split()).strip(" ,:—-")
 
 
 def _split_fact(text: str) -> Tuple[str, str]:
@@ -432,9 +494,11 @@ __all__ = [
     "HABIT_KINDS",
     "KIND_HINTS",
     "KIND_TITLES",
+    "LEADING_CUES",
     "LIST_LIMIT",
     "REMEMBER_CUES",
     "TOP_RELEVANT",
+    "clean_key",
     "extract",
     "feedback",
     "forget",
