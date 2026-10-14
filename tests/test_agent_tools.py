@@ -185,7 +185,10 @@ def test_only_fill_tools_require_confirmation(registry):
     }
     # Чтение и поиск подтверждения не требуют: они ничего не меняют.
     for name in ("search_driver", "get_current_form", "validate_current_form",
-                 "explain_field", "get_help", "fill_from_entity"):
+                 "explain_field", "get_help", "fill_from_entity",
+                 #: Диагностика только читает (задание, часть 3): она не
+                 #: «чинит» программу, а собирает отчёт.
+                 "diagnose"):
         assert not registry.get(name).requires_confirmation, name
 
 

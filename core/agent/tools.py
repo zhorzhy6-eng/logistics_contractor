@@ -1665,6 +1665,58 @@ def _parse_and_fill(context: AgentContext, text: str = "",
                         use_dadata=use_dadata)
 
 
+def _diagnose(checks: Any = None, live_network: bool = False,
+              **_) -> Dict[str, Any]:
+    """
+    Самодиагностика программы (задание, часть 3, пункт F.1).
+
+    Инструмент ТОЛЬКО читает: проверяет базу, настройки, логи, доступность
+    GigaChat и DaData, память Максимилиана, место на диске и версию. Он не
+    «самопочиняется» и ничего не меняет — по результату оператор открывает
+    диалог диагностики и отправляет отчёт разработчику.
+
+    :param checks: какие проверки выполнить (пусто — все);
+    :param live_network: проверять ли сервисы сетевыми запросами.
+    """
+    from core import diagnostics
+
+    if checks is None or checks == "":
+        keys = list(diagnostics.CHECK_ORDER)
+    elif isinstance(checks, str):
+        keys = [checks]
+    else:
+        keys = [str(key) for key in checks]
+
+    unknown = [key for key in keys if key not in diagnostics.CHECK_ORDER]
+    if unknown:
+        return _error(
+            f"неизвестная проверка: {', '.join(unknown)}",
+            available=list(diagnostics.CHECK_ORDER),
+        )
+
+    report = diagnostics.run_diagnostics(
+        live_network=bool(live_network), checks=keys,
+    )
+    data = report.to_dict()
+    data["checks"] = [
+        {
+            "key": check.key, "title": check.title, "status": check.status,
+            "mark": check.mark, "summary": check.summary,
+            #: В ответ модели уходит только начало подробностей: остальное
+            #: оператор увидит в диалоге диагностики.
+            "details": check.details[:10],
+        }
+        for check in report.checks
+    ]
+    return _ok(
+        data,
+        message=(
+            f"{report.summary_line()}. Подробный отчёт — в диалоге "
+            f"диагностики («Справка → Диагностика»)"
+        ),
+    )
+
+
 # ─────────────────────────────────────────────────────────────
 # B.4. Документы
 # ─────────────────────────────────────────────────────────────
@@ -2288,6 +2340,9 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     def get_help(topic: str = ""):
         return _get_help(topic=topic)
 
+    def diagnose(checks: Any = None, live_network: bool = False):
+        return _diagnose(checks=checks, live_network=live_network)
+
     registry.register(Tool(
         name="explain_field",
         description=(
@@ -2314,6 +2369,31 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         }}),
         function=get_help,
         summary="Справка по программе",
+    ))
+    registry.register(Tool(
+        name="diagnose",
+        description=(
+            "Проверить состояние программы: база, настройки, логи, "
+            "доступность GigaChat и DaData, память, место на диске, версия. "
+            "ТОЛЬКО ЧТЕНИЕ: ничего не меняет и не «чинит». Вызывай, когда "
+            "оператор говорит «сломалось», «не работает», «ошибка», "
+            "«тормозит», «не отправляется». После проверки предложи открыть "
+            "диалог диагностики («Справка → Диагностика» или кнопка с "
+            "гаечным ключом в панели) и отправить отчёт разработчику."
+        ),
+        parameters=_json_schema({
+            "checks": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "какие проверки выполнить; пусто — все",
+            },
+            "live_network": {
+                "type": "boolean",
+                "description": "проверять ли GigaChat и DaData запросом в сеть",
+            },
+        }),
+        function=diagnose,
+        summary="Самодиагностика программы",
     ))
 
     # ── 1. Контекст: что открыто и что делал оператор (Часть 1) ──

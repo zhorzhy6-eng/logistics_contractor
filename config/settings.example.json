@@ -11,6 +11,8 @@
   "gigachat_ca_bundle": "",
   "document_soffice": "",
   "dadata_timeout": 10,
+  "_diagnostics_comment": "Куда отправлять отчёт диагностики (кнопка «Отправить разработчику» в диалоге «Справка → Диагностика»). Пусто — отчёт сохраняется на рабочем столе и открывается папка с ним.",
+  "diagnostics_email": "",
   "ollama_url": "http://127.0.0.1:11434",
   "ollama_model": "qwen2.5:7b",
   "ollama_timeout": 150,

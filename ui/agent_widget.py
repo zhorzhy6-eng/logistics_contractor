@@ -450,6 +450,8 @@ class AgentPanel(QFrame):
     clear_requested = pyqtSignal()
     #: Оператор просит открыть настройки Максимилиана.
     settings_requested = pyqtSignal()
+    #: Оператор просит открыть диагностику программы (задание, часть 3).
+    diagnostics_requested = pyqtSignal()
 
     def __init__(self, agent_name: str = "Максимилиан",
                  persona_key: str = DEFAULT_PERSONA,
@@ -537,6 +539,18 @@ class AgentPanel(QFrame):
         self.btn_settings.setAutoRaise(True)
         self.btn_settings.clicked.connect(self.settings_requested)
         row.addWidget(self.btn_settings)
+
+        #: Кнопка диагностики (задание, часть 3, пункт A.3): панель — то
+        #: место, куда оператор приходит сказать «сломалось».
+        self.btn_diagnostics = QToolButton()
+        self.btn_diagnostics.setText("🔧")
+        self.btn_diagnostics.setObjectName("agentToolButton")
+        self.btn_diagnostics.setToolTip(
+            "Диагностика программы: проверить состояние и собрать отчёт"
+        )
+        self.btn_diagnostics.setAutoRaise(True)
+        self.btn_diagnostics.clicked.connect(self.diagnostics_requested)
+        row.addWidget(self.btn_diagnostics)
 
         self.btn_close = QToolButton()
         self.btn_close.setText("✕")
@@ -864,6 +878,7 @@ class AgentWidget(QObject):
             self.panel.submitted.connect(self.on_submit)
             self.panel.clear_requested.connect(self.on_clear_history)
             self.panel.settings_requested.connect(self.on_open_settings)
+            self.panel.diagnostics_requested.connect(self.on_open_diagnostics)
             self._animation.setTargetObject(self.panel)
             self._animation.setPropertyName(b"maximumWidth")
             self._load_history(max_history, max_tool_steps)
@@ -1265,6 +1280,17 @@ class AgentWidget(QObject):
         self._request = None
         self.panel.set_status("", False)
         self.panel.append_message(f"Ошибка запроса: {error}", "system")
+
+    def on_open_diagnostics(self) -> None:
+        """
+        Кнопка «🔧 Диагностика» в панели (задание, часть 3, пункт A.3).
+
+        Открывает тот же диалог, что и «Справка → Диагностика»: одно окно
+        диагностики на программу, а не два разных.
+        """
+        from ui.diagnostics_menu import window_diagnostics
+
+        window_diagnostics(self.window)
 
     def on_clear_history(self) -> None:
         """Очищает историю диалога (пункт меню панели)."""

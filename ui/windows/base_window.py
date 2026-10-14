@@ -51,6 +51,7 @@ from core.mirror import (
 from core.prompts import get_prompt
 from ui import theme
 from ui.controls.contract_type_selector import ContractTypeSelector
+from ui.diagnostics_menu import DiagnosticsMenuMixin
 from ui.icons import action_icon, tab_icon
 from ui.navigation import SideNav
 from ui.qt_shutdown import cancel_running_tasks, wait_for_thread_pools
@@ -164,7 +165,7 @@ def find_expedition_window() -> Optional[Any]:
 
 
 
-class BaseContractWindow(QMainWindow):
+class BaseContractWindow(DiagnosticsMenuMixin, QMainWindow):
     """Общий каркас окна типа договора: шапка, сайдбар, вкладки-заглушки."""
 
     #: Ключ типа (значение ContractType) — обязателен у подкласса.
@@ -201,6 +202,9 @@ class BaseContractWindow(QMainWindow):
         from ui.agent_widget import install_agent_safely
 
         install_agent_safely(self)
+
+        # ── Диагностика: «Справка → Диагностика» (задание, часть 3, A.1) ──
+        self.init_diagnostics_menu()
 
         logger.info(
             "Окно типа %r создано: вкладок=%s",

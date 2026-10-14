@@ -53,6 +53,7 @@ from ui.tabs.vehicles_tab import VehiclesTab
 from ui.tabs.trailer_tab import TrailerTab
 from ui.tabs.contract_tab import ContractTab
 from ui.db_manager_dialog import DbManagerDialog
+from ui.diagnostics_menu import DiagnosticsMenuMixin
 from ui.settings_dialog import SettingsDialog
 from ui.navigation import SideNav
 from ui.qt_shutdown import cancel_running_tasks, wait_for_thread_pools
@@ -179,7 +180,7 @@ class RecognitionTask(QRunnable):
             self.signals.error.emit(str(e))
 
 
-class MainWindow(QMainWindow):
+class MainWindow(DiagnosticsMenuMixin, QMainWindow):
     # ── Переключение типа и выход (ЭТАП 2C) ──
     # Окно «Экспедиторство» — не подкласс BaseContractWindow (нельзя ломать
     # рабочую вкладку-логику), но сигналы у него те же: main.py подключает
@@ -260,6 +261,9 @@ class MainWindow(QMainWindow):
         from ui.agent_widget import install_agent_safely
 
         install_agent_safely(self)
+
+        # ── Диагностика: «Справка → Диагностика» (задание, часть 3, A.1) ──
+        self.init_diagnostics_menu()
 
         logger.info("MainWindow инициализировано")
 
