@@ -24,8 +24,11 @@ fill_data), каким его видит ui/agent_widget.py. Поэтому ве
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+from core.agent.words import NON_NAME_WORDS
 
 logger = logging.getLogger("core.agent.tools")
 
@@ -471,6 +474,10 @@ def _search_driver(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dic
                  "с entity_type='driver'",
         )
 
+    noise = looks_like_command_or_noise(term)
+    if noise:
+        return _error(noise, looks_like_command=True)
+
     found = _driver_rows(term, limit)
     return _ok(found, count=len(found), query=term)
 
@@ -507,6 +514,10 @@ def _search_carrier(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Di
     term = str(query or "").strip()
     if not term:
         return _error("пустой запрос: укажите название, ИНН или ОГРН перевозчика")
+
+    noise = looks_like_command_or_noise(term)
+    if noise:
+        return _error(noise, looks_like_command=True)
 
     found = _carrier_rows(term, limit)
     return _ok(found, count=len(found), query=term)
@@ -546,12 +557,81 @@ def _search_customer(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> D
     if not term:
         return _error("пустой запрос: укажите название, ИНН или руководителя заказчика")
 
+    noise = looks_like_command_or_noise(term)
+    if noise:
+        return _error(noise, looks_like_command=True)
+
     found = _customer_rows(term, limit)
     return _ok(found, count=len(found), query=term)
 
 
 #: Сколько записей на каждый вид отдаёт поиск «сразу везде».
 ALL_SEARCH_PER_KIND = 5
+
+#: Слова, которые НЕ являются ни именем, ни названием: команды, вопросы,
+#: вежливость и ругательства. Список живёт в core/agent/words.py и тот же
+#: текст подставляется в промпт — иначе модель и код разошлись бы.
+#:
+#: Запрет стоит в КОДЕ, а не только в промпте: модель — не единственный
+#: вызывающий, и правило должно работать всегда.
+_NON_NAME_QUERIES = NON_NAME_WORDS
+
+#: Минимальная длина слова, которое считается названием или фамилией.
+#: Короче — это предлог, союз или инициал, а не имя: «и», «в», «на», «от».
+_NAME_MIN_LENGTH = 4
+
+#: Сколько подряд идущих БУКВ должно быть в слове, чтобы считать его
+#: названием. Отсекает «и», «ну», «ок» (они не названия) и пропускает
+#: «12345»: это может быть ИНН или номер договора, и такой запрос
+#: разбирает промпт («похоже на ИНН — что искать?»), а не запрет.
+_NAME_MIN_LETTERS_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+
+
+def _query_words(term: str) -> List[str]:
+    """Слова запроса без пунктуации, в нижнем регистре."""
+    words = [word.strip(".,!?;:()\"'«»—-").casefold() for word in str(term or "").split()]
+    return [word for word in words if word]
+
+
+def looks_like_command_or_noise(term: str) -> str:
+    """
+    Похож ли запрос на команду, вопрос или ругательство, а не на название.
+
+    Правило простое: если в запросе есть ХОТЬ ОДНО слово, похожее на имя
+    или название (достаточно длинное и не служебное) — искать можно.
+    Запрет срабатывает, только когда ВСЕ слова служебные: «Заполни»,
+    «Найди», «блядь, заебал», «Сможешь заполнить договор?».
+
+    Так «Ромашка, покажи» остаётся запросом (в нём есть название), а
+    «Отмени» — нет (кроме команды в нём ничего нет).
+
+    :return: короткое пояснение для модели или пустая строка, если запрос
+        похож на имя или название и его можно искать.
+    """
+    words = _query_words(term)
+    if not words:
+        return ""
+
+    blocked = [word for word in words if word in _NON_NAME_QUERIES]
+    if not blocked:
+        return ""
+
+    # Есть ли в запросе настоящее название? Тогда служебное слово — просто
+    # обрамление («Ромашка, покажи»), и искать нужно.
+    meaningful = [
+        word for word in words
+        if len(word) >= _NAME_MIN_LENGTH
+        and word not in _NON_NAME_QUERIES
+        and _NAME_MIN_LETTERS_RE.search(word)
+    ]
+    if meaningful:
+        return ""
+
+    return (
+        f"«{' '.join(blocked)}» — это команда или вопрос, а не имя и не "
+        f"название. Такое в базе не ищут: спроси оператора, кого или что "
+        f"нужно найти."
+    )
 
 
 def _search_anything(query: str = "", limit: int = ALL_SEARCH_PER_KIND, **_) -> Dict[str, Any]:
@@ -572,6 +652,14 @@ def _search_anything(query: str = "", limit: int = ALL_SEARCH_PER_KIND, **_) -> 
     term = str(query or "").strip()
     if not term:
         return _error("пустой запрос: укажите что искать (название, ФИО, номер)")
+
+    # Служебное слово вместо названия (команда, вопрос, ругательство) —
+    # это не поиск, а ошибка вызова. Возврат понятного текста учит модель
+    # правильному поведению лучше, чем «не нашёл Заполни».
+    noise = looks_like_command_or_noise(term)
+    if noise:
+        logger.info("Поиск отклонён: запрос похож на команду (длина=%s)", len(term))
+        return _error(noise, looks_like_command=True)
 
     per_kind = max(1, int(limit))
     sections: Dict[str, List[Dict[str, Any]]] = {}
@@ -624,6 +712,10 @@ def _search_vehicle(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Di
     term = str(query or "").strip()
     if not term:
         return _error("пустой запрос: укажите VIN, госномер или марку ТС")
+
+    noise = looks_like_command_or_noise(term)
+    if noise:
+        return _error(noise, looks_like_command=True)
 
     like = f"%{term}%"
     found: List[Dict[str, Any]] = []
@@ -684,6 +776,22 @@ def _search_contract(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> D
     from db import agent_queries
 
     term = str(query or "").strip()
+
+    # Пустой запрос больше НЕ отдаёт «последние договоры» (проблема #15).
+    # Десять случайных строк на непонятный запрос выглядят как выдумка:
+    # оператор не понимает, почему ему показали именно эти договоры.
+    if not term:
+        return _error(
+            "не указано, какой договор искать: назовите номер, дату, "
+            "маршрут или сторону договора",
+            hint="например: «договор 23092026-74» или "
+                 "«договоры с Ромашкой»",
+        )
+
+    noise = looks_like_command_or_noise(term)
+    if noise:
+        return _error(noise, looks_like_command=True)
+
     rows = agent_queries.search_contracts(term, limit=max(1, int(limit)))
     found = [{
         "id": row.get("id"),
@@ -1474,6 +1582,11 @@ def _get_help(topic: str = "", **_) -> Dict[str, Any]:
 
     Тема необязательна: без неё возвращается краткий обзор всех тем, с
     темой — её текст.
+
+    ВАЖНО про формулировки (проблема #5). Этот текст уходит в модель и
+    часто попадает в ответ оператору почти дословно. Поэтому здесь НЕТ
+    имён служебных команд и технического жаргона — только то, что оператор
+    видит в интерфейсе: вкладки, кнопки, названия документов.
     """
     topics: Dict[str, str] = {
         "типы": (
@@ -1495,14 +1608,16 @@ def _get_help(topic: str = "", **_) -> Dict[str, Any]:
         ),
         "база": (
             "Водители, перевозчики, заказчики, ТС и договоры хранятся "
-            "в локальной базе SQLite. Удаление записей — мягкое: запись "
+            "в локальной базе. Удаление записей — мягкое: запись "
             "помечается удалённой и её можно вернуть."
         ),
         "максимилиан": (
-            "Я — Максимилиан, ассистент внутри программы. Я объясняю поля, "
-            "ищу данные в справочниках, подтягиваю записи в форму и умею "
-            "распознавать документы. Договоры я не создаю и данные не удаляю: "
-            "заполнение формы всегда требует вашего подтверждения."
+            "Я — Максимилиан, помощник внутри программы. Объясняю поля "
+            "форм, ищу данные в справочниках, подтягиваю записи в форму, "
+            "проверяю договор на нехватку данных, сверяю организации с "
+            "государственным реестром и умею распознавать документы. "
+            "Договоры я не создаю и данные не удаляю: заполнение формы "
+            "всегда требует вашего подтверждения."
         ),
         "настройки": (
             "Настройки открываются кнопкой «Настройки»: провайдер "
@@ -1583,7 +1698,8 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         name="search_driver",
         description=(
             "Найти водителя в справочнике по ФИО, телефону или паспорту. "
-            "Возвращает id и краткие данные; id нужен для fill_from_entity."
+            "Возвращает краткие данные водителя; найденную запись потом "
+            "можно подтянуть в форму."
         ),
         parameters=_json_schema(
             {"query": _QUERY_PROPERTY}, required=["query"]
@@ -1595,7 +1711,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         name="search_carrier",
         description=(
             "Найти перевозчика по названию, ИНН или ОГРН. "
-            "Возвращает id и краткие реквизиты."
+            "Возвращает краткие реквизиты организации."
         ),
         parameters=_json_schema(
             {"query": _QUERY_PROPERTY}, required=["query"]
@@ -1630,7 +1746,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         name="search_contract",
         description=(
             "Найти договор по номеру, дате, маршруту, водителю или стороне. "
-            "Пустой запрос вернёт последние договоры."
+            "Запрос обязателен: без него договоры не показываются."
         ),
         parameters=_json_schema({"query": {
             "type": "string",
@@ -1734,8 +1850,9 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         name="fill_from_entity",
         description=(
             "Подтянуть запись из базы (водитель, перевозчик, заказчик, ТС) и "
-            "получить набор полей для формы. Форму НЕ меняет: сначала "
-            "показывает набор оператору. Дальше вызови fill_entity_fields."
+            "получить набор данных для формы. Форму НЕ меняет: сначала "
+            "показывает набор оператору. Затем набор записывается в форму "
+            "отдельным шагом."
         ),
         parameters=_json_schema({
             "entity_type": {
@@ -1745,7 +1862,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
             },
             "entity_id": {
                 "type": "integer",
-                "description": "ID записи из результата поиска",
+                "description": "номер записи из результата поиска",
             },
         }, required=["entity_type", "entity_id"]),
         function=fill_from_entity,
@@ -2042,7 +2159,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         description=(
             "Сверить запись базы (перевозчика или заказчика) с данными "
             "ЕГРЮЛ: какие поля расходятся и что там на самом деле. "
-            "Запись указывается ЛИБО entity_id (ID из результата поиска), "
+            "Запись указывается ЛИБО entity_id (номер из результата поиска), "
             "ЛИБО query (название) — второе удобнее, когда ID неизвестен. "
             "Только чтение — ничего не исправляет."
         ),
@@ -2054,7 +2171,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
             },
             "entity_id": {
                 "type": "integer",
-                "description": "ID записи из результата поиска (если известен)",
+                "description": "номер записи из результата поиска (если известен)",
             },
             "query": {
                 "type": "string",
@@ -2070,6 +2187,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
 
 
 __all__ = [
+    "ALL_SEARCH_PER_KIND",
     "FIELD_HELP",
     "MAX_SEARCH_RESULTS",
     "MAX_VALUE_CHARS",
@@ -2080,5 +2198,6 @@ __all__ = [
     "build_registry",
     "collect_form_data",
     "fill_fields",
+    "looks_like_command_or_noise",
     "set_context_window",
 ]

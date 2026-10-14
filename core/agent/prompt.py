@@ -37,6 +37,11 @@ FALLBACK_PROMPT = (
     "Ты не выдумываешь данные: только то, что вернули инструменты.\n"
     "Ты не создаёшь и не удаляешь данные без явного подтверждения.\n"
     "Отвечай по-русски, кратко и по делу.\n"
+    "Говори простыми словами: оператор не программист. Не называй имена\n"
+    "служебных команд и не объясняй, как ты устроен внутри.\n"
+    "Различай вопросы и команды: «Сможешь…?» — это вопрос, на него\n"
+    "отвечают словами, а не ищут в базе. Команда без объекта («Заполни»,\n"
+    "«Найди») — повод уточнить, что именно нужно, а не искать это слово.\n"
     "{persona}\n"
     "Доступные инструменты:\n{tools}\n"
     "Не больше {tool_steps} вызовов инструментов на один запрос.\n"
@@ -86,6 +91,23 @@ def _tools_block(tools: Iterable) -> str:
     return "\n".join(lines) if lines else "- (инструменты недоступны)"
 
 
+def noise_words_block() -> str:
+    """
+    Список служебных слов для промпта (команды, вопросы, ругательства).
+
+    Список берётся из core/agent/words.py — из ТОГО ЖЕ места, откуда его
+    берёт проверка в инструментах поиска (core/agent/tools.py). Так промпт
+    и код не могут разойтись: модель знает ровно те слова, которые код
+    считает служебными, и наоборот.
+
+    Подстановка в шаблон обязательна: без неё промпт потеряет правило
+    «проверь запрос по списку перед поиском», и проблемы #12–#14 вернутся.
+    """
+    from core.agent.words import prompt_block
+
+    return prompt_block()
+
+
 def build_system_prompt(
     tools: Iterable = (),
     persona_key: str = DEFAULT_PERSONA,
@@ -110,6 +132,7 @@ def build_system_prompt(
             persona=persona_data.prompt_block(),
             tools=_tools_block(tools),
             tool_steps=int(max_tool_steps),
+            noise_words=noise_words_block(),
         )
     except (KeyError, IndexError, ValueError) as e:
         logger.error(
@@ -142,6 +165,7 @@ __all__ = [
     "PROMPT_FILE",
     "build_system_prompt",
     "load_prompt_template",
+    "noise_words_block",
     "prompt_files",
     "prompt_path",
 ]
