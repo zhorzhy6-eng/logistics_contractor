@@ -189,14 +189,32 @@ def test_agent_answers_what_can_you_do(live_client):
 
 
 def test_agent_sends_tools_to_live_client(live_client):
-    """Инструменты агента доезжают до клиента и попадают в запрос."""
+    """
+    Инструменты агента доезжают до клиента в формате, который он понимает.
+
+    Регресс: описания уходили в поле ``tools``, а этот endpoint его молча
+    игнорирует — модель не вызывала инструменты вовсе. Рабочее поле —
+    ``functions`` + ``function_call`` (проверено живьём, см.
+    core/gigachat_client.py, раздел «ФОРМАТ ВЫЗОВА ФУНКЦИЙ»).
+    """
     client, sent = live_client
     agent = make_agent(client)
     agent.send("Что ты умеешь?")
 
     payload = sent["payloads"][-1]["json"]
-    assert payload["tools"], "описания инструментов не ушли в GigaChat"
-    assert payload["tool_choice"] == "auto"
+    assert payload["functions"], "описания инструментов не ушли в GigaChat"
+    assert payload["function_call"] == "auto"
+    assert "tools" not in payload, (
+        "вернулось поле tools: этот endpoint его игнорирует, инструменты "
+        "нужно отправлять в functions"
+    )
+
+    # Короткое имя и схема аргументов без служебных ключей.
+    function = payload["functions"][0]
+    assert function["name"]
+    assert function["description"]
+    assert function["parameters"]["type"] == "object"
+    assert "additionalProperties" not in function["parameters"]
 
 
 # ─────────────────────────────────────────────────────────────

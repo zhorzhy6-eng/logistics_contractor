@@ -455,15 +455,32 @@ _CONTEXT_WINDOW: Optional[Any] = None
 # ─────────────────────────────────────────────────────────────
 
 def _search_driver(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dict[str, Any]:
-    """Ищет водителей по ФИО, телефону или паспорту."""
-    from db.crud.drivers import search_drivers
+    """
+    Ищет водителей по ФИО, телефону или паспорту.
 
+    Пустой запрос — не ошибка ввода, а вопрос «сколько их всего»: модель
+    часто зовёт поиск с пустой строкой на «сколько водителей в базе».
+    Поэтому в ответе есть количество записей, а не только текст ошибки.
+    """
     term = str(query or "").strip()
     if not term:
-        return _error("пустой запрос: укажите ФИО, телефон или паспорт водителя")
+        return _error(
+            "пустой запрос: укажите ФИО, телефон или паспорт водителя",
+            total=_count_drivers(),
+            hint="для количества записей вызови count_records "
+                 "с entity_type='driver'",
+        )
+
+    found = _driver_rows(term, limit)
+    return _ok(found, count=len(found), query=term)
+
+
+def _driver_rows(term: str, limit: int) -> List[Dict[str, Any]]:
+    """Краткие карточки водителей по запросу (общие для поиска и «найти всё»)."""
+    from db.crud.drivers import search_drivers
 
     rows = search_drivers(term, limit=max(1, int(limit)), with_carrier_name=True)
-    found = [{
+    return [{
         "id": row.get("id"),
         "full_name": _short(row.get("full_name")),
         "phone": _short(row.get("phone")),
@@ -473,45 +490,123 @@ def _search_driver(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dic
             f"{row.get('license_series') or ''} {row.get('license_number') or ''}".strip()
         ),
     } for row in rows]
-    return _ok(found, count=len(found), query=term)
+
+
+def _count_drivers() -> int:
+    """Сколько всего водителей в справочнике (для подсказки при пустом запросе)."""
+    from db.crud.drivers import get_all_drivers
+
+    try:
+        return len(get_all_drivers())
+    except Exception:  # noqa: BLE001 — подсказка не должна ронять инструмент
+        return 0
 
 
 def _search_carrier(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dict[str, Any]:
     """Ищет перевозчиков по названию, ИНН или ОГРН."""
-    from db.crud.organizations import search_organizations
-
     term = str(query or "").strip()
     if not term:
         return _error("пустой запрос: укажите название, ИНН или ОГРН перевозчика")
 
+    found = _carrier_rows(term, limit)
+    return _ok(found, count=len(found), query=term)
+
+
+def _carrier_rows(term: str, limit: int) -> List[Dict[str, Any]]:
+    """Краткие карточки перевозчиков по запросу."""
+    from db.crud.organizations import search_organizations
+
     rows = search_organizations(term, is_carrier=True, limit=max(1, int(limit)))
-    found = [{
+    return [{
         "id": row.get("id"),
         "name": _short(row.get("full_name") or row.get("short_name")),
         "inn": _short(row.get("inn")),
         "ogrn": _short(row.get("ogrn")),
         "phone": _short(row.get("phone")),
     } for row in rows]
-    return _ok(found, count=len(found), query=term)
 
 
-def _search_customer(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dict[str, Any]:
-    """Ищет заказчиков по названию, ИНН или ФИО руководителя."""
+def _customer_rows(term: str, limit: int) -> List[Dict[str, Any]]:
+    """Краткие карточки заказчиков по запросу."""
     from db.crud.organizations import search_organizations
 
-    term = str(query or "").strip()
-    if not term:
-        return _error("пустой запрос: укажите название, ИНН или руководителя заказчика")
-
     rows = search_organizations(term, is_carrier=False, limit=max(1, int(limit)))
-    found = [{
+    return [{
         "id": row.get("id"),
         "name": _short(row.get("full_name") or row.get("short_name")),
         "inn": _short(row.get("inn")),
         "ogrn": _short(row.get("ogrn")),
         "director": _short(row.get("director_name")),
     } for row in rows]
+
+
+def _search_customer(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dict[str, Any]:
+    """Ищет заказчиков по названию, ИНН или ФИО руководителя."""
+    term = str(query or "").strip()
+    if not term:
+        return _error("пустой запрос: укажите название, ИНН или руководителя заказчика")
+
+    found = _customer_rows(term, limit)
     return _ok(found, count=len(found), query=term)
+
+
+#: Сколько записей на каждый вид отдаёт поиск «сразу везде».
+ALL_SEARCH_PER_KIND = 5
+
+
+def _search_anything(query: str = "", limit: int = ALL_SEARCH_PER_KIND, **_) -> Dict[str, Any]:
+    """
+    Ищет запись СРАЗУ ВО ВСЕХ справочниках: водители, перевозчики,
+    заказчики, транспорт, договоры.
+
+    Зачем отдельный инструмент (Часть 0, E). Живой диалог показал главную
+    трудность: по одному слову («Фасстранс», «королёв») модель не знает,
+    КТО это, и вместо поиска начинает уточнять. Правильный вопрос тут не
+    «что уточнить», а «где искать» — и ответ на него даёт программа, а не
+    модель: этот инструмент сам обходит все справочники и возвращает то,
+    что нашлось, с указанием вида записи.
+
+    Модели остаётся выбрать запись из готового списка — это она делает
+    хорошо. Поэтому «найди X» без уточнений нужно начинать отсюда.
+    """
+    term = str(query or "").strip()
+    if not term:
+        return _error("пустой запрос: укажите что искать (название, ФИО, номер)")
+
+    per_kind = max(1, int(limit))
+    sections: Dict[str, List[Dict[str, Any]]] = {}
+
+    # Порядок обхода — от самых частых записей к редким. Исключение
+    # внутри каждого вида не роняет поиск: остальные всё равно нужны.
+    lookups = (
+        ("carrier", lambda: _carrier_rows(term, per_kind)),
+        ("customer", lambda: _customer_rows(term, per_kind)),
+        ("driver", lambda: _driver_rows(term, per_kind)),
+        ("vehicle", lambda: _search_vehicle(query=term, limit=per_kind).get("data") or []),
+        ("contract", lambda: _search_contract(query=term, limit=per_kind).get("data") or []),
+    )
+    for kind, lookup in lookups:
+        try:
+            rows = lookup()
+        except Exception as e:  # noqa: BLE001 — один вид не должен ломать поиск
+            logger.warning("Поиск «%s» по виду %s не удался: %s", term, kind, e)
+            continue
+        if rows:
+            sections[kind] = rows
+
+    if not sections:
+        return _ok({}, count=0, query=term,
+                   message="ничего не найдено ни в одном справочнике")
+
+    total = sum(len(rows) for rows in sections.values())
+    return _ok(
+        sections,
+        count=total,
+        query=term,
+        found_in=sorted(sections),
+        message=f"найдено записей: {total} — по видам: "
+                + ", ".join(f"{kind}={len(rows)}" for kind, rows in sorted(sections.items())),
+    )
 
 
 def _search_vehicle(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dict[str, Any]:
@@ -1468,6 +1563,23 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
 
     # ── B.1. Поиск ──
     registry.register(Tool(
+        name="search_anything",
+        description=(
+            "Найти что угодно по одному слову или фразе: ищет СРАЗУ во всех "
+            "справочниках (перевозчики, заказчики, водители, транспорт, "
+            "договоры) и возвращает то, что нашлось, с указанием вида записи. "
+            "ЭТО ГЛАВНЫЙ ИНСТРУМЕНТ ПОИСКА: если непонятно, кто это — "
+            "человек или организация, — начинай с него. "
+            "Понимает опечатки, падежи, дефисы и отсутствие «ООО»/«ИП»: "
+            "«Фасстранс» находит «ООО «ФассТранс»»."
+        ),
+        parameters=_json_schema(
+            {"query": _QUERY_PROPERTY}, required=["query"]
+        ),
+        function=_search_anything,
+        summary="Поиск по всем справочникам сразу",
+    ))
+    registry.register(Tool(
         name="search_driver",
         description=(
             "Найти водителя в справочнике по ФИО, телефону или паспорту. "
@@ -1742,6 +1854,107 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         }}),
         function=get_help,
         summary="Справка по программе",
+    ))
+
+    # ── 1. Контекст: что открыто и что делал оператор (Часть 1) ──
+    # Все пять — только чтение. Реализация в core/agent/context_tools.py:
+    # они смотрят в интерфейс, а не в базу, и это другая ответственность.
+    #
+    # Функции объявлены обычными def, а не lambda: в проекте lambda
+    # запрещены в связях сигналов (цикл ссылок Python ↔ Qt), и хотя здесь
+    # связи нет, единое правило читать проще, чем исключение из него.
+    from core.agent.context_tools import (  # локальный импорт: без цикла модулей
+        get_current_window as context_window,
+        get_form_state as context_form_state,
+        get_open_tabs as context_open_tabs,
+        get_recent_actions as context_recent_actions,
+        get_selected_row as context_selected_row,
+    )
+
+    def get_open_tabs(**_):
+        """Список открытых окон и вкладок."""
+        return context_open_tabs(ctx)
+
+    def get_current_window(**_):
+        """Текущее окно и активная вкладка."""
+        return context_window(ctx)
+
+    def get_form_state(section: str = "", only_empty: bool = False, **_):
+        """Поля открытой формы: значения и пустые поля."""
+        return context_form_state(ctx, section=section, only_empty=only_empty)
+
+    def get_selected_row(**_):
+        """Выбранная строка таблицы открытой формы."""
+        return context_selected_row(ctx)
+
+    def get_recent_actions(minutes: int = 5, **_):
+        """Последние действия оператора (нажатия кнопок)."""
+        return context_recent_actions(ctx, minutes=minutes)
+
+    registry.register(Tool(
+        name="get_open_tabs",
+        description=(
+            "Показать, какие окна и вкладки открыты сейчас и какая вкладка "
+            "активна. Нужно, когда оператор говорит «тут», «в этой вкладке»."
+        ),
+        parameters=_json_schema({}),
+        function=get_open_tabs,
+        summary="Список открытых вкладок",
+    ))
+    registry.register(Tool(
+        name="get_current_window",
+        description=(
+            "Какое окно открыто: тип договора и активная вкладка. Самый "
+            "дешёвый способ понять, о какой форме спрашивает оператор."
+        ),
+        parameters=_json_schema({}),
+        function=get_current_window,
+        summary="Текущее окно",
+    ))
+    registry.register(Tool(
+        name="get_form_state",
+        description=(
+            "Состояние полей открытой формы: значения И пустые поля. "
+            "Отличие от get_current_form — видно, чего НЕ заполнено. "
+            "Раздел: перевозчик, водитель, заказчик, договор, машины."
+        ),
+        parameters=_json_schema({
+            "section": {
+                "type": "string",
+                "description": "раздел формы; пусто — все разделы",
+            },
+            "only_empty": {
+                "type": "boolean",
+                "description": "True — вернуть только незаполненные поля",
+            },
+        }),
+        function=get_form_state,
+        summary="Поля и пустые поля открытой формы",
+    ))
+    registry.register(Tool(
+        name="get_selected_row",
+        description=(
+            "Что выбрано в таблице открытой формы (перевозимые ТС, адреса). "
+            "Только чтение: выделение не меняется."
+        ),
+        parameters=_json_schema({}),
+        function=get_selected_row,
+        summary="Выбранная строка таблицы",
+    ))
+    registry.register(Tool(
+        name="get_recent_actions",
+        description=(
+            "Что оператор делал последние минуты: нажатия кнопок с указанием "
+            "окна. Значения из полей формы в журнал не попадают."
+        ),
+        parameters=_json_schema({"minutes": {
+            "type": "integer",
+            "description": "за сколько минут смотреть, по умолчанию 5",
+            "minimum": 1,
+            "maximum": 60,
+        }}),
+        function=get_recent_actions,
+        summary="Последние действия оператора",
     ))
 
     return registry

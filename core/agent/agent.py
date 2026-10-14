@@ -168,6 +168,10 @@ class Agent:
                             "type": "function",
                             "function": {
                                 "name": call["name"],
+                                # Аргументы — СТРОКОЙ (OpenAI-совместимый вид,
+                                # как их хранит память и читают тесты).
+                                # В проводной формат GigaChat их переводит
+                                # SafeChat: там arguments становится объектом.
                                 "arguments": call["raw"] or json.dumps(
                                     call["arguments"], ensure_ascii=False
                                 ),

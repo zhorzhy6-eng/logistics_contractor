@@ -3,7 +3,7 @@ import logging
 import re
 import time
 import uuid
-from typing import Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import requests
 
@@ -450,6 +450,236 @@ def _clean_and_parse_json(raw_text: str) -> dict:
             first_error.lineno, first_error.colno, mask_sensitive(raw_text),
         )
         raise RuntimeError(f"Модель вернула невалидный JSON: {first_error}")
+
+
+# ============================================================
+# ФОРМАТ ВЫЗОВА ФУНКЦИЙ (function calling)
+# ============================================================
+#
+# Разведка живого API 24.10.2026 (api.giga.chat/v1, GigaChat-3-Pro, один
+# запрос на гипотезу) дала точный контракт. Он НЕ такой, как в
+# документации OpenAI-совместимого вида, и расхождение молчаливое:
+#
+#   1. `tools` + `tool_choice` endpoint принимает, но НЕ РАЗБИРАЕТ.
+#      Доказательство: `tools` с заведомо неверной схемой
+#      (`"parameters": "МУСОР"`) тоже даёт 200 и обычный текст. Модель не
+#      вызывала инструменты ровно поэтому — описания до неё не доходили.
+#   2. Рабочий формат — legacy: `functions` + `function_call: "auto"`.
+#      Ответ: `finish_reason="function_call"`, `message.function_call` =
+#      {"id", "name", "arguments"}, причём `arguments` — ОБЪЕКТ, а не
+#      строка JSON.
+#   3. `function_call: "required"` → 400 (значение не поддержано).
+#   4. Результат функции возвращается сообщением
+#      `{"role": "function", "name": <имя>, "content": "<строка>"}`.
+#      `role: "tool"` (стиль OpenAI) → 422; `content` объектом → 400.
+#   5. История обязана содержать ответ ассистента с этим самым
+#      `function_call`: результат без своего вызова → 422.
+#
+# Внутри программы сообщения и описания инструментов остаются в
+# OpenAI-совместимом виде (так их понимают агент, память и тесты);
+# перевод в проводной формат и обратно живёт здесь — в единственном месте,
+# которое знает про особенности GigaChat.
+
+#: Сколько символов результата функции уходит в модель.
+_FUNCTION_RESULT_LIMIT = 24000
+
+
+def _inline_refs(node: Any, root: Any, depth: int = 0) -> Any:
+    """
+    Раскрывает ссылки ``$ref``/``$defs`` внутри JSON Schema.
+
+    GigaChat legacy-формат схемы ссылок не понимает, а ``function_call``
+    с нераскрытым ``$ref`` может быть отброшен молча — та же ловушка, что
+    и с ``tools``. Схемы инструментов маленькие, поэтому раскрытие
+    безопасно; от рекурсии защищает ``depth``.
+    """
+    if depth > 6:
+        return {}
+    if isinstance(node, list):
+        return [_inline_refs(item, root, depth + 1) for item in node]
+    if not isinstance(node, dict):
+        return node
+
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        target: Any = root
+        for part in ref.lstrip("#/").split("/"):
+            if isinstance(target, dict) and part in target:
+                target = target[part]
+            else:
+                target = None
+                break
+        if target is None:
+            return {}
+        merged = dict(target)
+        merged.update({key: value for key, value in node.items() if key != "$ref"})
+        return _inline_refs(merged, root, depth + 1)
+
+    return {
+        key: _inline_refs(value, root, depth + 1)
+        for key, value in node.items()
+        if key not in ("$defs", "definitions")
+    }
+
+
+def _clean_parameters(parameters: Any) -> Dict[str, Any]:
+    """
+    Схема аргументов, пригодная для legacy-формата.
+
+    Убирается ``additionalProperties``: в схеме инструмента он не нужен, а
+    лишний ключ — ещё одна возможность получить молчаливый отказ.
+    """
+    if not isinstance(parameters, dict) or not parameters:
+        return {"type": "object", "properties": {}}
+
+    cleaned = dict(parameters)
+    cleaned.pop("additionalProperties", None)
+    cleaned = _inline_refs(cleaned, cleaned)
+    if not isinstance(cleaned, dict):
+        return {"type": "object", "properties": {}}
+
+    cleaned.setdefault("type", "object")
+    if cleaned.get("type") == "object":
+        cleaned.setdefault("properties", {})
+    return cleaned
+
+
+def _functions_for_wire(tools: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """
+    Описания инструментов → список ``functions`` для GigaChat.
+
+    Принимает и OpenAI-вид (``{"type": "function", "function": {...}}``),
+    и уже готовое ``{"name", "description", "parameters"}``: вызывающему
+    коду не нужно знать, какой формат нужен проводу.
+    """
+    functions: List[Dict[str, Any]] = []
+    for item in tools or ():
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function") if isinstance(item.get("function"), dict) else item
+        name = str(function.get("name") or "").strip()
+        if not name:
+            continue
+        entry: Dict[str, Any] = {"name": name}
+        description = function.get("description")
+        if description:
+            entry["description"] = _short_text(description, 1024)
+        entry["parameters"] = _clean_parameters(function.get("parameters"))
+        functions.append(entry)
+    return functions
+
+
+def _short_text(value: Any, limit: int) -> str:
+    """Строка с ограничением длины (описания бывают длинными)."""
+    text = value if isinstance(value, str) else str(value or "")
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _function_result_text(content: Any) -> str:
+    """
+    Результат функции — строкой.
+
+    Модель просит результат в виде строки: объект в ``content`` даёт
+    400 «invalid JSON syntax» (проверено живьём).
+    """
+    if isinstance(content, str):
+        text = content
+    else:
+        try:
+            text = json.dumps(content, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            text = str(content)
+    return _short_text(text, _FUNCTION_RESULT_LIMIT)
+
+
+def _messages_for_wire(messages: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """
+    История диалога → сообщения GigaChat (legacy function calling).
+
+    Что меняется по сравнению с OpenAI-совместимым видом:
+
+      * ``assistant.tool_calls`` → ``assistant.function_call`` (один вызов:
+        этот endpoint отдаёт за раз ровно один — проверено живьём);
+      * ``arguments`` строкой → объектом (строка даёт 400);
+      * ``role="tool"`` → ``role="function"`` с именем функции;
+      * ``tool_call_id`` на провод не идёт: его место занимает имя.
+    """
+    wire: List[Dict[str, Any]] = []
+    for message in messages or ():
+        if not isinstance(message, dict):
+            continue
+        item = dict(message)
+        role = str(item.get("role") or "")
+
+        if role == "assistant":
+            calls = item.pop("tool_calls", None) or []
+            first = calls[0] if calls else None
+            if isinstance(first, dict):
+                function = first.get("function") or {}
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except (TypeError, ValueError):
+                        arguments = {}
+                if not isinstance(arguments, dict):
+                    arguments = {}
+                item["function_call"] = {
+                    "id": str(first.get("id") or ""),
+                    "name": str(function.get("name") or ""),
+                    "arguments": arguments,
+                }
+                item.setdefault("content", "")
+            wire.append(item)
+            continue
+
+        if role == "tool":
+            wire.append({
+                "role": "function",
+                "name": str(item.get("name") or item.get("tool_name") or "function"),
+                "content": _function_result_text(item.get("content")),
+            })
+            continue
+
+        wire.append(item)
+    return wire
+
+
+def _tool_calls_from_message(message: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Вызовы функций из ответа модели — в OpenAI-совместимом виде.
+
+    Наружу (в агент, в память, в тесты) всегда уходит ``tool_calls``:
+    ``arguments`` строкой, как у OpenAI. Так остальной код не знает о
+    legacy-формате, а ``SafeChat.parse_tool_calls`` разбирает строку и
+    умеет сообщить об ошибке разбора.
+    """
+    calls = message.get("tool_calls")
+    if isinstance(calls, list) and calls:
+        return [dict(call) for call in calls if isinstance(call, dict)]
+
+    call = message.get("function_call")
+    if not isinstance(call, dict) or not call.get("name"):
+        return []
+
+    arguments = call.get("arguments")
+    if isinstance(arguments, str):
+        arguments_text = arguments
+    else:
+        try:
+            arguments_text = json.dumps(arguments if arguments is not None else {},
+                                        ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            arguments_text = "{}"
+
+    return [{
+        "id": str(call.get("id") or "call_1"),
+        "type": "function",
+        "function": {
+            "name": str(call.get("name") or ""),
+            "arguments": arguments_text,
+        },
+    }]
 
 
 # ============================================================
@@ -1175,22 +1405,32 @@ class GigaChatClient:
         """
         max_retries = self.MAX_RETRIES if retries is None else max(0, int(retries))
 
+        functions = _functions_for_wire(tools)
         payload = {
             "model": self.model,
-            "messages": list(messages or []),
+            "messages": _messages_for_wire(messages),
             "temperature": temperature,
             "max_tokens": int(max_tokens or self.MAX_TOKENS),
         }
-        if tools:
-            payload["tools"] = list(tools)
-            # Выбор инструмента оставляем за моделью: жёсткий tool_choice
-            # заставлял бы её звать функцию даже на «что такое ИНН?».
-            payload["tool_choice"] = "auto"
+        if functions:
+            # ── Формат вызова функций: ТОЛЬКО legacy `functions` ──
+            # Проверено живьём 24.10.2026 на api.giga.chat/v1 (GigaChat-3-Pro):
+            #   * параметр `tools` endpoint принимает, но МОЛЧА ИГНОРИРУЕТ —
+            #     ответ приходит обычным текстом, tool_calls пуст. Именно
+            #     поэтому модель «не вызывала инструменты»;
+            #   * `tools` с заведомо неверной схемой тоже даёт 200 —
+            #     значит параметр не разбирается вовсе;
+            #   * `functions` + `function_call: "auto"` работает:
+            #     finish_reason="function_call", message.function_call
+            #     с именем и аргументами-ОБЪЕКТОМ;
+            #   * `function_call: "required"` → 400, значение не поддержано.
+            payload["functions"] = functions
+            payload["function_call"] = "auto"
 
         url = f"{self.BASE_URL}/chat/completions"
         logger.info(
-            "GigaChat (агент): сообщений=%s, инструментов=%s",
-            len(payload["messages"]), len(tools or ()),
+            "GigaChat (агент): сообщений=%s, функций=%s",
+            len(payload["messages"]), len(functions),
         )
 
         auth_retry_used = False
@@ -1289,7 +1529,7 @@ class GigaChatClient:
             data.get("choices", [{}])[0].get("message", {}) or {}
         )
         content = message.get("content") or ""
-        tool_calls = message.get("tool_calls") or []
+        tool_calls = _tool_calls_from_message(message)
         logger.info(
             "GigaChat (агент): ответ получен | символов=%s | вызовов инструментов=%s",
             len(content), len(tool_calls),
