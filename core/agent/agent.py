@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from core.agent.llm import SafeChat
+from core.agent.emotional import emotional_block
 from core.agent.long_memory import (
     extract, memory_block, recall, remember_facts, remember_search_result,
     search_terms,
@@ -133,11 +134,14 @@ class Agent:
         )
         self.registry = registry if registry is not None else build_registry(self.context)
         self.chat = SafeChat(client) if client is not None else None
+        #: Состояние оператора из последнего сообщения (задание, часть 2):
+        #: нужно панели и тестам, чтобы видеть, распознана ли усталость.
+        self.last_emotional_state: Optional[Any] = None
 
     # ---------------------------------------------------------
     # Промпт
     # ---------------------------------------------------------
-    def system_prompt(self, query: str = "") -> str:
+    def system_prompt(self, query: str = "", extra: str = "") -> str:
         """
         Системный промпт: файл + образ + список инструментов + память.
 
@@ -145,6 +149,10 @@ class Agent:
             релевантных записей памяти (задание, часть 5). Без запроса
             память в промпт не подкладывается — иначе в контекст попадут
             случайные факты.
+        :param extra: дополнительный блок от вызывающего кода. Так в промпт
+            попадают правила эмоциональной поддержки (задание, часть 2):
+            блок зависит от СОСТОЯНИЯ оператора, а не от запроса, и решается
+            в ``send`` — один раз на сообщение.
 
         Блок памяти МАСКИРУЕТСЯ перед отправкой (та же маска, что и у
         сообщений: см. core/agent/llm.py::SafeChat). В памяти могут лежать
@@ -164,11 +172,15 @@ class Agent:
                 except Exception as e:  # noqa: BLE001 — маска не должна ронять
                     logger.warning("Память: маскирование не удалось (%s)", e)
                     block = ""
+        #: Порядок блоков: сначала состояние оператора (эмоциональная
+        #: поддержка), потом память — она меняется от запроса к запросу.
+        parts = [str(extra or "").strip(), block.strip()]
+        extra_block = "\n\n".join(part for part in parts if part)
         return build_system_prompt(
             tools=self.registry.prompt_lines(),
             persona_key=self.persona_key,
             max_tool_steps=self.max_tool_steps,
-            memory=block,
+            memory=extra_block,
         )
 
     def memory_facts(self, query: str) -> List[Dict[str, Any]]:
@@ -208,6 +220,13 @@ class Agent:
 
         self.memory.add("user", text)
 
+        # Состояние оператора (задание, часть 2): устал, злится, выгорает.
+        # Блок правил подкладывается в промпт КАЖДОГО шага этого запроса —
+        # модель видит его и на вызове инструмента, и на финальном ответе.
+        state_block, emotional_state = emotional_block(text)
+        if emotional_state is not None:
+            self.last_emotional_state = emotional_state
+
         # Что помощник помнит об этом операторе (задание, часть 5): TOP-5
         # релевантных записей. Отбор идёт ДО запроса к модели и попадает в
         # системный промпт, а не в историю диалога.
@@ -222,7 +241,7 @@ class Agent:
         try:
             while True:
                 steps += 1
-                prompt = self.system_prompt(text)
+                prompt = self.system_prompt(text, extra=state_block)
                 message_data = self.chat.complete(
                     self.memory.wire_messages(prompt),
                     tools=self.registry.schemas(),
