@@ -341,6 +341,9 @@ def apply_approved(window, changes):
             # Значение ставится по КЛЮЧУ поля: скрытая колонка тоже
             # обновляется, поэтому распознанное в импорте не теряется.
             tab.set_field(target, key, value)
+    # После импорта — одна общая проверка: VIN короче 17 символов
+    # подсвечивается оператору (см. VehiclesTab.refresh_vin_warnings).
+    tab.refresh_vin_warnings()
 
 
 class DocumentImportDialog(QDialog):

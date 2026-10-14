@@ -15,6 +15,29 @@ from core.tls_config import describe_tls, resolve_ca_bundle, ssl_error_hint
 logger = logging.getLogger(__name__)
 
 
+def normalized_source_text(text: str) -> str:
+    """
+    Текст документа с VIN, приведёнными к латинице.
+
+    Одна и та же нормализация нужна в двух местах: перед отправкой текста
+    в модель (иначе VIN с русской буквой не маскируется и уходит открытым)
+    и при выравнивании списка ТС по строкам текста. Общая функция — чтобы
+    написания не разъезжались.
+    """
+    if not text:
+        return text
+
+    from core.recognizer import DataMapper
+
+    normalized = DataMapper.normalize_vin_lookalikes(text)
+    if normalized != text:
+        logger.info(
+            "VIN с русскими буквами-двойниками приведён к латинице (%d символов)",
+            len(normalized),
+        )
+    return normalized
+
+
 def mask_sensitive(text: str) -> str:
     """Keep JSON punctuation for diagnostics, but remove all words and numbers."""
     text = re.sub(r"[^\W\d_]+", "[WORD]", text, flags=re.UNICODE)
@@ -206,6 +229,60 @@ def _normalize_labeled_values(data: dict) -> dict:
             if result is data:
                 result = dict(data)
             result[section] = cleaned
+    return result
+
+
+def _normalize_vin_values(data: dict) -> dict:
+    """
+    VIN в ответе модели — к латинице, без пробелов и разделителей.
+
+    Модель возвращает VIN так, как он стоял в тексте; если в тексте была
+    русская буква-двойник («LVТDD24B0TDC48177»), она попадала и в ответ,
+    и дальше во все проверки — шаблон VIN её не признавал. Смысл правки:
+    VIN в программе существует в ОДНОМ виде, латиницей.
+
+    Заменяются только поля ``vin`` в массиве ``vehicles`` и в блоках
+    ``tractor`` / ``trailer``: остальные строки ответа не трогаются, чтобы
+    значения вида «марка и модель» не «нормализовались» заодно.
+    """
+    from core.recognizer import DataMapper
+
+    def clean(value):
+        return DataMapper.normalize_vin(value)
+
+    if not isinstance(data, dict):
+        return data
+
+    result = data
+
+    vehicles = data.get("vehicles")
+    if isinstance(vehicles, list):
+        cleaned_list = []
+        list_changed = False
+        for vehicle in vehicles:
+            if not isinstance(vehicle, dict) or not str(vehicle.get("vin") or "").strip():
+                cleaned_list.append(vehicle)
+                continue
+            item = dict(vehicle)
+            cleaned = clean(item["vin"])
+            if cleaned != item["vin"]:
+                item["vin"] = cleaned
+                list_changed = True
+            cleaned_list.append(item)
+        if list_changed:
+            result = dict(result)
+            result["vehicles"] = cleaned_list
+
+    for section in ("tractor", "trailer"):
+        payload = data.get(section)
+        if not isinstance(payload, dict) or not str(payload.get("vin") or "").strip():
+            continue
+        cleaned = clean(payload["vin"])
+        if cleaned != payload["vin"]:
+            if result is data:
+                result = dict(data)
+            result[section] = dict(payload, vin=cleaned)
+
     return result
 
 
@@ -765,6 +842,41 @@ class GigaChatClient:
         "«Тип транспорта Фургон», то vehicle_type = \"Тягач\" / \"Прицеп\" / "
         "\"Фургон\", и машина остаётся в массиве \"vehicles\" "
         "(пустой vehicle_type — потеря поля, а не осторожность). "
+
+        # ── СПИСОК ТС ПО СТРОКАМ ──
+        # Живой случай: оператор вставил шесть строк «марка + VIN», а в
+        # таблице оказалось пять машин со съехавшими на строку вверх марками
+        # (в строке 3 стояла марка из строки 2). Причина — в модель ушло
+        # 5 плейсхолдеров на 6 строк: VIN с кириллической буквой не
+        # маскируется, и модель достроила ответ по числу плейсхолдеров.
+        # Правило ниже требует ровно одну машину на строку и запрещает
+        # переносить марку, а также называет VIN с русскими буквами VIN-ом.
+        "ЕСЛИ ТЕКСТ — СПИСОК ТС ПО СТРОКАМ (таблица «марка + VIN», без "
+        "заголовков и подписей полей): "
+        "1) КАЖДАЯ СТРОКА — ОТДЕЛЬНАЯ МАШИНА, сколько строк — столько "
+        "элементов массива \"vehicles\"; "
+        "2) марка — это ВСЁ, что стоит ДО VIN в этой же строке (марка и "
+        "модель, часто через несколько пробелов или табуляцию); "
+        "3) VIN — токен ИЗ 17 СИМВОЛОВ в той же строке; "
+        "4) НЕ переноси марку из строки выше и НЕ бери марку из строки ниже; "
+        "5) НЕ объединяй две строки в одну машину и НЕ пропускай строки; "
+        "6) НЕ добавляй машин, которых нет в тексте. "
+        "Пример. Текст из двух строк:\n"
+        "JETOUR X70PLUS  EC37CUSM4TC008647\n"
+        "JETOUR T1       LVTDD24B0TDC48177\n"
+        "Ответ — ровно два элемента: "
+        "{\"vin\": \"EC37CUSM4TC008647\", \"brand_model\": \"JETOUR X70PLUS\"} и "
+        "{\"vin\": \"LVTDD24B0TDC48177\", \"brand_model\": \"JETOUR T1\"}. "
+        "Две строки — два элемента, и марка каждой строки остаётся в СВОЕЙ "
+        "строке. "
+        "VIN может быть набран РУССКИМИ буквами-двойниками (например, "
+        "«LVТDD24B0TDC48177», где «Т» — русская): это ОПЕЧАТКА раскладки. "
+        "Такой токен — всё равно VIN, и в ответе его надо вернуть РОВНО так, "
+        "как он напечатан в тексте, не исправляя и не пропуская. "
+        "ПРОВЕРЬ СЕБЯ ПЕРЕД ОТВЕТОМ: если в тексте N строк и в каждой строке "
+        "есть VIN, то в массиве \"vehicles\" должно быть N элементов. "
+        "Элементов меньше — ты потерял строку, найди её и верни. "
+
         "Если данных нет — пустая строка \"\" (НЕ null, НЕ \"null\", НЕ \"None\"). "
         "НЕ придумывай даты! Если даты нет — оставляй \"\". "
         "Год выпуска ТС: если НЕ указан явно — ставь 0 (программа сама подставит текущий год). "
@@ -1359,7 +1471,18 @@ class GigaChatClient:
         Обрезка идёт по границе строки, чтобы не разорвать реквизит
         посередине. О факте обрезки пишем в лог — это видно пользователю
         в logs/app.log.
+
+        Перед обрезкой VIN приводится к латинице (``normalized_source_text``):
+        VIN с русской буквой-двойником иначе не маскируется обезличивателем
+        (его шаблон латинский), уходит в модель ОТКРЫТЫМ и без плейсхолдера.
+        Модель тогда видит шесть строк, но пять плейсхолдеров — и возвращает
+        пять машин со съехавшими марками.
         """
+        if not text:
+            return text
+
+        text = normalized_source_text(text)
+
         if len(text) <= self.MAX_PROMPT_CHARS:
             return text
 
@@ -1782,6 +1905,8 @@ class GigaChatClient:
         # ── Слова-метки, приклеенные к значению: «Банк ПАО «Промсвязьбанк»»,
         # «Руководитель Иванов Иван Иванович» — снимаем.
         parsed = _normalize_labeled_values(parsed)
+        # ── VIN в ответе — на латиницу, без пробелов и разделителей ──
+        parsed = _normalize_vin_values(parsed)
         logger.info("JSON успешно распарсен")
         logger.debug(
             f"Распознавание: разобраны разделы {list(parsed.keys())} | "

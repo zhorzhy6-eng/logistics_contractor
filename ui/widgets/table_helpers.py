@@ -99,6 +99,12 @@ _TOOLTIPS_FLAG = "_table_tooltips_installed"
 #: Имя атрибута-признака «меню состава колонок подключено».
 _COLUMN_MENU_FLAG = "_table_column_menu_installed"
 
+#: Начало «важной» подсказки ячейки: предупреждение важнее повтора текста.
+#: Так помечает свою подсказку вкладка «Перевозимые ТС» (ненадёжный VIN),
+#: и `apply_cell_tooltip` её не затирает. Знак «⚠» выбран потому, что он уже
+#: используется для предупреждений по всему интерфейсу.
+WARNING_TOOLTIP_PREFIX = "⚠"
+
 
 def table_header(table: Any):
     """
@@ -484,6 +490,11 @@ def apply_cell_tooltip(item: Any, column: int = 0) -> None:
     тело под защитой: подсказка не должна ронять программу.
 
     Пустая ячейка подсказки не получает: повторять нечего.
+
+    Ячейка со СВОЕЙ важной подсказкой (например, предупреждение «VIN короче
+    17 символов» во вкладке «Перевозимые ТС») начинает её знаком «⚠»
+    (`WARNING_TOOLTIP_PREFIX`): такую подсказку помощник не трогает, иначе
+    наведение мышью затирало бы предупреждение текстом ячейки.
     """
     if item is None:
         return
@@ -497,7 +508,8 @@ def apply_cell_tooltip(item: Any, column: int = 0) -> None:
                 item.setToolTip(column, text)
             return
 
-        if item.toolTip():
+        current = item.toolTip()
+        if current:
             return
 
         text = str(item.text() or "").strip()
@@ -505,6 +517,38 @@ def apply_cell_tooltip(item: Any, column: int = 0) -> None:
             item.setToolTip(text)
     except Exception as e:  # noqa: BLE001 — подсказка не должна ронять приложение
         logger.warning("Подсказка ячейки не поставлена: %s", e)
+
+
+def set_warning_tooltip(item: Any, text: str, column: int = 0) -> None:
+    """
+    Ставит ячейке «важную» подсказку — предупреждение.
+
+    Отличается от обычной подсказки только знаком `WARNING_TOOLTIP_PREFIX`
+    в начале: `apply_cell_tooltip` такие подсказки не затирает текстом
+    ячейки. Пустой `text` снимает предупреждение.
+    """
+    if item is None:
+        return
+
+    value = f"{WARNING_TOOLTIP_PREFIX} {text}" if text else ""
+    try:
+        if isinstance(item, QTreeWidgetItem):
+            item.setToolTip(column, value)
+        else:
+            item.setToolTip(value)
+    except Exception as e:  # noqa: BLE001 — подсказка не должна ронять приложение
+        logger.warning("Подсказка-предупреждение не поставлена: %s", e)
+
+
+def has_warning_tooltip(item: Any, column: int = 0) -> bool:
+    """Стоит ли у ячейки подсказка-предупреждение (ставилась нами)."""
+    if item is None:
+        return False
+    try:
+        text = item.toolTip(column) if isinstance(item, QTreeWidgetItem) else item.toolTip()
+    except Exception:  # noqa: BLE001
+        return False
+    return str(text or "").startswith(WARNING_TOOLTIP_PREFIX)
 
 
 def save_column_widths(table: QTableWidget, storage_key: str) -> None:

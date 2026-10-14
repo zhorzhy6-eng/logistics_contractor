@@ -20,6 +20,44 @@ from core.trace import filled_fields_summary, trace
 
 logger = logging.getLogger("core.recognizer")
 
+#: Кириллические буквы, неотличимые на вид от латинских, и их латинская пара.
+#:
+#: Зачем: VIN набирают то латиницей, то кириллицей, и в одном VIN встречаются
+#: обе раскладки. Последствия видны в самом начале пути: обезличиватель
+#: (core/pseudonymizer.py) ищет VIN латинским шаблоном, поэтому VIN с
+#: кириллической буквой в модель уходит ОТКРЫТЫМ, плейсхолдер ему не выдаётся.
+#: Дальше модель видит шесть строк, но пять плейсхолдеров — и отвечает пятью
+#: машинами со съехавшими марками ровно так, как это видел оператор.
+#:
+#: Кириллических «похожих» букв больше, чем латинских букв в VIN, поэтому
+#: таблица ведёт часть кириллицы в цифры: «О» читается и как O, и как 0,
+#: но латинская O в VIN запрещена, а «З» — это 3.
+_VIN_LOOKALIKES = {
+    "А": "A", "В": "B", "С": "C", "Е": "E", "Н": "H", "К": "K", "М": "M",
+    "Р": "P", "Т": "T", "У": "Y", "Х": "X", "І": "I", "Ј": "J", "Ѕ": "S",
+    "О": "0", "З": "3", "Ч": "4", "Б": "6",
+}
+
+#: Символы, которые в VIN запрещены стандартом (ISO 3779: I, O, Q).
+_VIN_FORBIDDEN = frozenset("IOQ")
+
+#: Служебные символы, которые модель или OCR могут вставить внутрь VIN.
+_VIN_SEPARATORS = re.compile(r"[\s\-–—_.,;:|/\\]+")
+
+
+def _vin_char_class() -> str:
+    """Класс символов «буква VIN»: латиница + кириллические двойники."""
+    return "A-HJ-NPR-Za-hj-npr-z0-9" + "".join(_VIN_LOOKALIKES)
+
+
+#: Кандидат в VIN в ИСХОДНОМ тексте: 17 символов, латиница ИЛИ кириллица.
+#: Границы — не буква/цифра: иначе «…TC008647LX» склеилось бы в один токен.
+_VIN_SOURCE_RE = re.compile(
+    rf"(?<![A-Za-z0-9{''.join(_VIN_LOOKALIKES)}])"
+    rf"([{_vin_char_class()}]{{17}})"
+    rf"(?![A-Za-z0-9{''.join(_VIN_LOOKALIKES)}])"
+)
+
 
 class DataMapper:
     """Преобразует JSON от Ollama в заполненные поля интерфейса."""
@@ -247,15 +285,73 @@ class DataMapper:
     # FALLBACK ПО VIN
     # ─────────────────────────────────────────────────────────
 
+    @staticmethod
+    def normalize_vin_lookalikes(text: Optional[str]) -> str:
+        """
+        Приводит VIN в тексте к латинице: «LVТDD24B0TDC48177» → «LVTDD24B0TDC48177».
+
+        Заменяются ТОЛЬКО 17-символьные токены, похожие на VIN, — остальной
+        текст не трогается. Дефис и пробелы внутри такого токена убираются:
+        так VIN, разорванный переносом или набранный «группами», снова целый.
+
+        Вызывается ДО отправки текста в модель: иначе VIN с кириллической
+        буквой не маскируется (шаблон обезличивателя латинский), уходит в
+        модель открытым, плейсхолдера не получает — и строк в ответе модели
+        оказывается меньше, чем строк в тексте (проверено живьём: 6 строк →
+        5 машин и сдвиг марок на строку вверх).
+        """
+        if not text:
+            return "" if text is None else str(text)
+
+        def replace(match: "re.Match") -> str:
+            return DataMapper.normalize_vin(match.group(1))
+
+        return _VIN_SOURCE_RE.sub(replace, str(text))
+
+    @staticmethod
+    def normalize_vin(value: Any) -> str:
+        """
+        Нормализует один VIN: верхний регистр, без пробелов и разделителей.
+
+        Буквы-двойники переводятся в латиницу: русская «Т» в VIN — это
+        латинская «T», а не отдельная буква. Если после чистки остаётся
+        ровно 17 символов, значение и есть VIN; иначе возвращается то, что
+        получилось (проверка «похоже ли на VIN» — отдельно, см. vin_is_valid).
+        """
+        if value is None:
+            return ""
+        cleaned = _VIN_SEPARATORS.sub("", str(value)).upper()
+        return "".join(_VIN_LOOKALIKES.get(char, char) for char in cleaned)
+
+    @staticmethod
+    def vin_is_valid(vin: Any) -> bool:
+        """
+        Похоже ли значение на настоящий VIN.
+
+        VIN — ровно 17 символов латиницы и цифр, без I, O и Q. Всё остальное
+        (короче, длиннее, с русскими буквами или пробелами) — ненадёжно:
+        такую ячейку программа подсвечивает оператору, а не молча печатает
+        в договор.
+        """
+        value = "" if vin is None else str(vin).strip().upper()
+        if len(value) != 17:
+            return False
+        if _VIN_FORBIDDEN & set(value):
+            return False
+        return bool(re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", value))
+
     @classmethod
     def _find_vins_in_text(cls, text: str) -> List[str]:
         """
         Находит все уникальные VIN в исходном тексте, сохраняя порядок.
+
+        VIN с кириллическими буквами тоже находятся: без этого строка
+        терялась целиком (её не видел ни шаблон, ни fallback).
         """
         if not text:
             return []
 
-        found = cls.VIN_PATTERN.findall(text.upper())
+        found = [cls.normalize_vin(match) for match in _VIN_SOURCE_RE.findall(text)]
 
         seen = set()
         unique = []
@@ -279,8 +375,10 @@ class DataMapper:
         if not text or not vin:
             return ""
 
-        vin_upper = vin.upper()
-        lines = text.split("\n")
+        # И текст, и искомый VIN приводятся к латинице: иначе строка с
+        # кириллической буквой не находится вовсе.
+        vin_upper = cls.normalize_vin(vin)
+        lines = cls.normalize_vin_lookalikes(text).split("\n")
 
         for line in lines:
             if vin_upper not in line.upper():
@@ -377,8 +475,12 @@ class DataMapper:
         if not source_vins:
             return recognized
 
-        # VIN'ы, которые уже распознаны
-        recognized_vins = {v.get("vin", "").upper() for v in recognized if v.get("vin")}
+        # VIN'ы, которые уже распознаны. Нормализуем так же, как исходный
+        # текст: «LVТDD24B0TDC48177» с кириллицей — это тот же VIN, что и
+        # латиницей, и терять его как «отсутствующий» нельзя.
+        recognized_vins = {
+            cls.normalize_vin(v.get("vin")) for v in recognized if v.get("vin")
+        }
 
         # Каких не хватает
         missing_vins = [v for v in source_vins if v not in recognized_vins]
@@ -388,7 +490,7 @@ class DataMapper:
             return recognized
 
         logger.warning(
-            f"Ollama потеряла {len(missing_vins)} VIN: {missing_vins}. "
+            f"Модель потеряла {len(missing_vins)} VIN из {len(source_vins)}. "
             f"Добираем из исходного текста."
         )
 
@@ -400,7 +502,10 @@ class DataMapper:
                 "plate_number": "",
                 "year": 0,
                 "color": "",
-                "vehicle_type": "Легковой автомобиль",
+                # Тип ТС в тексте не назван — оставляем пустым. Подставлять
+                # «Легковой автомобиль» нельзя: это выглядело бы как данные,
+                # введённые оператором (ШАГ FIX-6, часть C).
+                "vehicle_type": "",
                 "loading_index": 0,
                 "unloading_index": 0,
             })
@@ -408,11 +513,141 @@ class DataMapper:
         # ── Сортируем в порядке появления в исходном тексте ──
         order_map = {v: i for i, v in enumerate(source_vins)}
         recognized.sort(
-            key=lambda v: order_map.get(v.get("vin", "").upper(), 9999)
+            key=lambda v: order_map.get(cls.normalize_vin(v.get("vin")), 9999)
         )
 
         logger.info(f"После fallback: {len(recognized)} машин")
         return recognized
+
+    @classmethod
+    def vehicle_rows_from_text(cls, source_text: str) -> List[Dict[str, str]]:
+        """
+        Список ТС, собранный ИЗ САМОГО ТЕКСТА: «вин» и «марка» построчно.
+
+        Строка считается строкой списка ТС, только если в ней есть VIN:
+        марка — всё, что стоит в этой же строке ДО него. Строки без VIN
+        (заголовки, примечания, реквизиты) пропускаются.
+
+        Это первоисточник для выравнивания ответа модели: и порядок строк,
+        и марка берутся отсюда, а не из ответа. Так марка физически не может
+        съехать на строку выше — она привязана к своей строке.
+        """
+        rows: List[Dict[str, str]] = []
+        if not source_text:
+            return rows
+
+        for line in cls.normalize_vin_lookalikes(source_text).splitlines():
+            match = _VIN_SOURCE_RE.search(line)
+            if not match:
+                continue
+            brand = line[:match.start()].strip(" \t-–—:;|,.")
+            # Нумерация строк («1.», «12)») — не часть марки.
+            brand = re.sub(r"^\d+[.)]\s*", "", brand).strip()
+            rows.append({"vin": cls.normalize_vin(match.group(1)),
+                         "brand_model": brand})
+        return rows
+
+    @classmethod
+    def repair_vehicle_list(
+        cls,
+        recognized: List[Dict[str, Any]],
+        source_text: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Приводит список ТС в соответствие с исходным текстом.
+
+        Что делает (по порядку):
+          1. VIN каждой строки — на латиницу, без пробелов и разделителей;
+          2. если исходный текст — список ТС по строкам, марка берётся ИЗ
+             ТОЙ ЖЕ строки текста (по VIN), а не из ответа модели;
+          3. VIN, которых в ответе нет, добавляются на своё место.
+
+        Почему марка берётся из текста. Модель привязывает марку не к VIN,
+        а к порядковому номеру строки: потеряв одну машину, она сдвигает
+        марки всех следующих строк на строку вверх — оператор видит в строке 3
+        чужую марку. VIN же в ответе остаётся верным (это отдельный
+        плейсхолдер), поэтому VIN — надёжный ключ, а порядок — нет.
+
+        Текст без VIN (обычный договор, реквизиты) возвращается как есть:
+        списка строк там нет, и восстанавливать нечего.
+        """
+        if not recognized:
+            return recognized
+
+        # ── 1. Нормализация VIN ──
+        normalized: List[Dict[str, Any]] = []
+        for vehicle in recognized:
+            item = dict(vehicle)
+            vin = cls._clean_value(item.get("vin"))
+            if vin:
+                item["vin"] = cls.normalize_vin(vin)
+            normalized.append(item)
+
+        repaired = cls._recover_missing_vins(normalized, source_text)
+        if not source_text:
+            return repaired
+
+        rows = cls.vehicle_rows_from_text(source_text)
+        if not rows:
+            # VIN в тексте не нашлось — выравнивать не по чему.
+            return repaired
+
+        order_map = {row["vin"]: index for index, row in enumerate(rows)}
+        brand_map = {row["vin"]: row["brand_model"] for row in rows}
+
+        # ── 2. Марка — из строки своего VIN ──
+        # Порядок строк приводим к тексту, когда он сопоставим: у каждой
+        # машины из ответа есть свой VIN в тексте, и машин не больше, чем
+        # строк. Если модель выдумала VIN, которого в тексте нет, порядок
+        # не трогаем — сопоставлять его с текстом больше не с чем.
+        recognized_vins = {cls.normalize_vin(v.get("vin")) for v in recognized}
+        if (recognized_vins
+                and recognized_vins <= set(order_map)
+                and len(repaired) <= len(rows)):
+            repaired.sort(
+                key=lambda v: order_map.get(cls.normalize_vin(v.get("vin")), 9999)
+            )
+            logger.info(
+                "Список ТС выровнен по строкам текста: строк %d, машин в ответе %d",
+                len(rows), len(recognized_vins),
+            )
+
+        changed_brands = 0
+        for vehicle in repaired:
+            vin = cls.normalize_vin(vehicle.get("vin"))
+            brand = brand_map.get(vin, "")
+            if not brand:
+                continue
+            if cls._clean_value(vehicle.get("brand_model")) == brand:
+                continue
+            if cls._clean_value(vehicle.get("brand_model")):
+                changed_brands += 1
+            vehicle["brand_model"] = brand
+
+        if len(repaired) != len(rows):
+            logger.warning(
+                "Список ТС: строк в тексте %d, машин в ответе %d — проверьте таблицу",
+                len(rows), len(repaired),
+            )
+        if changed_brands:
+            logger.info(
+                "Список ТС: марка восстановлена по строке текста у %d машин "
+                "(в ответе модели марки были сдвинуты)",
+                changed_brands,
+            )
+        return repaired
+
+    @classmethod
+    def vehicle_line_count(cls, source_text: str) -> int:
+        """
+        Сколько непустых строк в исходном тексте.
+
+        Нужно для проверки «строк в тексте N — машин должно быть N»:
+        и в постобработке, и в интерфейсе (подсказка оператору).
+        """
+        if not source_text:
+            return 0
+        return len([line for line in str(source_text).splitlines() if line.strip()])
 
     # ─────────────────────────────────────────────────────────
     # Водитель
@@ -789,9 +1024,10 @@ class DataMapper:
 
         vehicles = cls.map_vehicles_data(data.get("vehicles", []))
 
-        # ── Fallback: если Ollama потеряла VIN, добираем регексом ──
+        # ── Выравнивание по исходному тексту: VIN на латиницу, потерянные
+        # строки — на своё место (иначе марки съезжают на строку выше) ──
         if source_text:
-            vehicles = cls._recover_missing_vins(vehicles, source_text)
+            vehicles = cls.repair_vehicle_list(vehicles, source_text)
 
         result = {
             "driver": cls.map_driver_data(cls._section(data.get("driver"))),

@@ -41,8 +41,9 @@ from ui.widgets.columns import (  # noqa: E402
     VEHICLE_COLUMNS,
 )
 from ui.widgets.table_helpers import (  # noqa: E402
-    apply_column_checks, hidden_column_keys, install_column_settings_menu,
-    stored_widths, visible_column_keys,
+    WARNING_TOOLTIP_PREFIX, _TOOLTIPS_FLAG, apply_column_checks,
+    hidden_column_keys, install_column_settings_menu, stored_widths,
+    visible_column_keys,
 )
 
 #: Колонки, которых в таблице быть не должно (ШАГ FIX-6, части B1/B2).
@@ -196,16 +197,35 @@ def test_all_columns_are_interactive(tab):
     assert header.minimumSectionSize() == min(COLUMN_MINIMUMS.values())
 
 
-def test_tooltip_on_long_values(tab):
-    """Наведение на ячейку показывает полный текст (VIN длиннее колонки)."""
-    long_vin = "EC3TEUMB0T0000001234"
-    tab.fill_data([{FIELD_VIN: long_vin}])
+def test_tooltip_on_long_values(tab, monkeypatch):
+    """
+    Подсказки ячеек подключены; VIN из 17 символов предупреждения не даёт.
 
-    item = tab.table.item(0, tab.COL_VIN)
-    tab.table.itemEntered.emit(item)
+    Проверяется то, чем эта таблица отличается от остальных: подсказки
+    включены (отслеживание мыши + установленный слот). Само предупреждение
+    о ненадёжном VIN проверяется в tests/test_vehicles_vin_check.py —
+    подмена `set_warning_tooltip` здесь нужна, чтобы поймать лишние
+    срабатывания на нормальном значении.
 
-    assert item.toolTip() == long_vin
+    ЛОВУШКА ОКРУЖЕНИЯ: в этой сборке PyQt5 (Python 3.14 + PyQt5 5.15.11)
+    запись роли ToolTip у ячейки, лежащей в таблице, обратно не читается,
+    а `itemEntered.emit(...)` в тесте доходит до слота с пустым текстом
+    (см. шапку tests/test_vehicles_vin_check.py). Поэтому проверяются
+    ВЫЗОВЫ постановки подсказки, а не чтение значения обратно.
+    """
+    import ui.tabs.vehicles_tab as vehicles_tab_module
+
+    calls = []
+    monkeypatch.setattr(
+        vehicles_tab_module, "set_warning_tooltip",
+        lambda item, text, column=0: calls.append(text),
+    )
+
+    tab.fill_data([{FIELD_VIN: "EC3TEUMB0T0002608"}])
+
     assert tab.table.hasMouseTracking() is True
+    assert getattr(tab.table, _TOOLTIPS_FLAG, False) is True
+    assert calls == []          # 17 символов — предупреждать не о чем
 
 
 def test_widths_persist(tab, qapp):

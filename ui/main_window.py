@@ -29,9 +29,9 @@ from core import audit, secrets_store
 from core.contract_data import ContractData
 from core.contracts.contract_types import DEFAULT_CONTRACT_TYPE
 from core.contract_generator import ContractGenerator, PerevozkaValidator
-from core.gigachat_client import GigaChatClient
+from core.gigachat_client import GigaChatClient, normalized_source_text
 from core.mirror import SOURCE_TYPE
-from core.recognizer import filled_only, filled_only_list
+from core.recognizer import DataMapper, filled_only, filled_only_list
 from core.secrets_store import MISSING_KEY_MESSAGE
 from core.settings_service import get_settings_service
 from core.trace import filled_fields_summary
@@ -91,7 +91,7 @@ def _validate_gigachat_key(key: str) -> Optional[str]:
 class RecognitionSignals(QObject):
     """Сигналы задачи распознавания (Шаг 8 оптимизации)."""
 
-    finished = pyqtSignal(dict)
+    finished = pyqtSignal(dict, str)  # данные распознавания, исходный текст
     error = pyqtSignal(str)
     cancelled = pyqtSignal()
     progress = pyqtSignal(int, str)   # процент, текст статуса
@@ -165,7 +165,10 @@ class RecognitionTask(QRunnable):
                 return
 
             self.signals.progress.emit(100, "Распознавание завершено")
-            self.signals.finished.emit(data)
+            # Исходный текст уходит вместе с данными: по нему список ТС
+            # выравнивается после ответа модели (см. _on_recognition_finished).
+            # Текст берётся нормализованный — ровно тот, что ушёл в модель.
+            self.signals.finished.emit(data, normalized_source_text(self.text))
 
         except Exception as e:
             if self._cancelled:
@@ -978,7 +981,16 @@ class MainWindow(QMainWindow):
         )
         logger.debug(f"Распознавание: все ключи ответа: {sorted(data.keys())}")
 
-    def _on_recognition_finished(self, data: Dict[str, Any], task=None):
+    def _on_recognition_finished(self, data: Dict[str, Any],
+                                 source_text: str = "", task=None):
+        """
+        Заполняет вкладки результатом распознавания.
+
+        `source_text` — текст, ушедший в модель (сигнал `finished` отдаёт его
+        вторым аргументом). Нужен списку ТС: по строкам текста проверяется,
+        что машин столько же и что VIN не потерялись. Вызов без аргумента
+        (старые тесты, ручной вызов) список ТС просто не выравнивает.
+        """
         task = self._task_from(task)
         if not self._is_current_task(task):
             logger.info("Результат устаревшей задачи распознавания проигнорирован")
@@ -1029,6 +1041,13 @@ class MainWindow(QMainWindow):
 
             vehicles_data = filled_only_list(data.get("vehicles"))
             if vehicles_data:
+                # Список ТС выравнивается по исходному тексту: VIN — на
+                # латиницу, потерянная моделью строка возвращается на своё
+                # место. Без этого марки съезжают на строку выше, а строк
+                # в таблице оказывается меньше, чем в тексте.
+                vehicles_data = DataMapper.repair_vehicle_list(
+                    vehicles_data, source_text
+                )
                 self.vehicles_tab.fill_data(vehicles_data)
                 logger.info(f"Таблица ТС заполнена: {len(vehicles_data)} записей")
                 for i, vehicle in enumerate(vehicles_data, start=1):

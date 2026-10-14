@@ -205,6 +205,37 @@ def deleted_row_color(theme_name: Any = None) -> QColor:
     return QColor(palette(theme_name)["danger"])
 
 
+def warning_cell_color(theme_name: Any = None) -> QColor:
+    """
+    Фон ячейки-предупреждения в таблице (например, ненадёжный VIN).
+
+    Чистый ``warn_bg`` для заливки строки слишком плотный: он рассчитан на
+    подсветку пустого обязательного поля, а не на текст таблицы. Здесь он
+    смешивается с цветом поверхности — получается та же жёлтая подсветка,
+    но текст строки остаётся читаемым в обеих темах.
+    """
+    p = palette(theme_name)
+    warn = QColor(p["warn_bg"])
+    surface = QColor(p["surface"])
+    ratio = 0.45
+    return QColor(
+        round(warn.red() * ratio + surface.red() * (1 - ratio)),
+        round(warn.green() * ratio + surface.green() * (1 - ratio)),
+        round(warn.blue() * ratio + surface.blue() * (1 - ratio)),
+    )
+
+
+def warning_text_qss(theme_name: Any = None) -> str:
+    """Стиль подписи-предупреждения (жёлтая рамка темы, обычный фон)."""
+    p = palette(theme_name)
+    return (
+        f"background-color: {p['warn_bg']};"
+        f" border: 1px solid {p['warn_border']};"
+        f" border-radius: 5px; padding: 3px 8px;"
+        f" color: {p['input_text']};"
+    )
+
+
 # ─────────────────────────────────────────────────────────────
 # Общий QSS приложения
 # ─────────────────────────────────────────────────────────────
@@ -821,7 +852,7 @@ __all__ = [
     "build_palette", "qss", "apply_theme",
     # подсветка обязательных полей
     "required_empty_qss", "required_empty_qss_text", "readonly_field_qss",
-    "deleted_row_color",
+    "deleted_row_color", "warning_cell_color", "warning_text_qss",
     "REQUIRED_EMPTY_QSS", "REQUIRED_EMPTY_QSS_TEXT",
     # палитра светлой темы (совместимость)
     "NAVY", "NAVY_HOVER", "PRIMARY", "PRIMARY_HOVER", "PRIMARY_PRESSED",

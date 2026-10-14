@@ -38,9 +38,11 @@ from typing import Any, Dict, List, Optional
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QMessageBox,
-    QHeaderView, QComboBox, QSpinBox,
+    QHeaderView, QComboBox, QSpinBox, QLabel,
 )
 from PyQt5.QtCore import pyqtSignal
+
+from PyQt5.QtGui import QBrush
 
 from ui.tabs.base_tab import TabMixin
 from ui.widgets import RecognitionPanel
@@ -50,8 +52,8 @@ from ui.widgets.columns import (
     VEHICLE_COLUMNS,
 )
 from ui.widgets.table_helpers import (
-    MODE_FIXED, install_column_settings_menu, install_tooltip_on_table,
-    setup_keyed_table,
+    MODE_FIXED, has_warning_tooltip, install_column_settings_menu,
+    install_tooltip_on_table, set_warning_tooltip, setup_keyed_table,
 )
 from ui import theme
 
@@ -62,6 +64,12 @@ NO_POINT = "— (все)"
 
 #: Типы ТС для выпадающего списка колонки «Тип ТС».
 VEHICLE_TYPES = ["Легковой автомобиль", "Тягач", "Прицеп", "Фургон", "Автобус"]
+
+#: Длина VIN по стандарту (ISO 3779). VIN другой длины — ненадёжный:
+#: он не проходит проверку `core/recognizer.py::DataMapper.vin_is_valid`,
+#: и его ячейка подсвечивается оператору. Число выписано отдельно, чтобы
+#: вкладка не тянула ядро распознавания ради одной константы.
+VIN_LENGTH = 17
 
 #: Ключ QSettings: состав колонок и раскладка ширин этой таблицы.
 COLUMNS_STORAGE_KEY = "ui/vehicles/columns"
@@ -187,6 +195,13 @@ class VehiclesTab(TabMixin, QWidget):
 
         button_layout.addStretch()
 
+        # ── Подпись о ненадёжных VIN (пустая, пока всё в порядке) ──
+        self.vin_warning = QLabel("")
+        self.vin_warning.setObjectName("vinWarning")
+        self.vin_warning.setWordWrap(True)
+        self.vin_warning.setVisible(False)
+        button_layout.addWidget(self.vin_warning)
+
         layout.addLayout(button_layout)
 
         # ── Таблица ТС ──
@@ -252,6 +267,105 @@ class VehiclesTab(TabMixin, QWidget):
             storage_key=COLUMNS_STORAGE_KEY,
             on_changed=self._reapply_column_widths,
         )
+
+        # Оператор поправил ячейку — подсветка VIN пересчитывается сразу.
+        self.table.itemChanged.connect(self._on_item_changed)
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        """
+        Правка ячейки: пересчитывает подсветку VIN и подпись о ненадёжных.
+
+        Именно пересчёт целиком, а не перекраска одной ячейки: оператор мог
+        не только испортить VIN, но и починить его — тогда число в подписи
+        должно уменьшиться.
+        """
+        if item is not None and item.column() == self.COL_VIN:
+            self.refresh_vin_warnings()
+
+    # ─────────────────────────────────────────────────────────
+    # Проверка VIN: 17 символов, латиница и цифры
+    # ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def vin_is_reliable(vin: Any) -> bool:
+        """
+        Похоже ли значение ячейки на настоящий VIN.
+
+        VIN — ровно 17 символов; пустая ячейка надёжной не считается, но и
+        ненадёжной тоже: у новой строки VIN ещё не введён, и подсвечивать
+        нечего (см. `_mark_row_vin`).
+        """
+        value = "" if vin is None else str(vin).strip()
+        return len(value) == VIN_LENGTH
+
+    def _mark_row_vin(self, row: int) -> None:
+        """
+        Подсвечивает ячейку VIN, если он не 17 символов.
+
+        Модель распознавания иногда возвращает VIN короче: часть символов
+        теряется при чтении документа или при склейке строк. Такой VIN в
+        договор печатать нельзя, и оператор должен увидеть это сразу —
+        ячейка получает жёлтый фон темы и подсказку с длиной значения.
+
+        Подсказка-предупреждение ставится через `set_warning_tooltip`: она
+        начинается знаком «⚠», и общий помощник подсказок (наведение мыши)
+        её не затирает. У надёжного VIN подсказку НЕ очищаем — её ставит
+        тот же помощник, и очистка стёрла бы её.
+        """
+        index = self.COL_VIN
+        item = self.table.item(row, index)
+        if item is None:
+            return
+
+        value = item.text().strip()
+        reliable = self.vin_is_reliable(value)
+
+        if not value or reliable:
+            item.setBackground(QBrush())
+            # Подсказку-предупреждение снимаем, чужую (текст ячейки) не трогаем.
+            if has_warning_tooltip(item):
+                set_warning_tooltip(item, "")
+        else:
+            item.setBackground(QBrush(theme.warning_cell_color()))
+            set_warning_tooltip(
+                item,
+                f"VIN {len(value)} символов вместо {VIN_LENGTH} — "
+                f"проверьте по документу",
+            )
+
+    def refresh_vin_warnings(self) -> None:
+        """
+        Пересчитывает подсветку VIN и подпись «ненадёжных VIN: N».
+
+        Вызывается после заполнения таблицы (распознавание, импорт, загрузка
+        записи) и после правки ячейки оператором.
+        """
+        suspicious = 0
+        for row in range(self.table.rowCount()):
+            self._mark_row_vin(row)
+            value = self._cell_text(row, FIELD_VIN)
+            if value and not self.vin_is_reliable(value):
+                suspicious += 1
+
+        self._set_vin_warning(suspicious)
+
+    def _set_vin_warning(self, suspicious: int) -> None:
+        """Показывает подпись о ненадёжных VIN (или прячет её)."""
+        label = getattr(self, "vin_warning", None)
+        if label is None:
+            return
+
+        if suspicious:
+            label.setText(
+                f"⚠ Ненадёжных VIN: {suspicious}. "
+                f"VIN должен быть из {VIN_LENGTH} символов — проверьте по документу."
+            )
+            label.setStyleSheet(theme.warning_text_qss())
+            label.setVisible(True)
+        else:
+            label.setText("")
+            label.setStyleSheet("")
+            label.setVisible(False)
 
     def _reapply_column_widths(self) -> None:
         """
@@ -517,6 +631,7 @@ class VehiclesTab(TabMixin, QWidget):
         row = self.table.rowCount()
         self.table.insertRow(row)
         self._init_row(row)
+        self.refresh_vin_warnings()
 
         logger.debug(f"Добавлено ТС: строка {row}")
 
@@ -547,6 +662,7 @@ class VehiclesTab(TabMixin, QWidget):
                 self.COL_UNLOADING,
                 self._build_point_items(self._unloadings_points, "Выгрузка"),
             )
+            self.refresh_vin_warnings()
             logger.info(f"ТС удалено: строка {current_row}")
 
     # ─────────────────────────────────────────────────────────
@@ -617,6 +733,7 @@ class VehiclesTab(TabMixin, QWidget):
             self.table.insertRow(row)
             self._init_row(row, vehicle)
 
+        self.refresh_vin_warnings()
         logger.info(f"Таблица ТС заполнена: {len(vehicles)} записей")
 
     # ─────────────────────────────────────────────────────────
@@ -628,6 +745,7 @@ class VehiclesTab(TabMixin, QWidget):
         self.table.setRowCount(0)
         self._store.clear()
         self.recognition_panel.clear()
+        self.refresh_vin_warnings()
         logger.debug("Таблица ТС очищена")
 
     # ─────────────────────────────────────────────────────────
