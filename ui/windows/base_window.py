@@ -757,14 +757,28 @@ class BaseContractWindow(QMainWindow):
         Окна типов живут всё время приложения: крестик не должен терять
         данные формы. Реальное завершение — force_close() из
         WindowManager.close_all().
+
+        Плавающий кот прячется вместе с окном (баг #18): он окно верхнего
+        уровня и без явного закрытия оставался на экране.
         """
         if getattr(self, "_force_close", False):
             event.accept()
             return
 
+        self._close_floating_cat()
         logger.info("Окно типа %s скрыто (окно не уничтожено)", self.CONTRACT_TYPE)
         event.ignore()
         self.hide()
+
+    def _close_floating_cat(self) -> None:
+        """Закрывает плавающего кота Максимилиана (баг #18)."""
+        agent_widget = getattr(self, "agent_widget", None)
+        if agent_widget is None:
+            return
+        try:
+            agent_widget.close_floating()
+        except Exception as e:  # noqa: BLE001 — кот не должен мешать закрытию
+            logger.warning("Плавающий кот не закрыт: %s", e)
 
     def force_close(self) -> None:
         """Реальное закрытие (используется WindowManager.close_all())."""
@@ -780,6 +794,9 @@ class BaseContractWindow(QMainWindow):
         agent_widget = getattr(self, "agent_widget", None)
         if agent_widget is not None:
             agent_widget.shutdown()
+
+        # Кот закрывается отдельно и ЯВНО (баг #18).
+        self._close_floating_cat()
 
         wait_for_thread_pools(self)
 

@@ -316,12 +316,26 @@ class FloatingCat(QWidget):
 
     Окно без рамки и всегда сверху — это украшение, а не рабочее окно:
     оно не должно попадать в панель задач и мешать формам.
+
+    РОДИТЕЛЬ ОБЯЗАТЕЛЕН. Без родителя кот — самостоятельное окно верхнего
+    уровня: главное окно закрывается, а он остаётся висеть на экране, пока
+    жив процесс (баг #18). Поэтому `parent` передаётся ЯВНО и по имени
+    (`FloatingCat(persona_key=…, parent=window)`): позиционный вызов
+    `FloatingCat(persona_key)` попадал в `parent` и родителя не ставил.
     """
 
     #: Кот нажат (открыть панель).
     clicked = pyqtSignal()
 
-    def __init__(self, persona_key: str = DEFAULT_PERSONA, parent=None):
+    def __init__(self, persona_key: str = DEFAULT_PERSONA,
+                 parent: Optional[QWidget] = None):
+        if parent is None:
+            # Ошибку видно сразу и в логе: молча созданное окно верхнего
+            # уровня — это ровно тот баг, который здесь и закрыт.
+            logger.error(
+                "Плавающий кот создан БЕЗ родителя — он не закроется вместе "
+                "с окном. Передайте parent=window."
+            )
         super().__init__(parent)
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
@@ -337,6 +351,32 @@ class FloatingCat(QWidget):
 
         self._drag_offset = None
         self._moved = False
+        #: Кот закрыт по-настоящему (нужно панели и тестам).
+        self._closed = False
+
+    def close_cat(self) -> None:
+        """
+        Закрывает кота по-настоящему: останавливает анимацию и прячет окно.
+
+        Вызывается при закрытии окна программы (`force_close` →
+        `AgentWidget.shutdown`) — кот не должен пережить программу. Метод
+        идемпотентен: повторный вызов ничего не делает.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.avatar.stop_animation()
+        except RuntimeError:
+            pass
+        self.hide()
+        self.close()
+        logger.info("Плавающий кот закрыт вместе с окном")
+
+    @property
+    def is_closed(self) -> bool:
+        """Кот закрыт вместе с окном программы?"""
+        return self._closed
 
     def set_persona(self, persona_key: str) -> None:
         """Меняет образ плавающего кота."""
@@ -787,11 +827,21 @@ class AgentWidget(QObject):
         self.icon_button.set_persona(persona_key)
 
     def _ensure_floating(self, needed: bool, persona_key: str) -> None:
-        """Создаёт плавающего кота, если он включён настройкой."""
+        """
+        Создаёт плавающего кота, если он включён настройкой.
+
+        Настройка ``show_floating = false`` означает, что кот НЕ создаётся
+        вовсе: раньше он создавался и просто прятался, а «спрятанное» окно
+        всё равно живёт и может всплыть (баг #18).
+
+        Родитель — окно программы, и передаётся по имени: кот обязан
+        закрыться вместе с ним, а не остаться на экране.
+        """
         if self.floating is None:
             if not needed:
                 return
-            self.floating = FloatingCat(persona_key)
+            self.floating = FloatingCat(persona_key=persona_key,
+                                        parent=self.window)
             self.floating.clicked.connect(self.toggle_panel)
         self.floating.set_persona(persona_key)
         if needed:
@@ -1301,6 +1351,25 @@ class AgentWidget(QObject):
     # ---------------------------------------------------------
     # Завершение
     # ---------------------------------------------------------
+    def close_floating(self) -> None:
+        """
+        Закрывает плавающего кота (баг #18).
+
+        Отдельный метод, потому что кот — единственное окно Максимилиана
+        верхнего уровня: иконка и панель живут внутри окна программы и
+        умирают вместе с ним, а кот без явного close() остаётся на экране.
+        Метод идемпотентен и безопасен, когда кота нет вовсе.
+        """
+        cat = self.floating
+        if cat is None:
+            return
+        try:
+            cat.close_cat()
+        except RuntimeError:
+            # Виджет уже разрушен вместе с окном — закрывать нечего.
+            pass
+        self.floating = None
+
     def shutdown(self) -> None:
         """
         Останавливает фоновую работу перед выходом.
@@ -1350,6 +1419,11 @@ class AgentWidget(QObject):
             self._animation.stop()
         except RuntimeError:
             pass
+
+        # Плавающий кот закрывается по-настоящему (баг #18): своего
+        # родителя у него нет — он окно верхнего уровня, и без явного
+        # close() остаётся на экране после выхода из программы.
+        self.close_floating()
 
         # Подсказки без вопроса (часть 4): таймеры обязаны замолчать до
         # закрытия окна — иначе они дёрнут закрытую панель.
@@ -1600,6 +1674,51 @@ def uninstall_agent(window: QWidget) -> None:
     window.agent_widget = None
 
 
+def close_floating_cats(app: Optional[Any] = None) -> int:
+    """
+    Закрывает всех плавающих котов приложения (баг #18).
+
+    Страховка на выходе из программы: кот — окно верхнего уровня, и без
+    явного закрытия он остаётся на экране, даже когда окно программы уже
+    закрыто. Обычно котов закрывает `AgentWidget.shutdown()` из
+    `force_close()` окна, но если окно до этого не закрывали (или кот был
+    создан в другом окне), кот переживёт программу.
+
+    :param app: приложение Qt. По умолчанию берётся текущее; если Qt не
+        поднят вовсе, функция молча отвечает нулём (её зовут на выходе, и
+        падать там нельзя).
+    :return: сколько котов закрыто
+    """
+    if app is None:
+        app = QApplication.instance()
+    if app is None:
+        return 0
+
+    closed = 0
+    for widget in app.topLevelWidgets():
+        if not isinstance(widget, FloatingCat):
+            continue
+        try:
+            widget.close_cat()
+            closed += 1
+        except RuntimeError:
+            # Виджет уже разрушен — закрывать нечего.
+            continue
+
+    for widget in app.allWidgets():
+        agent = getattr(widget, "agent_widget", None)
+        if agent is None:
+            continue
+        try:
+            agent.close_floating()
+        except Exception as e:  # noqa: BLE001 — выход не должен падать
+            logger.warning("Плавающий кот не закрыт: %s", e)
+
+    if closed:
+        logger.info("Плавающих котов закрыто: %s", closed)
+    return closed
+
+
 def active_form_window() -> Optional[Any]:
     """
     Окно, которое агент считает открытой формой.
@@ -1626,6 +1745,7 @@ __all__ = [
     "active_form_window",
     "agent_should_open_on_start",
     "ask_confirmation",
+    "close_floating_cats",
     "default_client_factory",
     "install_agent",
     "install_agent_safely",

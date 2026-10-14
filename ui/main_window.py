@@ -1987,14 +1987,29 @@ class MainWindow(QMainWindow):
         Окна типов живут всё время приложения: закрытие крестиком не должно
         уничтожать данные в формах. Реальное завершение — через
         ui/windows/manager.py (close_all() вызывает force_close()).
+
+        Плавающий кот при этом прячется ВМЕСТЕ с окном (баг #18): он окно
+        верхнего уровня, и без явного закрытия оставался на экране даже
+        после того, как программа выключилась.
         """
         if getattr(self, "_force_close", False):
             event.accept()
             return
 
+        self._close_floating_cat()
         logger.info("Окно скрыто (закрытие крестиком данные не теряет)")
         event.ignore()
         self.hide()
+
+    def _close_floating_cat(self) -> None:
+        """Закрывает плавающего кота Максимилиана (баг #18)."""
+        agent_widget = getattr(self, "agent_widget", None)
+        if agent_widget is None:
+            return
+        try:
+            agent_widget.close_floating()
+        except Exception as e:  # noqa: BLE001 — кот не должен мешать закрытию
+            logger.warning("Плавающий кот не закрыт: %s", e)
 
     def force_close(self) -> None:
         """Закрывает окно по-настоящему: выход из приложения, не скрытие."""
@@ -2010,6 +2025,11 @@ class MainWindow(QMainWindow):
         agent_widget = getattr(self, "agent_widget", None)
         if agent_widget is not None:
             agent_widget.shutdown()
+
+        # Кот закрывается отдельно и ЯВНО: shutdown() тоже это делает, но
+        # порядок «сначала кот, потом всё остальное» надёжнее — окно
+        # верхнего уровня не должно пережить программу (баг #18).
+        self._close_floating_cat()
 
         wait_for_thread_pools(self)
 
