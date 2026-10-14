@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Заказчики и перевозчики — таблицы customers и carriers.
 
@@ -33,7 +33,7 @@ from core.text_normalize import normalize_organization_fields
 
 from db import fts
 from db.connection import get_connection
-from db.crud.search import ensure_fts_fresh
+from db.crud.search import ensure_fts_fresh, search_by_levels
 
 logger = logging.getLogger("db.crud.organizations")
 
@@ -241,6 +241,11 @@ def search_organizations(
     («Ромашка», «РОМАШКА»). Запросы с цифрами (ИНН, ОГРН), а также случаи,
     когда FTS ничего не нашёл, обслуживает прежний LIKE.
 
+    Если и LIKE ничего не нашёл, включается нечёткий поиск (Часть 0, D):
+    «Фасстранс» находит «ООО «ФассТранс»», «Фас-Транс» и «Фас Транс» —
+    то же самое, «ромашка» находит «ООО «Ромашка»». Правила разбора
+    опечаток живут в core/fuzzy.py, порядок уровней — там же.
+
     include_deleted=True показывает и мягко удалённые записи.
     """
     table = "carriers" if is_carrier else "customers"
@@ -289,7 +294,24 @@ def search_organizations(
         )
         rows = cursor.fetchall()
         cols = [desc[0] for desc in cursor.description]
-        return [dict(zip(cols, row)) for row in rows]
+        if rows:
+            return [dict(zip(cols, row)) for row in rows]
+
+        # ── Путь 3: нечёткий поиск (опечатки, дефисы, двойные буквы) ──
+        def fetch(condition: str, params: List[Any]) -> List[Dict[str, Any]]:
+            """Выполняет условие нечёткого уровня и возвращает строки."""
+            cursor.execute(
+                f"SELECT * FROM {table} "
+                f"WHERE (is_deleted = 0 OR ?) AND ({condition}) "
+                f"ORDER BY full_name COLLATE NOCASE LIMIT ?",
+                [only_active, *params, int(limit)],
+            )
+            names = [desc[0] for desc in cursor.description]
+            return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+        return search_by_levels(
+            fetch, search_term, ("full_name", "short_name"), int(limit)
+        )
     finally:
         conn.close()
 

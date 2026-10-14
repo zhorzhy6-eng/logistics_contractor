@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Водители — таблицы drivers, driver_vehicles-поля и driver_carriers.
 
@@ -27,7 +27,7 @@ from core import audit
 
 from db import fts
 from db.connection import get_connection
-from db.crud.search import ensure_fts_fresh
+from db.crud.search import ensure_fts_fresh, search_by_levels
 
 logger = logging.getLogger("db.crud.drivers")
 
@@ -199,6 +199,10 @@ def search_drivers(
     (паспорт «18 22 926830», телефон) и случаи, когда FTS ничего не нашёл,
     обслуживает прежний LIKE — поведение сохранено.
 
+    Если и LIKE ничего не нашёл, включается нечёткий поиск (Часть 0, D):
+    «иванова» (падеж) находит «Иванов Иван Иванович», «Иванофф» — тоже,
+    «иван иваныч» — «Иванов Иван Иванович». Правила — в core/fuzzy.py.
+
     Паспорт сравнивается так же, как раньше в интерфейсе: склейка
     «серия + пробел + номер», поэтому поиск по «18 22 926830» работает.
 
@@ -264,7 +268,29 @@ def search_drivers(
         )
         rows = cursor.fetchall()
         cols = [desc[0] for desc in cursor.description]
-        return [dict(zip(cols, row)) for row in rows]
+        if rows:
+            return [dict(zip(cols, row)) for row in rows]
+
+        # ── Путь 3: нечёткий поиск (опечатки, падежи, двойные буквы) ──
+        # «иванова» находит «Иванов Иван Иванович», «Фасстранс» —
+        # «ООО «ФассТранс»». Правила уровней — в core/fuzzy.py.
+        # Колонка указана с псевдонимом (d.full_name): при
+        # with_carrier_name=True в запросе есть JOIN с carriers, и там
+        # тоже есть full_name — без псевдонима SQLite отвечает
+        # «ambiguous column name: full_name».
+        def fetch(condition: str, params: List[Any]) -> List[Dict[str, Any]]:
+            """Выполняет условие нечёткого уровня и возвращает строки."""
+            cursor.execute(
+                f"SELECT d.*{carrier_column} FROM drivers d "
+                f"{carrier_join}"
+                f"WHERE (d.is_deleted = 0 OR ?) AND ({condition}) "
+                f"ORDER BY d.full_name COLLATE NOCASE LIMIT ?",
+                [only_active, *params, int(limit)],
+            )
+            names = [desc[0] for desc in cursor.description]
+            return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+        return search_by_levels(fetch, search_term, ("d.full_name",), int(limit))
     finally:
         conn.close()
 
