@@ -90,7 +90,7 @@ from ui.driver_carrier_dialog import DriverCarrierDialog
 from ui.tabs.driver_tab import CARRIER_NONE_TITLE
 from ui.widgets.table_helpers import (
     MODE_FIXED,
-    install_tooltip_on_table, setup_point_table,
+    install_tooltip_on_table, save_all_column_widths, setup_point_table,
 )
 
 logger = logging.getLogger("ui.db_manager_dialog")
@@ -1136,6 +1136,40 @@ class DbManagerDialog(QDialog):
             f"DbManagerDialog инициализирован (режим выбора: "
             f"{self.picker_tab or 'нет'})"
         )
+
+    # ─────────────────────────────────────────────────────────
+    # Закрытие: раскладка колонок (часть D ночного прогона)
+    # ─────────────────────────────────────────────────────────
+
+    def _save_widths(self) -> None:
+        """
+        Записывает раскладку всех таблиц и дерева диалога.
+
+        Автозапись ширин отложена на полсекунды: если оператор растянул
+        колонку и сразу закрыл диалог, таймер не успевает сработать, и
+        раскладка терялась. На закрытии ширины пишутся явно — все
+        четыре таблицы сразу (`save_all_column_widths` ищет их сам).
+        """
+        try:
+            save_all_column_widths(self)
+        except Exception as e:  # noqa: BLE001 — раскладка не важнее закрытия
+            logger.warning("Раскладка колонок не сохранена: %s", e)
+
+    def done(self, result: int) -> None:
+        """
+        Сохраняет раскладку при любом способе закрытия.
+
+        Кнопки «Закрыть» и «Загрузить в форму» зовут `accept()`/`done()`,
+        Esc — `reject()`; все они идут через `done()` и НЕ посылают
+        `closeEvent`, поэтому одного closeEvent было бы мало.
+        """
+        self._save_widths()
+        super().done(result)
+
+    def closeEvent(self, event) -> None:
+        """Сохраняет раскладку при закрытии крестиком."""
+        self._save_widths()
+        super().closeEvent(event)
 
     # ─────────────────────────────────────────────────────────
     # Вкладки

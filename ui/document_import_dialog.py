@@ -61,7 +61,8 @@ from core.import_entities import (STATE_CONFLICT, STATE_INVALID, STATE_UNREADABL
 from ui import theme
 from ui.icons import action_icon
 from ui.widgets.table_helpers import (
-    MODE_FIXED, MODE_STRETCH, install_tooltip_on_table, setup_point_table,
+    MODE_FIXED, MODE_STRETCH, install_tooltip_on_table,
+    save_all_column_widths, setup_point_table,
 )
 
 logger = logging.getLogger(__name__)
@@ -960,11 +961,29 @@ class DocumentImportDialog(QDialog):
             self.cancel_button.setEnabled(False)
             self.status.setText("Отмена… Ожидаем завершения текущей операции и удаления облачных файлов.")
 
+    def _save_widths(self) -> None:
+        """
+        Записывает раскладку таблиц и дерева диалога (часть D ночного прогона).
+
+        Автозапись ширин отложена на полсекунды: если оператор растянул
+        колонку и сразу закрыл диалог, таймер не успевает сработать.
+        """
+        try:
+            save_all_column_widths(self)
+        except Exception as e:  # noqa: BLE001 — раскладка не важнее закрытия
+            logger.warning("Раскладка колонок не сохранена: %s", e)
+
+    def done(self, result):
+        """Сохраняет раскладку при закрытии (кнопки и Esc идут через done)."""
+        self._save_widths()
+        super().done(result)
+
     def reject(self):
         if self.task:
             self._closing = True
             self.cancel()
         else:
+            self._save_widths()
             super().reject()
 
     def closeEvent(self, event):
@@ -972,6 +991,7 @@ class DocumentImportDialog(QDialog):
             event.ignore()
             self.reject()
         else:
+            self._save_widths()
             event.accept()
 
     def _reported_file_count(self):

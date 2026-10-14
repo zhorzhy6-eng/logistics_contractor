@@ -56,6 +56,7 @@ from ui.db_manager_dialog import DbManagerDialog
 from ui.settings_dialog import SettingsDialog
 from ui.navigation import SideNav
 from ui.qt_shutdown import cancel_running_tasks, wait_for_thread_pools
+from ui.widgets.table_helpers import save_all_column_widths
 
 logger = logging.getLogger(__name__)
 
@@ -1997,6 +1998,7 @@ class MainWindow(QMainWindow):
             return
 
         self._close_floating_cat()
+        self._save_all_column_widths()
         logger.info("Окно скрыто (закрытие крестиком данные не теряет)")
         event.ignore()
         self.hide()
@@ -2010,6 +2012,22 @@ class MainWindow(QMainWindow):
             agent_widget.close_floating()
         except Exception as e:  # noqa: BLE001 — кот не должен мешать закрытию
             logger.warning("Плавающий кот не закрыт: %s", e)
+
+    def _save_all_column_widths(self) -> None:
+        """
+        Записывает раскладку всех таблиц окна (часть D ночного прогона).
+
+        Своя автозапись у таблиц отложена на полсекунды: если оператор
+        растянул колонку и сразу закрыл программу, таймер не срабатывает, и
+        при следующем запуске ширина сбрасывалась. На закрытии окна
+        раскладка пишется явно — таблицы ищутся рекурсивно, обходить вкладки
+        не нужно.
+        """
+        try:
+            saved = save_all_column_widths(self)
+            logger.debug("Раскладка колонок окна сохранена: таблиц %s", saved)
+        except Exception as e:  # noqa: BLE001 — раскладка не важнее закрытия
+            logger.warning("Раскладка колонок не сохранена: %s", e)
 
     def force_close(self) -> None:
         """Закрывает окно по-настоящему: выход из приложения, не скрытие."""
@@ -2030,6 +2048,10 @@ class MainWindow(QMainWindow):
         # порядок «сначала кот, потом всё остальное» надёжнее — окно
         # верхнего уровня не должно пережить программу (баг #18).
         self._close_floating_cat()
+
+        # Раскладка колонок — на выходе, ДО закрытия окна: таблицы ещё живы,
+        # а отложенная автозапись может не успеть (часть D ночного прогона).
+        self._save_all_column_widths()
 
         wait_for_thread_pools(self)
 

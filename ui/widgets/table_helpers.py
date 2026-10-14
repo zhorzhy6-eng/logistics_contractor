@@ -42,7 +42,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from PyQt5.QtCore import QObject, QPoint, QSettings, QTimer, Qt
 from PyQt5.QtWidgets import (
-    QHeaderView, QMenu, QSizePolicy, QTableWidget, QTreeWidgetItem,
+    QHeaderView, QMenu, QSizePolicy, QTableWidget, QTreeWidget,
+    QTreeWidgetItem,
 )
 
 from ui.widgets.column_settings import (
@@ -606,6 +607,115 @@ def restore_column_widths(table: QTableWidget, storage_key: str) -> None:
         )
 
 
+def flush_widths_saver(table: Any) -> bool:
+    """
+    Немедленно записывает раскладку таблицы, если она ждёт записи.
+
+    Нужно окнам и диалогам на закрытии: таймер автозаписи отложен на
+    полсекунды, а оператор может закрыть окно сразу после того, как
+    растянул колонку — тогда правка потерялась бы.
+
+    :return: True, если раскладка была записана
+    """
+    saver = getattr(table, "_widths_saver", None)
+    if saver is None:
+        return False
+    try:
+        saver.flush()
+        return True
+    except RuntimeError:
+        # Таблица (или помощник) уже разрушена — записывать нечего.
+        return False
+
+
+def width_storage_key(table: Any) -> str:
+    """Ключ QSettings, под которым таблица хранит свои ширины (пусто — нет)."""
+    key = table.property(STORAGE_KEY_PROPERTY)
+    return str(key or "")
+
+
+def save_all_column_widths(root: Any) -> int:
+    """
+    Записывает раскладку ВСЕХ таблиц и деревьев под виджетом.
+
+    Вызывается на закрытии окна или диалога (часть D ночного прогона):
+    таймер автозаписи отложен, и без явного сохранения последняя правка
+    терялась. Таблицы ищутся рекурсивно (`findChildren`), поэтому
+    достаточно передать окно — вкладки обходить не нужно.
+
+    Таблицы без ключа хранилища пропускаются: сохранять их раскладку
+    некуда (и не нужно — она задана программно).
+
+    :return: сколько таблиц записано
+    """
+    if root is None:
+        return 0
+
+    saved = 0
+    for table in tables_of(root):
+        if not width_storage_key(table):
+            continue
+        flush_widths_saver(table)
+        try:
+            save_column_widths(table, width_storage_key(table))
+            saved += 1
+        except RuntimeError:
+            # Таблица разрушается вместе с окном — пропускаем.
+            continue
+    if saved:
+        logger.debug("Раскладка колонок сохранена: таблиц %s", saved)
+    return saved
+
+
+def restore_all_column_widths(root: Any) -> int:
+    """
+    Восстанавливает раскладку всех таблиц под виджетом.
+
+    Нужно там, где таблицы создаются до показа окна: часть окон типов
+    восстанавливает раскладку сама при настройке колонок, а если таблица
+    пересобирается позже (смена состава колонок, перезагрузка данных) —
+    ширины берутся из QSettings повторно.
+
+    :return: сколько таблиц восстановлено
+    """
+    if root is None:
+        return 0
+
+    restored = 0
+    for table in tables_of(root):
+        key = width_storage_key(table)
+        if not key:
+            continue
+        try:
+            restore_column_widths(table, key)
+            restored += 1
+        except RuntimeError:
+            continue
+    return restored
+
+
+def tables_of(root: Any) -> List[Any]:
+    """
+    Все таблицы и деревья под виджетом, включая сам виджет.
+
+    Порядок — как у Qt (`findChildren`): сначала внешние, потом вложенные.
+    Если у объекта нет `findChildren` (заглушка в тесте), возвращается он
+    сам, если похож на таблицу.
+    """
+    found: List[Any] = []
+    if isinstance(root, (QTableWidget, QTreeWidget)):
+        found.append(root)
+
+    finder = getattr(root, "findChildren", None)
+    if callable(finder):
+        try:
+            found.extend(finder(QTableWidget))
+            found.extend(finder(QTreeWidget))
+        except TypeError:  # pragma: no cover — защита от чужого объекта
+            pass
+    return found
+
+
 def column_index(table: QTableWidget, column: Union[int, str]) -> int:
     """
     Номер колонки по номеру или по заголовку.
@@ -733,11 +843,24 @@ class WidthsSaver(QObject):
     Родитель — сама таблица: объект живёт ровно столько же, отдельной
     ссылки на таблицу не держит (берёт её у Qt), поэтому цикла
     Python ↔ Qt здесь не возникает.
+
+    Два пути записи:
+
+      * по таймеру — оператор тянет границу, запись откладывается;
+      * при уничтожении таблицы (`destroyed`) — из КЭША ширин, снятого в
+        момент правки. Читать ширины у разрушаемой таблицы нельзя: сигнал
+        `destroyed` приходит, когда виджет уже разбирается, и `sectionSize`
+        возвращает нули. Поэтому ширины запоминаются в `sectionResized`
+        (там таблица жива), а на `destroyed` только пишутся в QSettings.
     """
 
     def __init__(self, table: QTableWidget, storage_key: str):
         super().__init__(table)
         self._storage_key = storage_key
+        #: Последние известные ширины: снимаются при каждой правке раскладки.
+        self._cached_widths: Optional[List[int]] = None
+        #: Раскладка уже записана при уничтожении таблицы.
+        self._flushed_on_destroy = False
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -745,16 +868,82 @@ class WidthsSaver(QObject):
         self._timer.timeout.connect(self.flush)
 
         table_header(table).sectionResized.connect(self.schedule)
+        # `destroyed` приходит, когда таблица (родитель) уже разрушается:
+        # ширины к этому моменту берутся из кэша.
+        table.destroyed.connect(self._on_destroyed)
+        self.remember_widths()
+
+    def remember_widths(self) -> None:
+        """
+        Запоминает текущие ширины колонок (таблица ещё жива).
+
+        Ошибка чтения (таблица разрушается) оставляет прежний кэш: пустой
+        список ширин записывать нельзя — он стёр бы сохранённую раскладку.
+        """
+        table = self.parent()
+        if not isinstance(table, QTableWidget):
+            return
+        try:
+            header = table_header(table)
+            widths = [int(header.sectionSize(column))
+                      for column in range(table.columnCount())]
+        except (RuntimeError, TypeError):
+            return
+        if widths:
+            self._cached_widths = widths
 
     def schedule(self, *_args: Any) -> None:
         """Откладывает запись: раскладку правят перетаскиванием."""
+        self.remember_widths()
         self._timer.start()
 
     def flush(self) -> None:
-        """Записывает текущие ширины колонок в QSettings."""
+        """
+        Записывает текущие ширины колонок в QSettings.
+
+        Если таблица уже разрушена (или её шапка недоступна), запись
+        молча пропускается: помощник живёт на выходе из программы, и
+        падать там нельзя.
+        """
         table = self.parent()
-        if isinstance(table, QTableWidget):
-            save_column_widths(table, self._storage_key)
+        if not isinstance(table, QTableWidget):
+            return
+        save_column_widths(table, self._storage_key)
+        self.remember_widths()
+
+    def _on_destroyed(self, *_args: Any) -> None:
+        """
+        Таблица уничтожается — записываем раскладку из кэша.
+
+        Таблица к этому моменту уже разбирается: `sectionSize` вернул бы
+        нули. Поэтому пишутся ширины, снятые при последней правке.
+        """
+        if self._flushed_on_destroy:
+            return
+        self._flushed_on_destroy = True
+        try:
+            self._timer.stop()
+        except RuntimeError:
+            pass
+
+        widths = self._cached_widths
+        if not widths or not self._storage_key:
+            return
+        try:
+            settings = _settings()
+            settings.setValue(self._storage_key, list(widths))
+            settings.sync()
+            logger.debug(
+                "Раскладка колонок сохранена при уничтожении таблицы: "
+                "ключ=%s, колонок=%s", self._storage_key, len(widths),
+            )
+        except Exception as e:  # noqa: BLE001 — выход не должен падать
+            logger.warning("Раскладка не записана при уничтожении: %s", e)
+
+    @property
+    def cached_widths(self) -> List[int]:
+        """Последние запомненные ширины (нужно тестам и диагностике)."""
+        return list(self._cached_widths or [])
 
 
 __all__ = [
@@ -777,6 +966,11 @@ __all__ = [
     "apply_cell_tooltip",
     "save_column_widths",
     "restore_column_widths",
+    "flush_widths_saver",
+    "save_all_column_widths",
+    "restore_all_column_widths",
+    "tables_of",
+    "width_storage_key",
     "column_index",
     "stored_widths",
     # Состав колонок (ШАГ FIX-6, часть B3)
