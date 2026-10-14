@@ -27,7 +27,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from core.agent.llm import SafeChat
 from core.agent.long_memory import (
-    extract, memory_block, recall, remember_facts,
+    extract, memory_block, recall, remember_facts, remember_search_result,
+    search_terms,
 )
 from core.agent.memory import DEFAULT_MAX_HISTORY, AgentMemory
 from core.agent.personas import DEFAULT_PERSONA
@@ -38,6 +39,27 @@ logger = logging.getLogger("core.agent.agent")
 
 #: Лимит шагов вызова инструментов на один запрос (задание, часть G.5).
 DEFAULT_MAX_TOOL_STEPS = 5
+
+#: Инструменты поиска и имя поля, в котором им передаётся запрос. Память
+#: работает именно с ними: учиться на «сколько договоров» нечему, а на
+#: «Заполни Ромашку» — есть чему.
+SEARCH_TOOLS: Dict[str, str] = {
+    "search_anything": "query",
+    "search_driver": "query",
+    "search_carrier": "query",
+    "search_customer": "query",
+    "search_vehicle": "query",
+    "search_contract": "query",
+    "search_company_dadata": "query",
+}
+
+#: Поисковые инструменты, которые умеют повторить запрос по другому слову
+#: (см. Agent._retry_search_with_memory). DaData сюда не входит: там ищут
+#: в ЕГРЮЛ, а память оператора — про его собственную базу.
+RETRYABLE_SEARCH_TOOLS = (
+    "search_anything", "search_driver", "search_carrier", "search_customer",
+    "search_vehicle", "search_contract",
+)
 
 
 @dataclass
@@ -52,6 +74,10 @@ class ToolCall:
     result: Optional[Dict[str, Any]] = None
     #: Оператор отказался выполнять действие.
     declined: bool = False
+    #: Слова оператора, которыми он назвал предмет поиска («Заполни
+    #: Ромашку» → «Ромашку»). Нужны памяти: она учится на том, что сказал
+    #: ЧЕЛОВЕК, а не на том, что модель передала в инструмент.
+    spoken: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -119,12 +145,30 @@ class Agent:
             релевантных записей памяти (задание, часть 5). Без запроса
             память в промпт не подкладывается — иначе в контекст попадут
             случайные факты.
+
+        Блок памяти МАСКИРУЕТСЯ перед отправкой (та же маска, что и у
+        сообщений: см. core/agent/llm.py::SafeChat). В памяти могут лежать
+        ФИО («Иванов» → «Иванов Иван Иванович»), а промпт уходит во
+        внешний сервис; без маски память стала бы обходным путём для ПДн.
         """
+        block = ""
+        if query:
+            try:
+                block = memory_block(recall(query))
+            except Exception as e:  # noqa: BLE001 — память не должна ронять ответ
+                logger.warning("Память недоступна: %s", e)
+                block = ""
+            if block and self.chat is not None:
+                try:
+                    block = self.chat.anonymize(block)
+                except Exception as e:  # noqa: BLE001 — маска не должна ронять
+                    logger.warning("Память: маскирование не удалось (%s)", e)
+                    block = ""
         return build_system_prompt(
             tools=self.registry.prompt_lines(),
             persona_key=self.persona_key,
             max_tool_steps=self.max_tool_steps,
-            memory=memory_block(recall(query)) if query else "",
+            memory=block,
         )
 
     def memory_facts(self, query: str) -> List[Dict[str, Any]]:
@@ -220,8 +264,13 @@ class Agent:
                 )
 
                 for raw_call in parsed:
-                    call = self._execute(raw_call)
+                    call = self._execute(raw_call, text)
                     calls.append(call)
+                    #: Память учится на поиске (часть 5, B.1–B.2): «что
+                    #: оператор сказал» → «что нашлось». Запись идёт ДО
+                    #: ответа модели, чтобы повторный запрос в этом же
+                    #: диалоге уже опирался на алиас.
+                    self._learn_from_search(call, text)
                     payload = json.dumps(
                         call.result if call.result is not None
                         else {"ok": False, "error": "не выполнено"},
@@ -272,15 +321,179 @@ class Agent:
             return []
 
     # ---------------------------------------------------------
+    # Память на поиске (задание, часть 5)
+    # ---------------------------------------------------------
+    def _learn_from_search(self, call: ToolCall, message: str) -> None:
+        """
+        Учит память на результате поиска: «Ромашку» → «ООО «Ромашка»».
+
+        Зачем. Оператор называет записи коротко («Ромашка», «Фасстранс»), а
+        в базе они лежат полным именем. Пока помощник этого не знает, он
+        каждый раз ищет заново и на неудаче отвечает «не нашёл» — ровно то,
+        что было (задание, часть 2, симптом).
+
+        Ключом алиаса берётся НАЗВАНИЕ, которое оператор произнёс в этом
+        сообщении, а не то, что ушло в инструмент: «Заполни Ромашку» →
+        ключ «Ромашку». Если название выделить не удалось, ключом становится
+        сам запрос инструмента (когда он отличается от служебной фразы).
+
+        :param message: сообщение оператора (нужно, когда модель позвала
+            поиск с пустым или чужим аргументом: слово оператора всё равно
+            известно).
+        """
+        if call.name not in SEARCH_TOOLS or call.declined:
+            return
+        result = call.result or {}
+        if not result.get("ok"):
+            return
+        data = result.get("data")
+        if not data:
+            return
+
+        argument = SEARCH_TOOLS[call.name]
+        asked = str(call.arguments.get(argument) or "").strip()
+        if not asked:
+            #: Модель могла не заполнить поле поиска. Искать всё равно есть
+            #: чем: инструмент вернул, по какому запросу нашёл («Ромашку»),
+            #: а если и этого нет — берём слово оператора.
+            asked = str(result.get("query") or "").strip()
+            if not asked and call.spoken:
+                asked = call.spoken[0]
+        if not asked:
+            return
+
+        term = self._spoken_name(call, asked)
+        if not term:
+            return
+        try:
+            record_id = remember_search_result(term, data, source="поиск")
+        except Exception as e:  # noqa: BLE001 — память не должна ронять ответ
+            logger.warning("Память: алиас не записан (%s)", e)
+            return
+        if record_id is not None:
+            logger.info("Память: алиас записан из поиска (id=%s)", record_id)
+
+    def _spoken_names(self, message: str) -> List[str]:
+        """
+        Названия, которые оператор произнёс сам: «Заполни Ромашку» →
+        «Ромашку». Из этого списка память берёт ключ алиаса.
+        """
+        from core.agent.words import search_terms
+
+        if not message:
+            return []
+        try:
+            return [word for word in search_terms(message) if len(word) >= 2]
+        except Exception as e:  # noqa: BLE001 — разбор не должен ломать вызов
+            logger.debug("Память: слова запроса не разобраны (%s)", e)
+            return []
+
+    def _spoken_name(self, call: ToolCall, asked: str) -> str:
+        """
+        Название, которое оператор произнёс сам (для ключа алиаса).
+
+        Сначала пробуются слова из СООБЩЕНИЯ — «Заполни Ромашку» даёт
+        «Ромашку». Если в сообщении названия нет (оператор сказал «заполни
+        его»), берётся запрос инструмента — но только если он не состоит из
+        служебных слов.
+        """
+        for candidate in call.spoken:
+            #: Слово-роль («перевозчика», «водителя») ключом быть не может:
+            #: «перевозчика → ООО «Ромашка»» — неверный алиас.
+            if candidate.casefold() != asked.casefold():
+                return candidate
+        return asked
+
+    def _retry_search_with_memory(self, call: ToolCall) -> None:
+        """
+        Повторяет неудачный поиск по памяти (часть 5, B.2).
+
+        Прямой запрос ничего не дал — значит, оператор назвал запись так,
+        как её нет в базе. Память подсказывает, чем ещё поискать («Ромашка»
+        → «ООО «Ромашка»»), и инструмент вызывается ещё раз. Результат
+        складывается в тот же ответ: модель видит и первую попытку, и
+        удачную, и отвечает по существу, а не «не нашёл».
+
+        Ищутся варианты и по словам ОПЕРАТОРА, и по тому, что ушло в
+        инструмент: модель могла передать фразу целиком, и тогда память
+        знает ответ только на имя из сообщения.
+
+        Ошибка повтора не портит исходный ответ: оператор всё равно должен
+        получить то, что уже нашлось.
+        """
+        if call.name not in RETRYABLE_SEARCH_TOOLS or call.declined:
+            return
+        result = call.result or {}
+        if not result.get("ok") or result.get("data"):
+            return
+
+        argument = SEARCH_TOOLS.get(call.name)
+        asked = str(call.arguments.get(argument) or "").strip()
+        if not argument or not asked:
+            #: Модель не заполнила поле поиска, но оператор название назвал:
+            #: терять его нельзя — ищем по слову оператора.
+            asked = call.spoken[0] if call.spoken else ""
+        if not argument or not asked:
+            return
+
+        seen: List[str] = []
+        for source in (call.spoken or []) + [asked]:
+            if source and source.casefold() not in [item.casefold()
+                                                    for item in seen]:
+                seen.append(source)
+        try:
+            alternatives: List[str] = []
+            for source in seen:
+                alternatives.extend(search_terms(source, limit=3))
+        except Exception as e:  # noqa: BLE001 — память не должна ронять поиск
+            logger.warning("Память: подсказки не прочитаны (%s)", e)
+            return
+
+        attempts: List[Dict[str, Any]] = []
+        tried: set = set()
+        for term in alternatives:
+            if term.casefold() == asked.casefold() or term.casefold() in tried:
+                continue
+            tried.add(term.casefold())
+            arguments = dict(call.arguments)
+            arguments[argument] = term
+            try:
+                again = self.registry.call(call.name, arguments)
+            except Exception as e:  # noqa: BLE001 — один вариант не должен ломать
+                logger.warning("Память: повторный поиск не удался (%s)", e)
+                continue
+            attempts.append({"query": term, "found": bool(again.get("data"))})
+            if again.get("data"):
+                result["data"] = again.get("data")
+                result["count"] = again.get("count", 0)
+                result["query"] = term
+                result["from_memory"] = True
+                result["memory_note"] = (
+                    f"прямой запрос «{asked}» ничего не дал; по памяти "
+                    f"найдено по «{term}»"
+                )
+                logger.info("Память: поиск повторён удачно (запросов=%s)",
+                            len(attempts))
+                return
+        if attempts:
+            result["memory_tried"] = attempts
+            logger.info("Память: повторный поиск без результата (вариантов=%s)",
+                        len(attempts))
+
+    # ---------------------------------------------------------
     # Выполнение инструмента
     # ---------------------------------------------------------
-    def _execute(self, raw_call: Dict[str, Any]) -> ToolCall:
+    def _execute(self, raw_call: Dict[str, Any],
+                 message: str = "") -> ToolCall:
         """
         Выполняет один вызов инструмента (с подтверждением, если нужно).
 
         Подтверждение — единственное место, где агент спрашивает оператора.
         Отказ оператора НЕ ошибка: модель получает ``ok: False`` с текстом
         «отменено оператором» и объясняет это в ответе.
+
+        :param message: сообщение оператора: из него берутся слова, которыми
+            он назвал предмет поиска (для памяти).
         """
         name = str(raw_call.get("name") or "")
         call = ToolCall(
@@ -288,6 +501,7 @@ class Agent:
             arguments=dict(raw_call.get("arguments") or {}),
             call_id=str(raw_call.get("id") or ""),
             tool=self.registry.get(name),
+            spoken=self._spoken_names(message),
         )
 
         if raw_call.get("error"):
@@ -322,6 +536,10 @@ class Agent:
 
         self.context.notify(f"Выполняю: {call.tool.summary or name}")
         call.result = self.registry.call(name, call.arguments)
+        #: Поиск ничего не нашёл — пробуем по памяти (часть 5, B.2):
+        #: оператор мог назвать запись сокращённо, а в базе она лежит
+        #: полным именем.
+        self._retry_search_with_memory(call)
         logger.info(
             "Агент: инструмент %s → %s",
             name, "ок" if call.result.get("ok") else call.result.get("error"),

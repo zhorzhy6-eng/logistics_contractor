@@ -276,6 +276,10 @@ def _remember(kind: str, key: str, value: str, source: str) -> Optional[int]:
     словом «пароль» не запоминается: память уходит в промпт, а промпт — во
     внешний сервис. Для оператора это выглядит как «помощник забыл», и
     причина пишется в лог.
+
+    Таблицы памяти готовятся здесь же (`ensure_tables`): писать в память
+    можно и на базе, где память ещё ни разу не использовалась — иначе
+    первый же алиас терялся бы молча (на чистой базе таблицы нет).
     """
     text = " ".join(str(value or "").split())
     found = look_sensitive(text) or look_sensitive(str(key or ""))
@@ -285,6 +289,10 @@ def _remember(kind: str, key: str, value: str, source: str) -> Optional[int]:
             found,
         )
         return None
+    try:
+        agent_memory.ensure_tables()
+    except Exception as e:  # noqa: BLE001 — без таблиц запись не удастся
+        logger.warning("Память: таблицы не подготовлены (%s)", e)
     return agent_memory.append(kind, key, text, source=source)
 
 
@@ -299,6 +307,21 @@ def look_sensitive(text: str) -> str:
         if pattern.search(body):
             return pattern.pattern
     return ""
+
+
+def looks_like_person(text: str) -> bool:
+    """
+    Похоже ли значение на ФИО человека.
+
+    Нужно отдельно от `look_sensitive`: ФИО не мешает записывать алиасы
+    организаций, но и хранить в памяти помощника ему нечего. Проверяются
+    две формы: полная («Иванов Иван Иванович») и с инициалами
+    («Иванов И. И.»).
+    """
+    body = " ".join(str(text or "").split())
+    if not body:
+        return False
+    return bool(_PERSON_NAME_RE.match(body) or _INITIALS_RE.match(body))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -440,6 +463,253 @@ def remember_facts(facts: Sequence[Dict[str, str]],
 
 
 # ─────────────────────────────────────────────────────────────
+# Обратный ход: от того, что сказал оператор, к тому, что нашлось
+# ─────────────────────────────────────────────────────────────
+
+#: Виды результатов поиска, из которых берётся «полное имя» находки.
+#: Порядок — от самого точного названия к самому общему.
+_NAME_FIELDS: Tuple[str, ...] = (
+    "name", "full_name", "short_name", "title", "brand_model",
+    "number", "route",
+)
+
+#: Значение-название короче этого не запоминается: «ООО» и «ИП» — не запись.
+MIN_ALIAS_VALUE = 3
+
+#: Ключ-алиас длиннее этого не запоминается: это уже фраза, а не название.
+MAX_ALIAS_KEY = 60
+
+#: ФИО: «Иванов Иван Иванович», «Иванов И.И.». В памяти помощника имя
+#: человека не нужно: алиасы — про НАЗВАНИЯ организаций, а ФИО водителей и
+#: директоров — персональные данные, и памяти среди них не место.
+_PERSON_NAME_RE = re.compile(
+    r"^[А-ЯЁ][а-яё-]{1,}\s+[А-ЯЁ][а-яё-]{1,}(?:\s+[А-ЯЁ][а-яё-]{1,})?$"
+)
+_INITIALS_RE = re.compile(r"^[А-ЯЁ][а-яё-]{1,}\s+[А-ЯЁ]\.\s?[А-ЯЁ]?\.?$")
+
+
+def _plain(value: Any) -> str:
+    """Значение строкой без лишних пробелов."""
+    return " ".join(str(value if value is not None else "").split())
+
+
+#: Слова организационно-правовой формы: «ООО», «ИП». Они не отличают одну
+#: запись от другой, поэтому в ключе их можно опустить.
+_LEGAL_FORMS = ("ооо", "оао", "зао", "пао", "ип", "тоо", "ao", "llc")
+
+
+def _organization_key(value: str) -> str:
+    """
+    Ключ сравнения названий: без «ООО», кавычек, регистра и «ё».
+
+    «ООО «Ромашка»» и «Ромашка» — одно и то же название ГЛАЗАМИ ОПЕРАТОРА:
+    именно так он его и называет. Нужно это для двух вещей: не записывать
+    алиас «Ромашка → Ромашка» и не считать разные написания одного имени
+    разными записями.
+    """
+    text = _plain(value).replace("ё", "е").replace("Ё", "Е").casefold()
+    for token in _LEGAL_FORMS:
+        text = re.sub(rf"(?:^|\s){token}(?=\s|$)", " ", text)
+    for char in ("«", "»", '"', "'", "`", ",", ".", ";", ":"):
+        text = text.replace(char, " ")
+    return " ".join(text.split())
+
+
+def _short_form(key: str, value: str) -> str:
+    """
+    Короткое написание значения — то, чем оператор называет запись.
+
+    «ООО «Ромашка-Плюс»» → «Ромашка»; «Королёв Королёв» → «Королёв».
+    По нему видно, что запись НЕ нужна: оператор назвал запись ровно так,
+    как её находит нечёткий поиск, и алиас ничего не добавляет — только
+    занимает место в промпте. А вот «Ромашку-Плюс» или «Фасстранс» в
+    качестве ключа записываются: это НЕ короткое имя значения, а другое
+    написание, которого в базе нет.
+    """
+    words = _organization_key(value).split()
+    wanted = _organization_key(key)
+    if not words or not wanted:
+        return ""
+    if len(words) < 2:
+        #: Название из одного слова («Ромашка», «ФассТранс»): короткого
+        #: имени у него нет (форма «ООО» в ключ сравнения уже не входит).
+        #: Совпало целиком — писать нечего; отличается — это другое
+        #: написание («Ромашку»), и его надо запомнить.
+        return wanted if wanted == words[0] else ""
+    #: Короткое имя — начало полного названия по СЛОВАМ и не последнее
+    #: слово: «ромашка» от «ромашка плюс» — короткое имя, а «плюс» — нет
+    #: (оператор так запись не называет, это уточнение, а не имя).
+    for length in range(1, len(words)):
+        candidate = " ".join(words[:length])
+        if candidate == wanted:
+            return candidate
+    return ""
+
+
+def _stem_key(value: str) -> str:
+    """Падежная основа фразы: «Ромашку» и «Ромашка» — один ключ."""
+    return " ".join(_stem(word) or word for word in _tokens(value))
+
+
+def result_title(result: Any) -> str:
+    """
+    Название найденной записи: берётся из ответа инструмента поиска.
+
+    Инструменты возвращают разные поля («name», «full_name», «number») и
+    разные формы: одну карточку, список карточек или разбор по видам
+    («search_anything» отдаёт ``{"carrier": [...], "driver": [...]}``).
+    Поэтому ответ разворачивается до первой карточки, а поля перебираются
+    по списку _NAME_FIELDS. Пусто — если названия найти не удалось.
+
+    ФИО человека (``full_name`` у водителя) НЕ возвращается: это
+    персональные данные, и в памяти помощника им не место — алиасы про
+    названия организаций (см. also looks_like_person).
+    """
+    record = _first_record(result, depth=0)
+    if not isinstance(record, dict):
+        return ""
+    for field in _NAME_FIELDS:
+        title = _plain(record.get(field))
+        if title and not looks_like_person(title):
+            return title
+    return ""
+
+
+def _first_record(result: Any, depth: int) -> Any:
+    """Первая карточка в ответе инструмента (списки и разбор по видам)."""
+    if depth > 3 or result is None:
+        return None
+    if isinstance(result, str):
+        return result
+    if isinstance(result, (list, tuple)):
+        return _first_record(result[0], depth + 1) if result else None
+    if isinstance(result, dict):
+        if any(field in result for field in _NAME_FIELDS):
+            return result
+        for value in result.values():
+            found = _first_record(value, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def find_alias(term: str) -> str:
+    """
+    Что оператор называет этим словом (по памяти помощника).
+
+    Нужно, когда поиск по базе ничего не нашёл: «Ромашка» могла быть
+    записана раньше как «ООО «Ромашка»», и повторный запрос ищется уже по
+    полному названию.
+
+    :return: значение алиаса (пусто — не помним такого)
+    """
+    wanted = str(term or "").strip()
+    if not wanted:
+        return ""
+    wanted_forms = {_organization_key(wanted), _stem_key(wanted)}
+    wanted_forms.discard("")
+
+    try:
+        records = agent_memory.load(kind="alias", limit=LIST_LIMIT)
+    except Exception as e:  # noqa: BLE001 — память не должна ломать поиск
+        logger.debug("Память: алиасы не прочитаны (%s)", e)
+        return ""
+
+    #: Свежие записи первыми: load() уже отсортирован по updated_at.
+    for record in records:
+        key = _plain(record.get("key"))
+        if not key:
+            continue
+        forms = {_organization_key(key), _stem_key(key)}
+        forms.discard("")
+        if wanted_forms & forms:
+            return _plain(record.get("value"))
+    return ""
+
+
+def search_terms(term: str, limit: int = 3) -> List[str]:
+    """
+    Чем ещё стоит поискать, если прямой запрос ничего не дал.
+
+    Возвращаются: (1) полное название из алиаса — «Ромашка» → «ООО
+    «Ромашка»»; (2) названия из записей памяти, в которых встречается это
+    слово. Пусто — если память ничего про это не знает.
+
+    :param limit: сколько вариантов вернуть (первый — самый вероятный)
+    """
+    wanted = str(term or "").strip()
+    if not wanted:
+        return []
+
+    found: List[str] = []
+    alias = find_alias(wanted)
+    if alias:
+        found.append(alias)
+
+    wanted_forms = {_organization_key(wanted), _stem_key(wanted)}
+    wanted_forms.discard("")
+    try:
+        records = agent_memory.load(limit=LIST_LIMIT)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Память: записи не прочитаны (%s)", e)
+        return found[:limit]
+
+    for record in records:
+        value = _plain(record.get("value"))
+        if not value or value in found:
+            continue
+        key = _plain(record.get("key"))
+        forms = {_organization_key(key), _stem_key(key),
+                 _organization_key(value)}
+        forms.discard("")
+        if wanted_forms & forms:
+            found.append(value)
+        if len(found) >= limit:
+            break
+    return found[:limit]
+
+
+def remember_search_result(term: str, found: Any,
+                           source: str = "поиск") -> Optional[int]:
+    """
+    Запоминает, как оператор называет найденную запись (часть 5, B.1).
+
+    Вызывается ПОСЛЕ успешного поиска: что оператор сказал («Ромашку»,
+    «Фасстранс») → что нашлось («ООО «Ромашка»»). В следующий раз поиск
+    идёт сразу по полному названию, и помощник не переспрашивает.
+
+    Записывается только осмысленная пара: ключ не длиннее MAX_ALIAS_KEY,
+    значение не короче MIN_ALIAS_VALUE, и ключ НЕ является коротким именем
+    значения («Ромашка → ООО «Ромашка»» ничего не добавляет: нечёткий
+    поиск находит такую запись и без памяти). ФИО человека и значения с
+    паспортом, телефоном и ИНН не записываются: память уходит в промпт, а
+    промпт — во внешний сервис.
+
+    :return: ID записи (None — запоминать нечего)
+    """
+    key = clean_key(_plain(term))
+    #: Значение берётся из ответа инструмента. Если ответ — готовая строка
+    #: (тесты и внешние вызовы), она и есть название; если карточка, а
+    #: названия в ней нет (например, только ФИО человека) — запоминать
+    #: нечего: превращать карточку в текст нельзя, в память попали бы
+    #: чужие поля целиком.
+    if isinstance(found, str):
+        value = _plain(found)
+    else:
+        value = _plain(result_title(found))
+    if not key or not value:
+        return None
+    if len(key) > MAX_ALIAS_KEY or len(value) < MIN_ALIAS_VALUE:
+        return None
+    if looks_like_person(value) or looks_like_person(key):
+        logger.info("Память: в находке ФИО человека — алиас не записываю")
+        return None
+    if _short_form(key, value):
+        return None
+    return _remember("alias", key, value, source)
+
+
+# ─────────────────────────────────────────────────────────────
 # Оценки и настройки
 # ─────────────────────────────────────────────────────────────
 
@@ -496,17 +766,21 @@ __all__ = [
     "KIND_TITLES",
     "LEADING_CUES",
     "LIST_LIMIT",
+    "MAX_ALIAS_KEY",
+    "MIN_ALIAS_VALUE",
     "REMEMBER_CUES",
     "TOP_RELEVANT",
     "clean_key",
     "extract",
     "feedback",
+    "find_alias",
     "forget",
     "forget_all",
     "kind_hint",
     "kind_title",
     "list_records",
     "look_sensitive",
+    "looks_like_person",
     "memory_block",
     "rank",
     "recall",
@@ -515,5 +789,8 @@ __all__ = [
     "remember_correction",
     "remember_facts",
     "remember_habit",
+    "remember_search_result",
+    "result_title",
+    "search_terms",
     "stats",
 ]

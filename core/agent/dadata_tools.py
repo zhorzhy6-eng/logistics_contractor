@@ -396,23 +396,56 @@ def _resolve_entity_id(query: str, is_carrier: bool) -> Tuple[int, str]:
     Ромашку», а запись ищет программа. Возвращается ещё и название — чтобы
     модель в ответе называла запись, а не номер.
 
+    Запрос берётся в трёх видах, от точного к вольному:
+    (1) как сказал оператор; (2) без слов-команд («сверь Ромашку» →
+    «Ромашку»); (3) по памяти — если помощник уже знает, что «Ромашка» это
+    ООО «Ромашка» (core/agent/long_memory.py). Без третьего шага сверка
+    ломалась на коротких названиях, которых в базе нет в таком виде.
+
     :return: (ID записи, название); ID = 0, если не нашлось или нашлось
         несколько разных записей (тогда сверять нечего — нужен выбор).
     """
     from db.crud.organizations import search_organizations
 
-    term = _short(query, 200)
-    if not term:
+    from core.agent.long_memory import search_terms
+    from core.agent.words import search_terms as words_search_terms
+
+    wanted = _short(query, 200)
+    if not wanted:
         return 0, ""
 
-    rows = search_organizations(term, is_carrier=is_carrier, limit=2)
-    if len(rows) != 1:
-        return 0, ""
-    title = _short(rows[0].get("full_name") or rows[0].get("short_name"))
-    try:
-        return int(rows[0].get("id") or 0), title
-    except (TypeError, ValueError):
-        return 0, ""
+    candidates: List[str] = []
+    for term in [wanted] + words_search_terms(wanted):
+        if term and term.casefold() not in [item.casefold()
+                                            for item in candidates]:
+            candidates.append(term)
+    #: По памяти ищем по КАЖДОМУ варианту: алиас мог быть записан как на
+    #: фразу целиком, так и на одно название из неё.
+    for term in list(candidates):
+        for alternative in search_terms(term, limit=2):
+            if alternative and alternative.casefold() not in [
+                item.casefold() for item in candidates
+            ]:
+                candidates.append(alternative)
+
+    for position, term in enumerate(candidates):
+        try:
+            rows = search_organizations(term, is_carrier=is_carrier, limit=2)
+        except Exception as e:  # noqa: BLE001 — поиск не должен ронять сверку
+            logger.warning("Сверка: поиск организации не удался (%s)", e)
+            continue
+        if len(rows) != 1:
+            continue
+        title = _short(rows[0].get("full_name") or rows[0].get("short_name"))
+        try:
+            record_id = int(rows[0].get("id") or 0)
+        except (TypeError, ValueError):
+            record_id = 0
+        if record_id:
+            if position:
+                logger.info("Сверка: запись найдена по варианту запроса")
+            return record_id, title
+    return 0, ""
 
 
 def compare_with_dadata(entity_type: str = "carrier", entity_id: int = 0,

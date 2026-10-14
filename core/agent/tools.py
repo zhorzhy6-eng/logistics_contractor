@@ -465,8 +465,16 @@ def _search_driver(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dic
     часто зовёт поиск с пустой строкой на «сколько водителей в базе».
     Поэтому в ответе есть количество записей, а не только текст ошибки.
     """
-    term = str(query or "").strip()
+    term = _clean_term(query).strip()
     if not term:
+        return _empty_term_error(
+            query,
+            "пустой запрос: укажите ФИО, телефон или паспорт водителя",
+        )
+    if not str(query or "").strip():
+        #: Пустая строка — не ошибка ввода, а вопрос «сколько их всего»:
+        #: модель часто зовёт поиск с пустой строкой на «сколько водителей
+        #: в базе». Поэтому в ответе есть количество записей.
         return _error(
             "пустой запрос: укажите ФИО, телефон или паспорт водителя",
             total=_count_drivers(),
@@ -511,9 +519,11 @@ def _count_drivers() -> int:
 
 def _search_carrier(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dict[str, Any]:
     """Ищет перевозчиков по названию, ИНН или ОГРН."""
-    term = str(query or "").strip()
+    term = _clean_term(query)
     if not term:
-        return _error("пустой запрос: укажите название, ИНН или ОГРН перевозчика")
+        return _empty_term_error(
+            query, f"пустой запрос: укажите название, ИНН или ОГРН перевозчика"
+        )
 
     noise = looks_like_command_or_noise(term)
     if noise:
@@ -553,9 +563,12 @@ def _customer_rows(term: str, limit: int) -> List[Dict[str, Any]]:
 
 def _search_customer(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Dict[str, Any]:
     """Ищет заказчиков по названию, ИНН или ФИО руководителя."""
-    term = str(query or "").strip()
+    term = _clean_term(query)
     if not term:
-        return _error("пустой запрос: укажите название, ИНН или руководителя заказчика")
+        return _empty_term_error(
+            query, "пустой запрос: укажите название, ИНН или руководителя "
+                   "заказчика"
+        )
 
     noise = looks_like_command_or_noise(term)
     if noise:
@@ -591,6 +604,36 @@ def _query_words(term: str) -> List[str]:
     """Слова запроса без пунктуации, в нижнем регистре."""
     words = [word.strip(".,!?;:()\"'«»—-").casefold() for word in str(term or "").split()]
     return [word for word in words if word]
+
+
+def _clean_term(term: str) -> str:
+    """
+    Убирает из запроса слова-команды: «Заполни Ромашку» → «Ромашка».
+
+    Модель часто передаёт в поиск фразу оператора целиком, и поиск ищет
+    подстроку «заполни ромашку» — не находит ничего. Разбор фразы живёт в
+    core/agent/words.py::search_terms (там же правило «что считать
+    названием»), здесь только выбор первого варианта. Пустая строка — если
+    от запроса остались одни служебные слова: тогда искать нечего.
+    """
+    from core.agent.words import search_terms
+
+    variants = search_terms(term)
+    return variants[0] if variants else ""
+
+
+def _empty_term_error(term: str, message: str) -> Dict[str, Any]:
+    """
+    Ошибка «искать нечего»: различает пустой запрос и одни служебные слова.
+
+    Различие важно для модели: на пустой запрос она должна спросить, кого
+    искать, а на «Отмени» — понять, что это команда, а не имя, и НЕ искать
+    служебное слово в базе (проблема #12: модель искала «Заполни»).
+    """
+    noise = looks_like_command_or_noise(term)
+    if noise:
+        return _error(noise, looks_like_command=True)
+    return _error(message)
 
 
 def looks_like_command_or_noise(term: str) -> str:
@@ -649,9 +692,11 @@ def _search_anything(query: str = "", limit: int = ALL_SEARCH_PER_KIND, **_) -> 
     Модели остаётся выбрать запись из готового списка — это она делает
     хорошо. Поэтому «найди X» без уточнений нужно начинать отсюда.
     """
-    term = str(query or "").strip()
+    term = _clean_term(query)
     if not term:
-        return _error("пустой запрос: укажите что искать (название, ФИО, номер)")
+        return _empty_term_error(
+            query, "пустой запрос: укажите что искать (название, ФИО, номер)"
+        )
 
     # Служебное слово вместо названия (команда, вопрос, ругательство) —
     # это не поиск, а ошибка вызова. Возврат понятного текста учит модель
@@ -709,9 +754,11 @@ def _search_vehicle(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Di
 
     from db.connection import get_connection
 
-    term = str(query or "").strip()
+    term = _clean_term(query)
     if not term:
-        return _error("пустой запрос: укажите VIN, госномер или марку ТС")
+        return _empty_term_error(
+            query, "пустой запрос: укажите VIN, госномер или марку ТС"
+        )
 
     noise = looks_like_command_or_noise(term)
     if noise:
@@ -775,7 +822,15 @@ def _search_contract(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> D
     """Ищет договоры по номеру, дате, маршруту и сторонам."""
     from db import agent_queries
 
-    term = str(query or "").strip()
+    term = _clean_term(query)
+
+    # Служебное слово вместо названия (команда, вопрос, ругательство):
+    # «Отмени» — это не «найти договор», а команда. Проверка идёт ДО
+    # «пустого запроса»: иначе модель получила бы подсказку про номер
+    # договора и искала служебное слово (проблема #12).
+    noise = looks_like_command_or_noise(query)
+    if noise:
+        return _error(noise, looks_like_command=True)
 
     # Пустой запрос больше НЕ отдаёт «последние договоры» (проблема #15).
     # Десять случайных строк на непонятный запрос выглядят как выдумка:
@@ -787,10 +842,6 @@ def _search_contract(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> D
             hint="например: «договор 23092026-74» или "
                  "«договоры с Ромашкой»",
         )
-
-    noise = looks_like_command_or_noise(term)
-    if noise:
-        return _error(noise, looks_like_command=True)
 
     rows = agent_queries.search_contracts(term, limit=max(1, int(limit)))
     found = [{
@@ -2025,8 +2076,11 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     registry.register(Tool(
         name="get_current_window",
         description=(
-            "Какое окно открыто: тип договора и активная вкладка. Самый "
-            "дешёвый способ понять, о какой форме спрашивает оператор."
+            "Какое окно открыто: тип договора, активная вкладка и ЗНАЧЕНИЕ "
+            "ключевого поля этой вкладки (current_subject) — название "
+            "перевозчика, ФИО водителя и так далее. На вопрос «какой "
+            "перевозчик открыт» отвечай значением current_subject, а не "
+            "названием вкладки; пусто — значит поле не заполнено."
         ),
         parameters=_json_schema({}),
         function=get_current_window,
@@ -2037,6 +2091,9 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         description=(
             "Состояние полей открытой формы: значения И пустые поля. "
             "Отличие от get_current_form — видно, чего НЕ заполнено. "
+            "only_empty = true возвращает ТОЛЬКО пустые поля с их числом: "
+            "это и есть ответ на «заполни 10 полей» — посчитай пустые и "
+            "предложи конкретные, а не спрашивай «какие поля?». "
             "Раздел: перевозчик, водитель, заказчик, договор, машины."
         ),
         parameters=_json_schema({
@@ -2165,6 +2222,8 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
             "ЕГРЮЛ: какие поля расходятся и что там на самом деле. "
             "Запись указывается ЛИБО entity_id (номер из результата поиска), "
             "ЛИБО query (название) — второе удобнее, когда ID неизвестен. "
+            "ID у оператора НЕ спрашивай: «сверь Ромашку с ЕГРЮЛ» — это "
+            "вызов с query='Ромашка', запись инструмент найдёт сам. "
             "Только чтение — ничего не исправляет."
         ),
         parameters=_json_schema({

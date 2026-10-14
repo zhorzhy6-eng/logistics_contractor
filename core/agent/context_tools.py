@@ -175,6 +175,49 @@ def _current_tab(window: Any) -> Tuple[str, str]:
     return pairs[index]
 
 
+#: Ключевое поле каждого раздела — то, чем раздел называется В ФОРМЕ.
+#: Нужно для вопросов «какой перевозчик открыт»: оператор ждёт название
+#: («ООО «Ромашка»»), а не имя вкладки (задание, часть 5).
+#:
+#: Имена полей сверены с живой формой (`collect_form_data` на настоящем
+#: MainWindow): у перевозчика название лежит в ``full_name``, у договора
+#: номер — в ``number``, маршрут — в ``route`` (вложенный блок поднят
+#: наверх как ``route.route``).
+PRIMARY_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "carrier_tab": ("full_name", "short_name", "inn"),
+    "customer_tab": ("full_name", "short_name", "inn"),
+    "lessor_tab": ("full_name", "short_name", "inn"),
+    "lessee_tab": ("full_name", "short_name", "inn"),
+    "driver_tab": ("full_name", "phone"),
+    "vehicles_tab": ("brand_model", "plate_number", "vin"),
+    "vehicle_tab": ("brand_model", "plate_number", "vin"),
+    "tractor": ("brand_model", "plate_number", "vin"),
+    "trailer": ("brand_model", "plate_number", "vin"),
+    "contract_tab": ("number", "route.route", "date"),
+    "cargo_tab": ("cargo_name", "name"),
+    "route_tab": ("route", "loading_address", "unloading_address_1"),
+    "price_tab": ("price_with_vat", "price_without_vat", "price_input"),
+}
+
+
+def primary_field_value(section_key: str, fields: Any) -> str:
+    """
+    Значение ключевого поля раздела: «чем этот раздел сейчас является».
+
+    Пусто — если раздел пуст или поля раздела не подходят под список.
+    """
+    if not isinstance(fields, dict):
+        return ""
+    for field in PRIMARY_FIELDS.get(str(section_key or ""), ()):
+        value = fields.get(field)
+        if isinstance(value, (list, tuple, dict)):
+            continue
+        text = _short(value)
+        if text:
+            return text
+    return ""
+
+
 # ─────────────────────────────────────────────────────────────
 # 1. get_open_tabs — что открыто
 # ─────────────────────────────────────────────────────────────
@@ -229,6 +272,11 @@ def get_current_window(context: Any, **_) -> Dict[str, Any]:
 
     Самый дешёвый вызов: модель зовёт его, чтобы понять, о какой форме
     спрашивает оператор, прежде чем читать поля.
+
+    Кроме имени вкладки отдаётся ``current_subject`` — ЗНАЧЕНИЕ ключевого
+    поля открытого раздела («ООО «Ромашка»» для перевозчика). На вопрос
+    «какой перевозчик открыт» правильный ответ — это название, а не слово
+    «Перевозчик» (задание, часть 5: раньше модель отвечала именем вкладки).
     """
     window = context.current_window() if context is not None else None
     if window is None:
@@ -239,6 +287,19 @@ def get_current_window(context: Any, **_) -> Dict[str, Any]:
     contract_type = _window_type(window)
     key, title = _current_tab(window)
     pairs = _tab_pairs(window)
+
+    #: Значение ключевого поля открытого раздела — читается тем же
+    #: способом, что и в get_form_state, чтобы ответы не расходились.
+    subject = ""
+    try:
+        from core.agent.tools import collect_form_data
+
+        sections = collect_form_data(window)
+        if key in sections:
+            subject = primary_field_value(key, sections[key])
+    except Exception as e:  # noqa: BLE001 — подпись не должна ронять ответ
+        logger.debug("Ключевое поле раздела не прочитано: %s", e)
+
     return _ok(
         {
             "window": _window_title(window),
@@ -246,6 +307,8 @@ def get_current_window(context: Any, **_) -> Dict[str, Any]:
             "type_title": TYPE_TITLES.get(contract_type, ""),
             "current_tab": title,
             "current_tab_key": key,
+            "current_subject": subject,
+            "current_subject_title": SECTION_TITLES.get(key, key),
             "tabs": [item[1] for item in pairs],
         },
         is_visible=_window_visible(window),
@@ -276,6 +339,12 @@ def get_form_state(context: Any, section: str = "", only_empty: bool = False,
 
     :param section: раздел формы (перевозчик, водитель, …); пусто — все;
     :param only_empty: True — вернуть только незаполненные поля.
+
+    В ответе, кроме полей, идут ``current_tab`` (какая вкладка открыта) и
+    ``current_subject`` — значение ключевого поля этой вкладки. По нему
+    модель отвечает на «какой перевозчик открыт?» названием, а не словом
+    «Перевозчик». Пустая строка в ``current_subject`` — поле не заполнено,
+    и так и надо сказать оператору.
     """
     from core.agent.tools import collect_form_data
 
@@ -327,11 +396,18 @@ def get_form_state(context: Any, section: str = "", only_empty: bool = False,
         result[name] = item
 
     current_key, current_title = _current_tab(window)
+    #: Ключевое поле открытого раздела — «какой перевозчик открыт».
+    subject_section = current_key if current_key in sections else ""
+    if not subject_section and len(sections) == 1:
+        subject_section = next(iter(sections))
     return _ok(
         result,
         section_titles={name: SECTION_TITLES.get(name, name) for name in result},
         current_tab=current_title,
         current_tab_key=current_key,
+        current_subject=primary_field_value(subject_section,
+                                            sections.get(subject_section)),
+        current_subject_title=SECTION_TITLES.get(subject_section, ""),
     )
 
 
