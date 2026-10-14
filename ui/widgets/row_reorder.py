@@ -34,6 +34,30 @@
     на одну. Тот же закон применяется к хранилищу строк вкладки — одной
     функцией `moved_row_index` (таблица и данные не разъезжаются).
 
+    Уменьшать `target` на единицу при переносе ВНИЗ (`source < target`) НЕ
+    НУЖНО, и это не упущение: `removeRow(source)` + `insertRow(target)`
+    вставляет строку в список, из которого источник УЖЕ удалён, поэтому
+    сдвиг учитывается сам. Строки `[0, 1, 2, 3]`, перенос `0 → 2`: после
+    удаления `[1, 2, 3]`, вставка на место 2 даёт `[1, 2, 0, 3]` — то, что
+    видит оператор. `target - 1` дал бы `[1, 0, 2, 3]`, то есть сломало бы
+    перенос (тест `test_move_down_target_is_not_shifted_by_hand`).
+
+ПОЧЕМУ ПОСЛЕ ПЕРЕНОСА СНИМАЕТСЯ ВЫДЕЛЕНИЕ (главная ловушка)
+    `QAbstractItemView::startDrag` после системного перетаскивания смотрит
+    на его итог: если перетаскивание кончилось переносом (`Qt.MoveAction`),
+    Qt зовёт `clearOrRemove()` — и удаляет ВЫДЕЛЕННЫЕ строки. Так Qt доводит
+    до конца СВОЙ перенос: встроенный `dropEvent` вставляет данные на новое
+    место, а исходные строки удаляются уже здесь. Наш `dropEvent` переставляет
+    строку сам, поэтому то же удаление попадает по только что переехавшей
+    машине: строка просто ИСЧЕЗАЕТ (проверено вживую — 5 машин → 4, без
+    единой ошибки в логе; `tests/_tmp/_row_reorder_live/`).
+
+    Поэтому `move_row` СНИМАЕТ выделение и текущую ячейку
+    (`selectionModel().clear()` — снимает и то и другое): к моменту возврата
+    из `startDrag` удалять Qt нечего. Выделение возвращается сразу после —
+    в `startDrag`, когда цикл перетаскивания уже закрыт (`_moved_row`).
+    `clearSelection()` для этого мало: она оставляет текущую ячейку.
+
 ЧТО ПОЛУЧАЕТ ТАБЛИЦА
     * выделение строк целиком (SelectRows + SingleSelection);
     * перетаскивание только СТРОК: шапка и колонки не двигаются (C.6);
@@ -148,6 +172,9 @@ class ReorderableTable(QTableWidget):
         self._reorder_enabled = True
         self._drag_source_row: Optional[int] = None
         self._drop_gap: Optional[int] = None
+        #: Куда переехала строка: выделение ставится уже ПОСЛЕ перетаскивания
+        #: (см. `_restore_selection` — Qt удаляет выделенные строки).
+        self._moved_row: Optional[int] = None
 
         # Выделяется строка целиком: тащат строку, а не ячейку.
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -221,6 +248,12 @@ class ReorderableTable(QTableWidget):
         Возвращает True, если строки переставились. Ячейки, виджеты,
         хранилище строк и нумерация едут вместе со строкой: см. шапку
         модуля о том, почему перенос делается своим кодом.
+
+        Выделение НЕ ставится: строка запоминается в `_moved_row`, а
+        выделяет её `startDrag` — уже после того, как Qt закончит своё
+        перетаскивание. Иначе Qt удалила бы выделенную (только что
+        переехавшую) строку: см. шапку модуля, «Почему после переноса
+        снимается выделение».
         """
         if not self.can_move_row(source, target):
             return False
@@ -239,6 +272,9 @@ class ReorderableTable(QTableWidget):
         ]
 
         # 3. Строка на новое место. Виджеты соседних строк Qt переносит сам.
+        #    `insertRow(target)` вставляет строку в список, из которого
+        #    источник уже удалён, поэтому сдвиг цели учитывается сам:
+        #    уменьшать `target` при переносе вниз не нужно.
         self.removeRow(source)
         self.insertRow(target)
 
@@ -250,10 +286,12 @@ class ReorderableTable(QTableWidget):
             if widget is not None:
                 self.setCellWidget(target, column, widget)
 
-        # Строка остаётся выделенной на новом месте: оператор видит, куда
-        # она встала, и может сразу продолжить работу с ней.
-        if self.columnCount():
-            self.setCurrentCell(target, 0)
+        # 5. Выделение снимается ЦЕЛИКОМ — и строки, и текущая ячейка:
+        #    Qt после перетаскивания удаляет выделенные строки, а выделена
+        #    была бы как раз переехавшая машина. `clearSelection()` для
+        #    этого мало — она оставляет текущую ячейку.
+        self._moved_row = target
+        self.selectionModel().clear()
 
         logger.debug("Строка %s перенесена на место %s", source + 1, target + 1)
         self.rows_moved.emit(source, target)
@@ -317,6 +355,9 @@ class ReorderableTable(QTableWidget):
         `super().startDrag` показывает перетаскивание и возвращается только
         тогда, когда оператор отпустил мышь, поэтому состояние снимается в
         `finally` — даже если перетаскивание прервано клавишей Esc.
+
+        Там же возвращается выделение: пока перенос идёт, выделения нет
+        (иначе Qt удалила бы выделенную строку — см. шапку модуля).
         """
         source = self.currentRow()
         if (not self._reorder_enabled or source < 0
@@ -324,6 +365,8 @@ class ReorderableTable(QTableWidget):
             return
 
         self._drag_source_row = source
+        # Прошлый перенос к этому перетаскиванию не относится.
+        self._moved_row = None
         self.viewport().setCursor(Qt.ClosedHandCursor)
         self.viewport().update()
         try:
@@ -331,6 +374,7 @@ class ReorderableTable(QTableWidget):
         finally:
             self._drag_source_row = None
             self._drop_gap = None
+            self._restore_selection()
             self._update_cursor()
             self.viewport().update()
 
@@ -366,6 +410,10 @@ class ReorderableTable(QTableWidget):
 
         Своё место, промах мимо строк и пустая таблица — событие не
         принимается, в таблице ничего не меняется.
+
+        Перенос идёт под `try`: исключение здесь оставило бы таблицу
+        наполовину переставленной, а оператор — без объяснения. Ошибка
+        уходит в лог, строка остаётся на месте.
         """
         self._drop_gap = None
         self.viewport().update()
@@ -379,11 +427,38 @@ class ReorderableTable(QTableWidget):
             source = self.currentRow()
         target = self.drop_row(event.pos(), source)
 
-        if self.move_row(source, target):
+        try:
+            moved = self.move_row(source, target)
+        except Exception:  # noqa: BLE001 — падать в обработчике перетаскивания нельзя
+            logger.exception(
+                "Строка %s не перенесена на место %s: перенос отменён",
+                source + 1, target + 1,
+            )
+            # Выделение всё равно снимается: иначе Qt удалит выделенную
+            # строку уже после возврата из перетаскивания.
+            self._moved_row = None
+            self.selectionModel().clear()
+            moved = False
+
+        if moved:
             event.setDropAction(Qt.MoveAction)
             event.accept()
         else:
             event.ignore()
+
+    def _restore_selection(self) -> None:
+        """
+        Ставит выделение на строку, которая только что переехала.
+
+        Вызывается из `startDrag` ПОСЛЕ возврата из цикла перетаскивания:
+        раньше выделять нельзя — Qt удаляет выделенные строки (шапка модуля).
+        """
+        row = self._moved_row
+        self._moved_row = None
+
+        if row is None or not 0 <= row < self.rowCount():
+            return
+        self.setCurrentCell(row, 0)
 
     def mouseMoveEvent(self, event: Any) -> None:
         """Курсор-«рука» над строками (C.1); обычный — вне строк и при запрете."""
