@@ -13,6 +13,14 @@
 Сессия = один запуск программы (``session_id``). Новая сессия — новая
 история; чистка старых сессий — отдельная операция (кнопка в настройках).
 
+ОДИН РАЗГОВОР НА ВСЮ ПРОГРАММУ. Максимилиан живёт в каждом окне (пять
+окон типов + Экспедиторство), и у каждого свой ``AgentWidget`` со своей
+``AgentMemory``. Если бы каждая память жила сама по себе, разговор
+обрывался бы при переключении окна: оператор спросил в Экспедиторстве,
+перешёл в Аренду — и там пустая панель, будто помощник всё забыл. Поэтому
+история — ОДНА на сессию, и перед каждым запросом память сверяется с базой
+(``sync()``): если в другом окне добавились сообщения, они подтягиваются.
+
 Важное про персональные данные: в истории хранятся НАСТОЯЩИЕ значения —
 это данные оператора в его собственной локальной базе, и без них панель
 не смогла бы показать диалог после перезапуска. Наружу (в GigaChat) уходит
@@ -125,6 +133,9 @@ class AgentMemory:
         self.max_history = max(1, int(max_history))
         self._repository = repository
         self._messages: List[Message] = []
+        #: Сколько записей сессии было в базе на момент последней сверки.
+        #: По нему видно, что в ДРУГОМ окне прошёл разговор (см. sync).
+        self._synced_count = 0
 
         if autoload:
             self.load()
@@ -165,7 +176,48 @@ class AgentMemory:
         # такой истории не примет (см. wire_messages).
         self._messages = restored[-self.max_history:]
         self._messages = self._complete_tail(self._messages)
+        self._remember_synced()
         return list(self._messages)
+
+    def _remember_synced(self) -> None:
+        """
+        Запоминает, сколько записей сессии сейчас в базе.
+
+        Считается ДО обрезки по лимиту: сравнение идёт с базой, а не с
+        памятью окна. Ошибка счётчика не важна — сверка просто повторится.
+        """
+        try:
+            self._synced_count = int(self.repository.count(self.session_id))
+        except Exception as e:  # noqa: BLE001 — счётчик не должен ронять диалог
+            logger.debug("История агента: счётчик не прочитан (%s)", e)
+            self._synced_count = len(self._messages)
+
+    def sync(self) -> List[Message]:
+        """
+        Подтягивает сообщения, добавленные в ДРУГИХ окнах программы.
+
+        Максимилиан установлен в каждое окно, и у каждого своя память, но
+        разговор — один (см. описание модуля). Перед запросом память
+        сверяется с базой: если записей в сессии стало больше, значит в
+        другом окне уже спрашивали, и продолжать надо с той же историей.
+
+        :return: история после сверки (пусто — если меняться нечему)
+        """
+        try:
+            current = int(self.repository.count(self.session_id))
+        except Exception as e:  # noqa: BLE001 — сверка не должна ронять запрос
+            logger.debug("История агента: сверка не удалась (%s)", e)
+            return []
+        if current <= self._synced_count:
+            return []
+
+        loaded = self.load()
+        if loaded:
+            logger.info(
+                "История Максимилиана продолжена из другого окна "
+                "(сообщений в сессии: %s)", current
+            )
+        return loaded
 
     def _complete_tail(self, messages: List[Message]) -> List[Message]:
         """
@@ -302,6 +354,9 @@ class AgentMemory:
 
         if persist:
             self._persist(message)
+            #: Сообщение записали сами — счётчик сверки растёт вместе с базой,
+            #: иначе следующий sync() принял бы свою же запись за чужую.
+            self._synced_count += 1
         return message
 
     def _persist(self, message: Message) -> None:
@@ -334,7 +389,9 @@ class AgentMemory:
         """
         self._messages = []
         try:
-            return int(self.repository.clear_session(self.session_id))
+            removed = int(self.repository.clear_session(self.session_id))
+            self._synced_count = 0
+            return removed
         except Exception as e:  # noqa: BLE001
             logger.warning("История агента не очищена: %s", e)
             return -1

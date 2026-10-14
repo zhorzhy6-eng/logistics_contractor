@@ -923,6 +923,36 @@ class AgentWidget(QObject):
         self.apply_settings()
 
     # ---------------------------------------------------------
+    # Один разговор на всю программу (задание, часть 7)
+    # ---------------------------------------------------------
+    def sync_history(self) -> bool:
+        """
+        Подтягивает разговор, продолженный в ДРУГОМ окне программы.
+
+        Максимилиан стоит в каждом окне, но разговор один: оператор
+        спрашивает в Экспедиторстве, переключается в Аренду — и панель там
+        должна показать ту же беседу, а не пустую (иначе выглядит так,
+        будто помощник работает только в одном окне).
+
+        Сверка идёт с базой (`AgentMemory.sync`) и только когда в другом
+        окне действительно что-то добавилось; панель обновляется, если
+        история изменилась.
+
+        :return: True, если история подтянулась
+        """
+        if self._agent is None or self.panel is None:
+            return False
+        try:
+            loaded = self._agent.memory.sync()
+        except Exception as e:  # noqa: BLE001 — сверка не должна мешать работе
+            logger.warning("История Максимилиана не синхронизирована: %s", e)
+            return False
+        if not loaded:
+            return False
+        self.panel.set_history(loaded)
+        return True
+
+    # ---------------------------------------------------------
     # Агент
     # ---------------------------------------------------------
     def _make_agent(self, max_history: int, max_tool_steps: int) -> Agent:
@@ -1120,6 +1150,10 @@ class AgentWidget(QObject):
         if self._agent is None:
             values = self.agent_settings()
             self._load_history(int(values["max_history"]), int(values["max_tool_steps"]))
+        else:
+            #: Продолжение разговора из другого окна (часть 7): без сверки
+            #: агент отвечал бы, не видя предыдущих вопросов оператора.
+            self.sync_history()
 
         self.panel.append_message(message, "user")
         try:
@@ -1210,6 +1244,10 @@ class AgentWidget(QObject):
         if host is None:
             logger.warning("Панель Максимилиана: не найдено место в окне")
             return
+
+        #: Разговор один на программу: перед показом панели подтягиваем то,
+        #: что успели спросить в другом окне (задание, часть 7).
+        self.sync_history()
 
         if self.panel.parentWidget() is not host:
             if self._host is not None:
