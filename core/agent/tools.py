@@ -64,6 +64,11 @@ class Tool:
     #: Имена аргументов, которые НЕ попадают в диалог подтверждения
     #: (значения полей бывают большими — в диалоге достаточно имени поля).
     hide_value_args: Tuple[str, ...] = field(default_factory=tuple)
+    #: Правка аргументов оператором ПОСЛЕ подтверждения (задание, часть 1,
+    #: пункт B.2). Диалог превью даёт оператору исправить значения прямо в
+    #: таблице, и исправленное должно дойти до инструмента: обратный вызов
+    #: получает словарь аргументов и меняет его на месте. None — правок нет.
+    on_edit: Optional[Callable[[Dict[str, Any]], None]] = None
 
     def schema(self) -> Dict[str, Any]:
         """Описание инструмента в формате GigaChat (OpenAI-совместимый)."""
@@ -1412,6 +1417,255 @@ def _fill_entity_fields(context: AgentContext, fields: Any = None,
 
 
 # ─────────────────────────────────────────────────────────────
+# B.3-плюс. Разбор текста оператора и автозаполнение (задание, часть 1)
+# ─────────────────────────────────────────────────────────────
+
+#: Ключи машин, которые таблица ТС принимает в fill_data.
+_VEHICLE_KEYS = ("vin", "brand_model", "plate_number", "year", "color",
+                 "vehicle_type")
+
+#: Поля организаций, которые переносятся в форму (те же, что у
+#: fill_from_entity: инструменты раскладывают один и тот же набор).
+_ORGANIZATION_FORM_FIELDS = (
+    "full_name", "short_name", "inn", "kpp", "ogrn", "legal_address",
+    "actual_address", "bank_account", "bik", "correspondent_account",
+    "bank_name", "director_name", "director_position", "phone", "email",
+    "entity_type", "basis",
+)
+
+
+def _entity_form_fields(record: Dict[str, Any]
+                        ) -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]:
+    """
+    Запись базы → поля формы (и блоки тягача/полуприцепа для водителя).
+
+    Те же правила, что у ``_fill_from_entity``: у водителя тягач и
+    полуприцеп — отдельные блоки, и имена колонок базы (``tractor_plate``)
+    отличаются от имён полей формы (``plate_number``).
+    """
+    fields = {
+        key: record.get(key)
+        for key in _ORGANIZATION_FORM_FIELDS
+        if str(record.get(key) if record.get(key) is not None else "").strip()
+    }
+    blocks: Dict[str, Dict[str, Any]] = {}
+    for block, columns in _DRIVER_VEHICLE_COLUMNS.items():
+        values = {
+            name: record.get(column)
+            for name, column in columns.items()
+            if str(record.get(column) if record.get(column) is not None else "").strip()
+        }
+        if values:
+            blocks[block] = values
+    return fields, blocks
+
+
+def _parsed_items(arguments: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Правки оператора из диалога превью (пусто — правок не было)."""
+    raw = arguments.get("items")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _parsed_vehicles(arguments: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """Машины из правок превью (None — правок нет, берём разбор текста)."""
+    raw = arguments.get("vehicles")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(raw, list):
+        return None
+    return [dict(row) for row in raw if isinstance(row, dict)]
+
+
+def _fill_parsed(context: AgentContext, text: str = "",
+                 items: Any = None, vehicles: Any = None,
+                 use_dadata: bool = True, **_) -> Dict[str, Any]:
+    """
+    Автозаполнение формы из текста оператора (задание, часть 1, A.5).
+
+    Разбор делает ``core/agent/fill_parser.py`` (ядро без Qt и базы), здесь —
+    раскладка по существующим механизмам формы:
+
+      * поля договора, перевозчика, заказчика, водителя и машины —
+        ``fill_fields`` (он же используют fill_field / fill_entity_fields);
+      * точки маршрута — таблицы погрузок и выгрузок вкладки «Договор»:
+        это СПИСКИ, а не поля, и заполняются одним вызовом fill_data;
+      * строки таблицы ТС — ``vehicles_tab.fill_data`` списком;
+      * запись из справочника (её нашёл разбор) — ``fill_from_entity``,
+        чтобы не дублировать правила «какие поля берём из записи».
+
+    Функция НЕ спрашивает подтверждения: его получает агент ДО вызова
+    (``requires_confirmation=True`` у инструмента), а оператор видит и
+    правит значения в диалоге превью.
+
+    :param items: правки оператора (``[{section, field, value}, …]``);
+    :param vehicles: правки по машинам (``[{vin, brand_model}, …]``);
+    :param use_dadata: спрашивать ли DaData про адреса.
+    """
+    from core.agent.fill_parser import parse_text
+
+    if not str(text or "").strip():
+        return _error("не передан текст с данными")
+
+    window, error = _current_window_or_error(context)
+    if error:
+        return error
+
+    parsed = parse_text(text, use_dadata=bool(use_dadata))
+    edits = _parsed_items({"items": items}) if items is not None else []
+    if edits or vehicles is not None:
+        # Правки превью: значения подменяются, стороны и адреса ищутся заново.
+        parsed.apply_overrides(edits, vehicles=vehicles)
+
+    if parsed.is_empty:
+        return _error(
+            "в тексте не нашлось данных для формы",
+            unparsed=parsed.unresolved,
+        )
+
+    filled: Dict[str, Any] = {}
+    failed: Dict[str, str] = {}
+    details: List[str] = []
+
+    # ── 1. Поля договора ──
+    contract = dict(parsed.contract_fields())
+    if contract:
+        report = fill_fields(window, {name: value
+                                      for name, value in contract.items()})
+        filled.update(report["filled"])
+        failed.update(report["failed"])
+
+    # ── 2. Точки маршрута: это списки строк, а не поля ──
+    contract_tab = _tab_for_key(window, "contract_tab")
+    for section, title in (("loading", "погрузка"), ("unloading", "выгрузка")):
+        rows = parsed.point_rows(section)
+        if not rows:
+            continue
+        if contract_tab is None:
+            failed[title] = "вкладка «Договор» не открыта"
+            continue
+        key = "loadings" if section == "loading" else "unloadings"
+        result = _call(contract_tab, "fill_data", {key: rows})
+        if result is _MISSING:
+            failed[title] = "форма не приняла точки маршрута"
+            continue
+        filled[f"contract.{key}"] = len(rows)
+        details.append(f"{title}: {len(rows)}")
+
+    # ── 3. Машины: строки таблицы ТС ──
+    if parsed.vehicles:
+        vehicle_tab = _tab_for_key(window, "vehicles_tab")
+        rows = [{key: value for key, value in vehicle.items()
+                 if key in _VEHICLE_KEYS and str(value or "").strip()}
+                for vehicle in parsed.vehicles]
+        rows = [row for row in rows if row.get("vin")]
+        if vehicle_tab is None:
+            failed["машины"] = "таблица «Перевозимые ТС» не открыта"
+        elif not rows:
+            failed["машины"] = "в разборе нет ни одного VIN"
+        else:
+            result = _call(vehicle_tab, "fill_data", rows)
+            if result is _MISSING:
+                failed["машины"] = "таблица ТС не приняла данные"
+            else:
+                filled["vehicles_tab.vehicles"] = len(rows)
+                details.append(f"машины: {len(rows)}")
+
+    # ── 4. Стороны: запись из базы (её нашёл разбор) ──
+    for section, entity_type in (("carrier", "carrier"),
+                                 ("customer", "customer")):
+        record = parsed.entities.get(section) or {}
+        record_id = record.get("id")
+        if not record_id:
+            continue
+        result = _fill_from_entity(context, entity_type=entity_type,
+                                   entity_id=int(record_id))
+        if not result.get("ok"):
+            failed[section] = result.get("error", "запись не подтянулась")
+            continue
+        data = result.get("data") or {}
+        fields, blocks = _entity_form_fields(data.get("fields") or {})
+        #: Раздел указывается ЯВНО (`carrier_tab.full_name`). Без раздела
+        #: fill_fields ищет поле по порядку вкладок, а `full_name` есть и у
+        #: водителя, и у перевозчика — имя перевозчика уезжало в водителя.
+        tab_key = _resolve_section(section, _window_tab_keys(window)) \
+            or f"{section}_tab"
+        prepared: Dict[str, Any] = {f"{tab_key}.{key}": value
+                                    for key, value in fields.items()}
+        for block, values in blocks.items():
+            prepared.update({f"{block}.{key}": value
+                             for key, value in values.items()})
+        report = fill_fields(window, prepared)
+        filled.update(report["filled"])
+        failed.update(report["failed"])
+        details.append(f"{section}: {len(report['filled'])}")
+
+    total = len(filled)
+    logger.info(
+        "Разбор текста: заполнено полей %s, не удалось %s",
+        total, len(failed),
+    )
+    if not total:
+        return _error(
+            "ни одно поле заполнить не удалось",
+            details=failed,
+            unparsed=parsed.unresolved,
+        )
+
+    counts = parsed.counts()
+    return _ok(
+        {
+            "filled": filled,
+            "failed": failed,
+            "unparsed": parsed.unresolved,
+            "warnings": parsed.warnings,
+            "counts": counts,
+            "tabs": parsed.tabs_of(),
+        },
+        message=(
+            f"заполнено полей: {total}"
+            + (f" (машин: {counts['vehicles']})" if counts["vehicles"] else "")
+        ),
+    )
+
+
+def _parse_and_fill(context: AgentContext, text: str = "",
+                    items: Any = None, vehicles: Any = None,
+                    use_dadata: bool = True, **_) -> Dict[str, Any]:
+    """
+    Разбор текста с данными и заполнение формы (опасное действие, часть 1).
+
+    Оператор пишет текст («Вины: … Загрузка: … Сумма: …»), Максимилиан
+    разбирает его и заполняет форму. Показывает превью диалог подтверждения
+    (``ui/agent_fill_preview.py``) — оператор видит «поле → значение → куда»
+    и может поправить значения прямо в таблице.
+
+    Отдельный инструмент-разбор (без записи в форму) не нужен: превью
+    строит сам диалог по аргументу ``text``, а разбор — чистая функция
+    ``core/agent/fill_parser.py::parse_text``.
+
+    :param items: правки оператора из превью (``[{section, field, value}]``).
+        Добавляются диалогом к аргументам вызова, модель их не заполняет.
+    :param vehicles: правки по машинам из превью (``[{vin, brand_model}]``).
+    """
+    return _fill_parsed(context, text=text, items=items, vehicles=vehicles,
+                        use_dadata=use_dadata)
+
+
+# ─────────────────────────────────────────────────────────────
 # B.4. Документы
 # ─────────────────────────────────────────────────────────────
 
@@ -1885,6 +2139,11 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         return _fill_entity_fields(ctx, fields=fields, tractor=tractor,
                                    trailer=trailer)
 
+    def parse_and_fill(text: str = "", use_dadata: bool = True,
+                       items: Any = None, vehicles: Any = None):
+        return _parse_and_fill(ctx, text=text, items=items, vehicles=vehicles,
+                               use_dadata=use_dadata)
+
     registry.register(Tool(
         name="fill_field",
         description=(
@@ -1949,6 +2208,35 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         requires_confirmation=True,
         summary="Заполнить поля формы данными из базы",
         hide_value_args=("fields", "tractor", "trailer"),
+    ))
+    registry.register(Tool(
+        name="parse_and_fill",
+        description=(
+            "Разобрать ТЕКСТ оператора с данными рейса и заполнить форму. "
+            "Это ГЛАВНЫЙ инструмент, когда оператор присылает данные "
+            "списком: вины, адреса погрузки и выгрузки, перевозчик, "
+            "заказчик, сумма, НДС, дата, номер, маршрут, срок оплаты. "
+            "Понимает и текст с подписями («Вины:», «Загрузка:», «Сумма:»), "
+            "и текст без них (VIN, адреса, даты и суммы узнаются по виду), "
+            "и вставку из Excel. Перевозчика и заказчика ищет в базе сам. "
+            "Перед записью оператор видит превью «поле → значение → куда» и "
+            "может поправить значения. НЕ спрашивай, что делать с текстом: "
+            "разбери и покажи превью."
+        ),
+        parameters=_json_schema({
+            "text": {
+                "type": "string",
+                "description": "текст оператора целиком, как он его прислал",
+            },
+            "use_dadata": {
+                "type": "boolean",
+                "description": "приводить адреса к стандартному виду (DaData)",
+            },
+        }, required=["text"]),
+        function=parse_and_fill,
+        requires_confirmation=True,
+        summary="Разобрать текст и заполнить форму",
+        hide_value_args=("text",),
     ))
 
     # ── B.4. Документы ──

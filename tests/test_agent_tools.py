@@ -178,7 +178,10 @@ def test_only_fill_tools_require_confirmation(registry):
         if registry.get(name).requires_confirmation
     }
     assert dangerous == {
-        "fill_field", "fill_entity_fields", "apply_recognized_fields"
+        "fill_field", "fill_entity_fields", "apply_recognized_fields",
+        #: Разбор текста оператора тоже пишет в форму — и подтверждается
+        #: диалогом превью (задание, часть 1: «Заполнить? [Да] [Нет]»).
+        "parse_and_fill",
     }
     # Чтение и поиск подтверждения не требуют: они ничего не меняют.
     for name in ("search_driver", "get_current_form", "validate_current_form",

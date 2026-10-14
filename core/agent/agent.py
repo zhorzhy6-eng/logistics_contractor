@@ -533,6 +533,10 @@ class Agent:
                 }
                 logger.info("Агент: оператор отменил %s", name)
                 return call
+            #: Оператор мог ПОПРАВИТЬ значения в диалоге (превью разбора
+            #: текста, задание часть 1, пункт B.2): правки вносятся в
+            #: аргументы до вызова инструмента, а не после.
+            self._apply_edits(call.tool, call.arguments)
 
         self.context.notify(f"Выполняю: {call.tool.summary or name}")
         call.result = self.registry.call(name, call.arguments)
@@ -586,6 +590,23 @@ class Agent:
         except Exception:  # noqa: BLE001 — диалог не должен ронять агента
             logger.exception("Диалог подтверждения упал — действие отменено")
             return False
+
+    def _apply_edits(self, tool: Tool, arguments: Dict[str, Any]) -> None:
+        """
+        Вносит правки оператора из диалога подтверждения (часть 1, B.2).
+
+        Диалог превью разбора текста даёт исправить значения прямо в
+        таблице: он складывает их в свои аргументы, а здесь они переносятся
+        в вызов. Ошибка правки не должна отменять уже подтверждённое
+        действие — в этом случае в форму уйдут исходные значения.
+        """
+        if tool.on_edit is None:
+            return
+        try:
+            tool.on_edit(arguments)
+        except Exception as e:  # noqa: BLE001 — правка не должна ронять агента
+            logger.warning("Правки оператора не применены (%s): %s",
+                           tool.name, type(e).__name__)
 
     # ---------------------------------------------------------
     # Маскирование

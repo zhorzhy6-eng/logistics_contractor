@@ -68,6 +68,11 @@ SUGGESTION_CHECK_MS = 5000
 #: заполняет поля подряд, и подсказка посреди ввода только мешала бы.
 SUGGESTION_IDLE_MS = 2000
 
+#: Инструмент, для которого подтверждение показывается ОСОБЫМ диалогом —
+#: таблицей «поле → значение → куда» с правкой значений (задание, часть 1).
+#: Для остальных опасных действий остаётся обычный вопрос «Да / Нет».
+FILL_PREVIEW_TOOL = "parse_and_fill"
+
 
 # ─────────────────────────────────────────────────────────────
 # Рабочий поток: запрос к агенту
@@ -1008,10 +1013,78 @@ class AgentWidget(QObject):
         )
 
     def _confirm(self, tool: Tool, arguments: Dict[str, Any]) -> bool:
-        """Подтверждение опасного действия (задание, часть D.5)."""
+        """
+        Подтверждение опасного действия (задание, часть D.5).
+
+        Для разбора текста (``parse_and_fill``) показывается диалог ПРЕВЬЮ:
+        таблица «поле → значение → куда» с возможностью поправить значение
+        (задание, часть 1, пункты B.1–B.3). Правки складываются в
+        ``on_edit`` инструмента и попадают в аргументы вызова до заполнения.
+        Остальные опасные действия спрашивают как прежде — «Да / Нет».
+        """
         parent = self.panel if self.panel is not None else self.window
+
+        if tool.name == FILL_PREVIEW_TOOL:
+            return self._confirm_with_preview(tool, arguments, parent)
+
         return ask_confirmation(tool, arguments, parent,
                                 auto_answer=self.auto_confirm)
+
+    def _confirm_with_preview(self, tool: Tool, arguments: Dict[str, Any],
+                              parent: Any) -> bool:
+        """
+        Диалог превью разбора текста.
+
+        Разбор считается ДО диалога и передаётся инструменту тем же текстом:
+        диалог показывает результат ``parse_text``, а инструмент разбирает
+        текст ещё раз у себя. Второй разбор нужен потому, что оператор мог
+        поправить значения — правки уходят отдельным аргументом (``items``),
+        и инструмент накладывает их на свежий разбор.
+        """
+        from ui.agent_fill_preview import preview_confirmation
+
+        text = str(arguments.get("text") or "")
+        if not text.strip():
+            QMessageBox.information(
+                parent, "Максимилиан",
+                "В запросе нет текста с данными — заполнять нечего.",
+            )
+            return False
+
+        use_dadata = bool(arguments.get("use_dadata", True))
+        try:
+            decision = preview_confirmation(
+                text, parent, auto_answer=self.auto_confirm,
+                use_dadata=use_dadata,
+            )
+        except Exception:  # noqa: BLE001 — диалог не должен ронять агента
+            logger.exception(
+                "Превью разбора не показалось — действие отменено"
+            )
+            return False
+
+        if not decision.get("confirmed"):
+            return False
+
+        overrides = decision.get("overrides") or {}
+        if overrides:
+            #: Правки должны попасть в аргументы вызова ДО заполнения.
+            #: Если инструмент объявил свой канал правок (``on_edit``) — идём
+            #: через него; иначе кладём правки прямо в аргументы (``items`` и
+            #: ``vehicles`` — ровно те имена, которые читает инструмент).
+            if tool.on_edit is not None:
+                try:
+                    tool.on_edit(arguments)
+                except Exception:  # noqa: BLE001 — правка не отменяет действие
+                    logger.exception("Правки превью не применены")
+            else:
+                arguments.update(overrides)
+            logger.info(
+                "Превью разбора: правок оператора %s",
+                len(overrides.get("items") or [])
+                + len(overrides.get("vehicles") or []),
+            )
+        return True
 
     def _on_activity(self, message: str) -> None:
         """Показывает шаг агента в панели (вызывает рабочий поток)."""
