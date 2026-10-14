@@ -1666,7 +1666,11 @@ _QUERY_PROPERTY = {
 
 def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     """
-    Собирает реестр инструментов версии 1 (задание, часть B — 15 штук).
+    Собирает реестр инструментов Максимилиана.
+
+    Состав: 16 инструментов версии 1 (задание, часть B), 5 инструментов
+    контекста (часть 1), 4 инструмента DaData (часть 2) и 5 инструментов
+    аналитики (часть 3) — всего 30.
 
     :param context: AgentContext с окном, типом договора и диалогом
         подтверждения. Без него доступны поиск, справка и распознавание
@@ -2182,6 +2186,75 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         function=compare_with_dadata,
         summary="Сверка записи базы с ЕГРЮЛ",
     ))
+
+    # ── 3. Аналитика: сводки, сравнения, топы, качество данных (Часть 3) ──
+    # Пять инструментов этой части считают ЧИСЛА, а не ищут записи: SQL
+    # живёт в db/crud/analytics.py (правило проекта), разбор русских
+    # названий полей и операций — в core/agent/analytics_tools.py.
+    # Описания инструментов берутся из analytics_tools.tool_specs(): один
+    # источник и для реестра, и для тестов.
+    from core.agent import analytics_tools  # локальный импорт: без цикла модулей
+
+    def aggregate_contracts(counterparty: str = "", period: str = "",
+                            field: str = "amount", operation: str = "sum",
+                            entity_type: str = "contracts", **_):
+        """Сводка по числу: сумма, среднее, максимум, минимум, количество."""
+        return analytics_tools.aggregate_contracts(
+            counterparty=counterparty, period=period, field=field,
+            operation=operation, entity_type=entity_type,
+        )
+
+    def compare_periods(period1: str = "", period2: str = "",
+                        group_by: str = "", field: str = "amount",
+                        operation: str = "sum", counterparty: str = "",
+                        entity_type: str = "contracts", **_):
+        """Сравнение двух периодов между собой."""
+        return analytics_tools.compare_periods(
+            period1, period2, group_by=group_by, entity_type=entity_type,
+            field=field, operation=operation, counterparty=counterparty,
+        )
+
+    def top_contractors(period: str = "", field: str = "amount",
+                        operation: str = "sum", limit: int = 5,
+                        group_by: str = "", entity_type: str = "contracts",
+                        counterparty: str = "", **_):
+        """Топ-N по сумме (по умолчанию — перевозчики за период)."""
+        return analytics_tools.top_contractors(
+            period, field=field, operation=operation, limit=limit,
+            group_by=group_by, entity_type=entity_type,
+            counterparty=counterparty,
+        )
+
+    def count_records(entity_type: str = "drivers", filters: Any = None,
+                      period: str = "", counterparty: str = "", **_):
+        """Сколько записей подходит под условия."""
+        return analytics_tools.count_records(
+            entity_type, filters, period=period, counterparty=counterparty,
+        )
+
+    def check_data_quality(entity_type: str = "drivers",
+                           required_fields: Any = None, **_):
+        """Что не заполнено и где дубликаты."""
+        return analytics_tools.check_data_quality(
+            entity_type, required_fields=required_fields,
+        )
+
+    _ANALYTICS_FUNCTIONS = {
+        "aggregate_contracts": aggregate_contracts,
+        "compare_periods": compare_periods,
+        "top_contractors": top_contractors,
+        "count_records": count_records,
+        "check_data_quality": check_data_quality,
+    }
+
+    for spec in analytics_tools.tool_specs():
+        registry.register(Tool(
+            name=spec["name"],
+            description=spec["description"],
+            parameters=spec["parameters"],
+            function=_ANALYTICS_FUNCTIONS[spec["name"]],
+            summary=spec["summary"],
+        ))
 
     return registry
 
