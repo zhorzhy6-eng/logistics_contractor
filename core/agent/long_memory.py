@@ -324,6 +324,30 @@ def looks_like_person(text: str) -> bool:
     return bool(_PERSON_NAME_RE.match(body) or _INITIALS_RE.match(body))
 
 
+def _meaningful_key(key: str) -> bool:
+    """
+    Годится ли ключ в алиас: это название, а не служебное слово.
+
+    Правило то же, что у поиска (core/agent/words.py): в ключе должно
+    остаться хоть одно слово, не являющееся командой, вопросом или
+    частицей. «посчитай → ООО «Ромашка»» — не алиас: по слову «посчитай»
+    запись не ищут.
+    """
+    try:
+        from core.agent.words import NON_NAME_WORDS, search_terms
+    except Exception:  # noqa: BLE001 — без списка слов проверка пропускается
+        return True
+
+    words = [word.casefold() for word in str(key or "").split()]
+    if not words:
+        return False
+    if all(word in NON_NAME_WORDS for word in words):
+        return False
+    #: Слова-команды убираются тем же разбором, что и в поиске: если после
+    #: него не осталось ничего, ключ — одна команда.
+    return bool(search_terms(key)) or len(words) > 1
+
+
 # ─────────────────────────────────────────────────────────────
 # Разбор фразы оператора
 # ─────────────────────────────────────────────────────────────
@@ -698,6 +722,12 @@ def remember_search_result(term: str, found: Any,
     else:
         value = _plain(result_title(found))
     if not key or not value:
+        return None
+    #: Слово-команда ключом быть не может: живой прогон записал алиас
+    #: «посчитай → ООО «Ромашка»» из сложного запроса. Искать по такой
+    #: записи всё равно нельзя, а в промпте она только мешает.
+    if look_sensitive(key) or not _meaningful_key(key):
+        logger.info("Память: ключ «%s» — не название, алиас не записываю", key)
         return None
     if len(key) > MAX_ALIAS_KEY or len(value) < MIN_ALIAS_VALUE:
         return None

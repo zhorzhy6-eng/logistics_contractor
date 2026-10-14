@@ -45,6 +45,7 @@ from core.agent.tools import (  # noqa: E402
     build_registry,
     looks_like_command_or_noise,
 )
+from core.agent.words import COMMAND_WORDS, QUESTION_WORDS  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────
@@ -227,6 +228,39 @@ def test_empty_query_is_rejected_too():
 
     assert result["ok"] is False
     assert "пустой запрос" in result["error"] or "не указано" in result["error"]
+
+
+@pytest.mark.parametrize("query", sorted(
+    set(COMMAND_WORDS) | set(QUESTION_WORDS)
+))
+def test_every_service_word_is_refused_by_every_search_tool(query):
+    """
+    КАЖДОЕ служебное слово отклоняется КАЖДЫМ поисковым инструментом.
+
+    Список служебных слов растёт (живой прогон добавил «посчитай»: оно
+    попало в память ключом алиаса «посчитай → ООО «Ромашка»»), и проверка
+    «по списку» ловит такое сразу, а не после следующего диалога.
+    """
+    from core.agent.tools import _search_anything
+
+    tools = (_search_driver, _search_carrier, _search_customer,
+             _search_vehicle, _search_contract, _search_anything)
+    for function in tools:
+        result = function(query=query)
+        assert result["ok"] is False, f"{function.__name__} искал «{query}»"
+        assert result.get("looks_like_command") is True, (
+            f"{function.__name__} на «{query}» ответил {result}"
+        )
+
+
+@pytest.mark.parametrize("query", sorted(
+    set(COMMAND_WORDS) | set(QUESTION_WORDS)
+))
+def test_service_word_never_becomes_alias_key(query):
+    """Служебное слово не становится ключом алиаса в памяти (часть 2)."""
+    from core.agent.long_memory import _meaningful_key
+
+    assert _meaningful_key(query) is False, f"«{query}» — не название"
 
 
 # ─────────────────────────────────────────────────────────────
