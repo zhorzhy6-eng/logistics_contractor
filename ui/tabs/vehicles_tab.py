@@ -30,6 +30,18 @@
 Списки точек маршрута в колонках «Погрузка» / «Выгрузка» строятся из данных
 вкладки «Условия договора»: если у точки есть наименование салона
 (ШАГ FIX-2.5), оно показывается перед адресом.
+
+ШАГ «Перетаскивание строк ТС»:
+  * строки таблицы переносятся МЫШЬЮ: оператор тащит строку за любое место
+    и меняет порядок машин. Порядок строк — это порядок ТС в договоре, а он
+    связан с порядком городов выгрузки, поэтому менять его нужно без
+    перепечатывания строк;
+  * переносится строка ЦЕЛИКОМ — VIN, марка, тип ТС, погрузка, выгрузка,
+    год, цвет: виджеты ячеек (QComboBox, QSpinBox) не теряются и значения
+    не сбрасываются (см. `ui/widgets/row_reorder.py`);
+  * хранилище строк (`_store`) переставляется тем же законом, что и строки,
+    поэтому значения скрытых колонок остаются у своей машины;
+  * пока идёт распознавание, строки тащить нельзя (`set_reorder_enabled`).
 """
 
 import logging
@@ -51,6 +63,7 @@ from ui.widgets.columns import (
     FIELD_UNLOADING, FIELD_VIN, FIELD_YEAR,
     VEHICLE_COLUMNS,
 )
+from ui.widgets.row_reorder import ReorderableTable, moved_row_index
 from ui.widgets.table_helpers import (
     MODE_FIXED, has_warning_tooltip, install_column_settings_menu,
     install_tooltip_on_table, set_warning_tooltip, setup_keyed_table,
@@ -205,13 +218,19 @@ class VehiclesTab(TabMixin, QWidget):
         layout.addLayout(button_layout)
 
         # ── Таблица ТС ──
-        self.table = QTableWidget(0, len(self.COLUMNS))
+        # `ReorderableTable` — та же таблица плюс перенос строк мышью:
+        # строку тащат за любое место, вместе с ней едут её виджеты.
+        self.table = ReorderableTable(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
 
         header = self.table.horizontalHeader()
 
-        # ── Колонки можно двигать за заголовки ──
-        header.setSectionsMovable(True)
+        # ── Колонки за заголовки НЕ двигаются (C.6) ──
+        # Шапка остаётся на месте: мышь в этой таблице тащит СТРОКИ.
+        # Раньше колонку можно было подвинуть за заголовок — вместе с
+        # переносом строк в одной шапке оказалось бы два перетаскивания,
+        # а порядок колонок между запусками всё равно не сохранялся.
+        header.setSectionsMovable(False)
 
         # ── Значения скрытых колонок живут здесь, а не только в ячейках ──
         # Ключ — строка таблицы; значение — словарь полей машины.
@@ -222,6 +241,9 @@ class VehiclesTab(TabMixin, QWidget):
         self.table.setEditTriggers(
             QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed
         )
+
+        # Строка переехала — хранилище строк и подсветка VIN за ней.
+        self.table.rows_moved.connect(self._on_rows_moved)
 
         layout.addWidget(self.table)
 
@@ -460,6 +482,46 @@ class VehiclesTab(TabMixin, QWidget):
             (key - 1 if key > row else key): value
             for key, value in self._store.items()
             if key != row
+        }
+
+    # ─────────────────────────────────────────────────────────
+    # Перенос строк мышью (ШАГ «Перетаскивание строк ТС»)
+    # ─────────────────────────────────────────────────────────
+
+    def set_reorder_enabled(self, enabled: bool) -> None:
+        """
+        Разрешает или запрещает перенос строк мышью (C.5).
+
+        Пока идёт распознавание, строки тащить нельзя: список ТС прямо сейчас
+        переписывается ответом модели, и перенос под ним потерялся бы.
+        """
+        self.table.set_row_reorder_enabled(enabled)
+
+    def _on_rows_moved(self, source: int, target: int) -> None:
+        """
+        Строка переехала мышью: данные строки — за ней.
+
+        Саму строку (ячейки и виджеты) уже перенёс `ReorderableTable`; здесь
+        переставляется хранилище строк и пересчитывается подсветка VIN: она
+        привязана к строке, а строка уехала.
+        """
+        self._reorder_store(source, target)
+        self.refresh_vin_warnings()
+        logger.info("Порядок ТС изменён: строка %s → строка %s",
+                    source + 1, target + 1)
+
+    def _reorder_store(self, source: int, target: int) -> None:
+        """
+        Переставляет записи хранилища тем же законом, что и строки таблицы.
+
+        Ключ хранилища — номер строки таблицы, поэтому перенос строки обязан
+        перенести и её запись: иначе значения скрытых колонок остались бы у
+        прежней строки (в них лежат госномер, год и цвет машины, когда
+        колонка спрятана).
+        """
+        self._store = {
+            moved_row_index(row, source, target): values
+            for row, values in self._store.items()
         }
 
     # ─────────────────────────────────────────────────────────

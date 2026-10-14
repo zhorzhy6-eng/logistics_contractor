@@ -840,6 +840,9 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setVisible(True)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
+        # Пока идёт распознавание, строки ТС тащить нельзя: список машин
+        # перезапишется ответом модели (см. ui/widgets/row_reorder.py).
+        self.vehicles_tab.set_reorder_enabled(False)
         self.statusBar().showMessage(
             f"Отправка в GigaChat ({len(text)} символов)..."
         )
@@ -891,6 +894,7 @@ class MainWindow(QMainWindow):
         self.btn_recognize.setEnabled(True)
         self.btn_cancel.setVisible(False)
         self.progress_bar.setVisible(False)
+        self.vehicles_tab.set_reorder_enabled(True)
         self.statusBar().showMessage("Распознавание отменено", 5000)
         logger.info("Распознавание отменено пользователем")
 
@@ -945,6 +949,8 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setEnabled(True)
         self.progress_bar.setVisible(False)
         self.progress_bar.setValue(0)
+        # Распознавание закончилось — строки ТС снова можно переносить.
+        self.vehicles_tab.set_reorder_enabled(True)
 
     def _log_recognition_result(self, data: Dict[str, Any]):
         """
