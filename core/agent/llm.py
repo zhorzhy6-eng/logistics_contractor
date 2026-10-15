@@ -23,6 +23,7 @@
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from core.pseudonymizer import Pseudonymizer
@@ -33,6 +34,10 @@ logger = logging.getLogger("core.agent.llm")
 #: Системный промпт — это правила программы (в нём нет данных оператора),
 #: assistant-сообщения агент формирует сам.
 MASKED_ROLES = ("user", "tool")
+
+#: Форма плейсхолдера: <<PERSON_1>>. По ней строится разбор имени токена и
+#: замена столкнувшихся имён (см. SafeChat._absorb_mapping).
+TOKEN_RE = re.compile(r"<<([A-ZА-Я_]+)_(\d+)>>")
 
 
 def ensure_client(client: Any) -> Any:
@@ -119,11 +124,87 @@ class SafeChat:
         return Pseudonymizer.describe(self._mapping)
 
     def anonymize(self, text: str) -> str:
-        """Маскирует текст и запоминает маппинг до конца запроса."""
+        """
+        Маскирует текст и запоминает маппинг до конца запроса.
+
+        Маппинг СОГЛАСОВАН с уже замаскированными сообщениями этого запроса
+        (см. ``_absorb_mapping``): один и тот же плейсхолдер не может
+        означать два разных значения. Без этого «Заполни» и «Отмени» —
+        два разных сообщения оператора — уходили в модель одним и тем же
+        текстом ``<<PERSON_1>>``, а инструмент получал то значение, которое
+        попало в маппинг последним (живой случай на стресс-тесте: на
+        «Найди» агент отвечал разбором слова «Заполни»).
+        """
         safe_text, mapping = self._pseudonymizer.anonymize(text)
-        if mapping:
-            self._mapping.update(mapping)
-        return safe_text
+        return self._absorb_mapping(safe_text, mapping)
+
+    def _absorb_mapping(self, text: str,
+                        mapping: Dict[str, str]) -> str:
+        """
+        Вливает маппинг одного сообщения в маппинг всего запроса.
+
+        Три правила:
+
+          * значение уже известно — берётся ЕГО токен: одно и то же имя во
+            всех сообщениях выглядит для модели одинаково;
+          * имя токена свободно — берётся как есть;
+          * имя занято ДРУГИМ значением — токен переименовывается
+            (``<<PERSON_1>>`` → ``<<PERSON_2>>``) и запоминается под новым
+            именем. Так у каждого значения свой токен, и ``restore``
+            возвращает именно то, что было замаскировано.
+
+        Переименование идёт ОДНИМ проходом по исходному тексту: иначе новая
+        замена поймала бы токен, переименованный предыдущей.
+        """
+        if not mapping:
+            return text
+
+        plan: Dict[str, str] = {}
+        reserved = set(self._mapping) | set(mapping)
+        for token, value in mapping.items():
+            same = self._token_for_value(value)
+            if same is not None and same != token:
+                plan[token] = same
+                continue
+            existing = self._mapping.get(token)
+            if existing is None:
+                self._mapping[token] = value
+                continue
+            if existing == value:
+                continue
+            fresh = self._free_token(token, reserved)
+            reserved.add(fresh)
+            plan[token] = fresh
+            self._mapping[fresh] = value
+
+        if not plan:
+            return text
+        return TOKEN_RE.sub(
+            lambda match: plan.get(match.group(0), match.group(0)), text
+        )
+
+    def _token_for_value(self, value: str) -> Optional[str]:
+        """Токен, которым это значение уже замаскировано в этом запросе."""
+        for token, known in self._mapping.items():
+            if known == value:
+                return token
+        return None
+
+    @staticmethod
+    def _free_token(token: str, reserved: set) -> str:
+        """
+        Свободное имя токена того же вида.
+
+        Номер ищется от единицы: ``<<PERSON_1>>`` занят — берётся
+        ``<<PERSON_2>>``. Форма остаётся канонической, поэтому
+        ``Pseudonymizer.restore`` находит такой токен в маппинге.
+        """
+        match = TOKEN_RE.fullmatch(token)
+        kind = match.group(1) if match else "TOKEN"
+        number = 1
+        while f"<<{kind}_{number}>>" in reserved:
+            number += 1
+        return f"<<{kind}_{number}>>"
 
     def restore(self, text: str) -> str:
         """
