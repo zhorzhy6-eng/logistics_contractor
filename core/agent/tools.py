@@ -433,12 +433,16 @@ class AgentContext:
         запрещены (агент отвечает «отменено»).
     :param on_activity: уведомление о шаге (имя инструмента) — панель
         показывает «думает…».
+    :param open_diagnostics: просьба открыть диалог диагностики. Возвращает
+        True, если диалог открыт (или запрос передан интерфейсу). None —
+        интерфейса рядом нет: инструмент ответит, где посмотреть отчёт.
     """
 
     window: Optional[Any] = None
     contract_type: str = ""
     confirm: Optional[Callable[[Tool, Dict[str, Any]], bool]] = None
     on_activity: Optional[Callable[[str], None]] = None
+    open_diagnostics: Optional[Callable[[], bool]] = None
 
     def current_window(self) -> Optional[Any]:
         """Окно для инструментов: из контекста или найденное в приложении."""
@@ -1665,15 +1669,25 @@ def _parse_and_fill(context: AgentContext, text: str = "",
                         use_dadata=use_dadata)
 
 
-def _diagnose(checks: Any = None, live_network: bool = False,
-              **_) -> Dict[str, Any]:
+def _diagnose(context: AgentContext, checks: Any = None,
+              live_network: bool = False, **_) -> Dict[str, Any]:
     """
-    Самодиагностика программы (задание, часть 3, пункт F.1).
+    Самодиагностика программы (задание, часть 2).
 
     Инструмент ТОЛЬКО читает: проверяет базу, настройки, логи, доступность
     GigaChat и DaData, память Максимилиана, место на диске и версию. Он не
-    «самопочиняется» и ничего не меняет — по результату оператор открывает
-    диалог диагностики и отправляет отчёт разработчику.
+    «самопочиняется» и ничего не меняет.
+
+    Что получает МОДЕЛЬ — короткий итог (``to_short_dict``): сколько
+    проверок, сколько проблем и какие именно. Что получает ОПЕРАТОР —
+    диалог диагностики: инструмент просит интерфейс открыть его, а тот
+    показывает полный отчёт с подробностями и кнопкой отправки разработчику.
+
+    Почему так. Раньше сюда уходил ВЕСЬ системный отчёт (~4 000 символов).
+    По дороге к GigaChat он обрезался до 4 000 символов с многоточием,
+    оборванный JSON GigaChat не принимает, и запрос падал целиком:
+    «422 INVALID_PARAMS: invalid function result for function diagnose»
+    (причина и защита — ``core/json_text.py``, ``core/agent/memory.py``).
 
     :param checks: какие проверки выполнить (пусто — все);
     :param live_network: проверять ли сервисы сетевыми запросами.
@@ -1697,23 +1711,39 @@ def _diagnose(checks: Any = None, live_network: bool = False,
     report = diagnostics.run_diagnostics(
         live_network=bool(live_network), checks=keys,
     )
-    data = report.to_dict()
-    data["checks"] = [
-        {
-            "key": check.key, "title": check.title, "status": check.status,
-            "mark": check.mark, "summary": check.summary,
-            #: В ответ модели уходит только начало подробностей: остальное
-            #: оператор увидит в диалоге диагностики.
-            "details": check.details[:10],
-        }
-        for check in report.checks
-    ]
+    short = report.to_short_dict()
+
+    #: Отчёт оператору: диалог открывает интерфейс (из рабочего потока это
+    #: делает сигнал — см. ui/agent_widget.py). Обратного вызова нет —
+    #: значит, интерфейса рядом нет (тесты, пробы): тогда просто говорим,
+    #: где отчёт посмотреть.
+    opened = False
+    opener = getattr(context, "open_diagnostics", None)
+    if callable(opener):
+        try:
+            opened = bool(opener())
+        except Exception as e:  # noqa: BLE001 — отчёт не должен ронять запрос
+            logger.warning("Диалог диагностики не открылся (%s)",
+                           type(e).__name__)
+
+    problems = short["problems"]
+    if problems:
+        titles = ", ".join(str(item["title"]) for item in problems[:4])
+        tail = f" и ещё {len(problems) - 4}" if len(problems) > 4 else ""
+        verdict = f"проблемы: {titles}{tail}"
+    else:
+        verdict = "проблем нет"
+
+    if opened:
+        where = "Открыл диалог диагностики — подробный отчёт перед вами."
+    else:
+        where = ("Подробный отчёт — в диалоге диагностики "
+                 "(«Справка → Диагностика»).")
+
     return _ok(
-        data,
-        message=(
-            f"{report.summary_line()}. Подробный отчёт — в диалоге "
-            f"диагностики («Справка → Диагностика»)"
-        ),
+        short,
+        opened_diagnostics=opened,
+        message=f"{report.summary_line()}; {verdict}. {where}",
     )
 
 
@@ -2341,7 +2371,8 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         return _get_help(topic=topic)
 
     def diagnose(checks: Any = None, live_network: bool = False):
-        return _diagnose(checks=checks, live_network=live_network)
+        return _diagnose(context=ctx, checks=checks,
+                         live_network=live_network)
 
     registry.register(Tool(
         name="explain_field",
@@ -2377,9 +2408,11 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
             "доступность GigaChat и DaData, память, место на диске, версия. "
             "ТОЛЬКО ЧТЕНИЕ: ничего не меняет и не «чинит». Вызывай, когда "
             "оператор говорит «сломалось», «не работает», «ошибка», "
-            "«тормозит», «не отправляется». После проверки предложи открыть "
-            "диалог диагностики («Справка → Диагностика» или кнопка с "
-            "гаечным ключом в панели) и отправить отчёт разработчику."
+            "«тормозит», «не отправляется». Вернётся КОРОТКИЙ итог (сколько "
+            "проверок и какие проблемы) — полный отчёт оператор видит в "
+            "диалоге диагностики, который открывается сам. Подробности "
+            "отчёта у тебя НЕ спрашивай и не выдумывай: скажи, что нашёл, "
+            "коротко, и предложи отправить отчёт разработчику."
         ),
         parameters=_json_schema({
             "checks": {

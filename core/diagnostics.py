@@ -204,6 +204,41 @@ class DiagnosticReport:
             "version": APP_VERSION,
         }
 
+    def to_short_dict(self) -> Dict[str, Any]:
+        """
+        Короткий отчёт для МОДЕЛИ (задание, часть 2, пункт B).
+
+        Почему не ``to_dict()``. Полный отчёт (сведения о системе, все
+        проверки, подробности, путь к архиву) — это ~4 000 символов, и
+        модели он не нужен: подробности читает ОПЕРАТОР в диалоге
+        диагностики. Большой результат к тому же обрезался по дороге к
+        GigaChat и превращался в оборванный JSON — «422 invalid function
+        result for function diagnose» (см. core/json_text.py). Отсюда
+        правило: модели — только итог, без системной информации, без
+        подробностей и без путей.
+
+        :return: ``{"checks", "counts", "summary", "worst", "problems":
+            [{"key", "title", "status", "summary"}]}`` — только то, по чему
+            модель отвечает оператору.
+        """
+        counts = self.counts()
+        return {
+            "checks": len(self.checks),
+            "counts": counts,
+            "worst": self.worst_status,
+            "summary": self.summary_line(),
+            "problems": [
+                {
+                    "key": check.key,
+                    "title": check.title,
+                    "status": check.status,
+                    "summary": check.summary[:160],
+                }
+                for check in self.checks
+                if check.status != STATUS_OK
+            ],
+        }
+
 
 # ─────────────────────────────────────────────────────────────
 # Пути

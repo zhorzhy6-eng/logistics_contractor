@@ -708,6 +708,12 @@ class AgentWidget(QObject):
     агента и рабочий поток. Создаётся функцией ``install_agent(window)``.
     """
 
+    #: Просьба агента открыть диалог диагностики (задание, часть 2, пункт B).
+    #: Инструмент `diagnose` работает в РАБОЧЕМ потоке, а виджеты можно
+    #: создавать только в потоке интерфейса, поэтому просьба идёт сигналом:
+    #: он доставляется в очередь главного потока и там открывает диалог.
+    diagnostics_requested = pyqtSignal()
+
     def __init__(self, window: QWidget,
                  client_factory: Optional[Callable[[], Any]] = None,
                  auto_confirm: Optional[bool] = None):
@@ -879,6 +885,10 @@ class AgentWidget(QObject):
             self.panel.clear_requested.connect(self.on_clear_history)
             self.panel.settings_requested.connect(self.on_open_settings)
             self.panel.diagnostics_requested.connect(self.on_open_diagnostics)
+            #: Просьба инструмента `diagnose` (из рабочего потока) открыть
+            #: тот же диалог: связь сигналом — диалог создаётся в потоке
+            #: интерфейса, а не в потоке агента.
+            self.diagnostics_requested.connect(self.on_open_diagnostics)
             self._animation.setTargetObject(self.panel)
             self._animation.setPropertyName(b"maximumWidth")
             self._load_history(max_history, max_tool_steps)
@@ -1025,7 +1035,21 @@ class AgentWidget(QObject):
             contract_type=str(getattr(self.window, "CONTRACT_TYPE", "") or ""),
             confirm=self._confirm,
             on_activity=self._on_activity,
+            open_diagnostics=self.request_diagnostics,
         )
+
+    def request_diagnostics(self) -> bool:
+        """
+        Просьба инструмента `diagnose` открыть диалог диагностики.
+
+        Вызывается из РАБОЧЕГО потока, поэтому диалог здесь не создаётся:
+        просьба уходит сигналом в поток интерфейса
+        (``diagnostics_requested`` → ``on_open_diagnostics``). Возвращается
+        «передал»: инструмент по этому признаку говорит модели
+        «диагностика открыта», а не «найдите пункт меню сами».
+        """
+        self.diagnostics_requested.emit()
+        return True
 
     def _confirm(self, tool: Tool, arguments: Dict[str, Any]) -> bool:
         """

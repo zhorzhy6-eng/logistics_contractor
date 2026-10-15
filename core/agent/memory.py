@@ -34,6 +34,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+from core.json_text import shorten_json_text
+
 logger = logging.getLogger("core.agent.memory")
 
 #: Сколько сообщений помним по умолчанию (задание, часть A.4).
@@ -101,11 +103,21 @@ class Message:
         return item
 
 
-def _as_text(value: Any, limit: int = 4000) -> str:
-    """Строка из любого значения с ограничением длины (защита от «полотна»)."""
+def _as_text(value: Any, limit: int = 4000, role: str = "") -> str:
+    """
+    Строка из любого значения с ограничением длины (защита от «полотна»).
+
+    Для результата инструмента (``role="tool"``) ограничение идёт через
+    ``core/json_text.shorten_json_text``: содержимое уходит в GigaChat
+    сообщением ``role="function"``, и оборванный JSON GigaChat отвергает
+    целиком — «422 invalid function result» (см. ``core/json_text.py``).
+    Обычный текст режется как прежде: JSON в нём нет.
+    """
     text = "" if value is None else str(value)
     if len(text) <= limit:
         return text
+    if role == "tool":
+        return shorten_json_text(text, limit)
     return text[:limit] + "…"
 
 
@@ -344,7 +356,7 @@ class AgentMemory:
 
         message = Message(
             role=role_value,
-            content=_as_text(content),
+            content=_as_text(content, role=role_value),
             tool_name=tool_name,
             tool_calls=[dict(call) for call in (tool_calls or ())],
             tool_call_id=tool_call_id,

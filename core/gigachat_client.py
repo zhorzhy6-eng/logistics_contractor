@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import requests
 
 from core.import_cancel import interruptible_sleep
+from core.json_text import shorten_json_text
 from core.pseudonymizer import Pseudonymizer
 from core.secrets_store import MISSING_KEY_MESSAGE, get_gigachat_key
 from core.tls_config import describe_tls, resolve_ca_bundle, ssl_error_hint
@@ -658,6 +659,10 @@ def _function_result_text(content: Any) -> str:
 
     Модель просит результат в виде строки: объект в ``content`` даёт
     400 «invalid JSON syntax» (проверено живьём).
+
+    Длинный результат сокращается ЧЕРЕЗ ``shorten_json_text``: оборванный
+    JSON GigaChat отвергает целиком («422 invalid function result»), поэтому
+    длина ограничивается с сохранением корректности JSON.
     """
     if isinstance(content, str):
         text = content
@@ -666,7 +671,9 @@ def _function_result_text(content: Any) -> str:
             text = json.dumps(content, ensure_ascii=False, default=str)
         except (TypeError, ValueError):
             text = str(content)
-    return _short_text(text, _FUNCTION_RESULT_LIMIT)
+    if len(text) <= _FUNCTION_RESULT_LIMIT:
+        return text
+    return shorten_json_text(text, _FUNCTION_RESULT_LIMIT)
 
 
 def _messages_for_wire(messages: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
