@@ -61,6 +61,13 @@ DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
     "proactive": False,
     #: Пауза между подсказками в секундах («не больше одной в 5 минут»).
     "proactive_interval": 300,
+    #: Режим «Обучение» (задание: система обучения): подсказки на каждом
+    #: шаге заполнения. Выключен по умолчанию — включается кнопкой в панели
+    #: или предложением при первом запуске.
+    "tutorial_mode": False,
+    #: Показано ли предложение обучения при первом запуске. False — при
+    #: первом запуске предложить включить обучение и поставить True.
+    "tutorial_seen": False,
 }
 
 #: Режимы показа агента: только иконка, только панель, и то и другое.
@@ -90,7 +97,8 @@ def normalize_agent_settings(values: Optional[Dict[str, Any]] = None) -> Dict[st
     if isinstance(values, dict):
         result.update(values)
 
-    for key in ("enabled", "show_floating", "show_panel_on_start", "proactive"):
+    for key in ("enabled", "show_floating", "show_panel_on_start", "proactive",
+                "tutorial_mode", "tutorial_seen"):
         value = result.get(key)
         if not isinstance(value, bool):
             result[key] = str(value).strip().lower() in ("1", "true", "yes", "да", "on")

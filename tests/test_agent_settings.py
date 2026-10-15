@@ -308,3 +308,50 @@ def test_example_settings_file_is_valid():
     assert "agent" in data
     for key, value in DEFAULT_AGENT_SETTINGS.items():
         assert data["agent"].get(key, value) == value, key
+
+
+# ─────────────────────────────────────────────────────────────
+# Режим «Обучение» (задание: система обучения)
+# ─────────────────────────────────────────────────────────────
+
+def test_tutorial_settings_default_off(service):
+    """Режим «Обучение» и отметка первого запуска по умолчанию выключены."""
+    values = service.agent_settings()
+    assert values["tutorial_mode"] is False
+    assert values["tutorial_seen"] is False
+
+
+def test_tutorial_mode_bool_normalization():
+    """Строки «да»/«1»/«true» превращаются в True, мусор — в False."""
+    for raw in ("да", "1", "true", "yes", "on"):
+        assert normalize_agent_settings({"tutorial_mode": raw})["tutorial_mode"] is True
+    for raw in ("нет", "0", "false", "", "мусор"):
+        assert normalize_agent_settings({"tutorial_mode": raw})["tutorial_mode"] is False
+
+
+def test_tutorial_seen_bool_normalization():
+    """Отметка первого запуска тоже приводится к булевому значению."""
+    assert normalize_agent_settings({"tutorial_seen": "да"})["tutorial_seen"] is True
+    assert normalize_agent_settings({"tutorial_seen": "0"})["tutorial_seen"] is False
+
+
+def test_tutorial_settings_persist(service, settings_path):
+    """update_agent сохраняет режим «Обучение» и отметку первого запуска."""
+    assert service.update_agent({
+        "tutorial_mode": True,
+        "tutorial_seen": True,
+    }) is True
+
+    written = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert written["agent"]["tutorial_mode"] is True
+    assert written["agent"]["tutorial_seen"] is True
+
+    reloaded = SettingsService(str(settings_path))
+    assert reloaded.agent_setting("tutorial_mode") is True
+    assert reloaded.agent_setting("tutorial_seen") is True
+
+
+def test_tutorial_keys_do_not_leak_into_other_sections(service, settings_path):
+    """update_agent с режимом обучения не трогает остальные настройки."""
+    service.update_agent({"tutorial_mode": True})
+    assert service.get_str("provider") == "gigachat"

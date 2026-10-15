@@ -28,6 +28,8 @@
     "max_history": 20,
     "max_tool_steps": 5,
     "proactive": false,
-    "proactive_interval": 300
+    "proactive_interval": 300,
+    "tutorial_mode": false,
+    "tutorial_seen": false
   }
 }
