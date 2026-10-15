@@ -922,6 +922,24 @@ def load_state(catalogue: Sequence[Query]) -> RunState:
     return RunState(payload=payload)
 
 
+def setup_font() -> None:
+    """
+    Подключает системный шрифт для снимков.
+
+    В offscreen-режиме Qt не находит своих шрифтов («Qt no longer ships
+    fonts») и рисует пустые прямоугольники вместо текста: снимок окна
+    получается нечитаемым. Один системный шрифт это лечит.
+    """
+    from PyQt5.QtGui import QFontDatabase
+
+    windir = Path(os.environ.get("WINDIR", r"C:\Windows"))
+    for name in ("segoeui.ttf", "arial.ttf", "tahoma.ttf"):
+        candidate = windir / "Fonts" / name
+        if candidate.is_file():
+            QFontDatabase.addApplicationFont(str(candidate))
+            return
+
+
 def run(args: argparse.Namespace) -> int:
     """Основной прогон: 200 запросов к настоящему GigaChat."""
     TMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -965,6 +983,7 @@ def run(args: argparse.Namespace) -> int:
     from PyQt5.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
+    setup_font()
     window, widget = start_window(app)
     if widget is None:
         log_line("FAIL: Максимилиан выключен настройками — прогон невозможен")
