@@ -15,7 +15,8 @@
 **Тестов:** полный прогон одним процессом
 (`pytest -q -o addopts="" --basetemp=tests/_tmp/_pt_full_run3`) —
 **8180 passed, 3 skipped, 7 failed** (39 мин 24 с), собрано 8190 (прошлый
-прогон — 8093; **+94 теста** этого прогона: 22 + 26 + 46).
+прогон — 8093; **+95 тестов** этого прогона: 22 + 26 + 46 в трёх новых файлах
+и +1 в `tests/test_diagnostics.py`).
 **Ни одно падение к правкам прогона не относится — проверено изоляцией:**
 **3 — порядкозависимые** (`tests/test_agent_context_tools.py`:
 `test_open_tabs_lists_window_and_tabs`, `test_open_tabs_without_window_`
