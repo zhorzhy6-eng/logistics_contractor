@@ -579,6 +579,19 @@ class ParsedFill:
             value = _coerce_override(name, raw.get("value"))
             for item in self.items:
                 if item.section == section and item.field == name:
+                    if isinstance(item.value, list) and not isinstance(value, list):
+                        #: Точки маршрута — СПИСОК строк, а не поле. Правка
+                        #: приходит из превью текстом («Воронеж, Кольцовская 1»),
+                        #: и подстановка строки вместо списка стёрла бы ВЕСЬ
+                        #: маршрут. Такие правки диалог не присылает (адрес
+                        #: правится в исходном тексте), поэтому строка-правка
+                        #: здесь игнорируется — данные важнее.
+                        logger.debug(
+                            "Разбор: правка «%s.%s» строкой пропущена — "
+                            "точки маршрута правит исходный текст",
+                            section, name,
+                        )
+                        break
                     item.value = value
                     item.status = "ok"
                     item.note = ""
@@ -642,7 +655,20 @@ class ParsedFill:
         return
 
     def _clean_points(self) -> None:
-        """Приводит адреса точек к стандартному виду (DaData) — если включено."""
+        """
+        Приводит адреса точек к стандартному виду (DaData) — если включено.
+
+        Ни один сбой здесь не отменяет разбор: адрес остаётся ровно таким,
+        как его написал оператор, а в предупреждения попадает причина. DaData
+        для автозаполнения — удобство, а не условие его работы (B.2).
+
+        Про сбой сообщается ОДИН раз на разбор, а не на каждый адрес: в
+        маршруте их до десяти, и десять одинаковых предупреждений оператору
+        не нужны.
+        """
+        failed = 0
+        total = 0
+        last_error = ""
         for section in (SECTION_LOADING, SECTION_UNLOADING):
             for item in self.items:
                 if item.section != section or item.field != "address":
@@ -653,11 +679,28 @@ class ParsedFill:
                     address = str(row.get("address") or "").strip()
                     if not address:
                         continue
-                    cleaned, note = clean_address(address)
-                    if cleaned:
+                    total += 1
+                    try:
+                        cleaned, note = clean_address(address)
+                    except Exception as e:  # noqa: BLE001 — разбор важнее DaData
+                        # Второй рубеж: clean_address() уже ловит всё, но
+                        # ошибка внешнего сервиса не должна ронять разбор
+                        # даже при будущих правках (B.2, B.3).
+                        failed += 1
+                        last_error = type(e).__name__
+                        continue
+                    if cleaned and cleaned != address:
                         row["address"] = cleaned
                     if note and note not in self.warnings:
                         self.warnings.append(note)
+
+        if failed:
+            logger.warning(
+                "DaData: адреса не стандартизированы (%s из %s, %s) — "
+                "оставлены как есть", failed, total, last_error,
+            )
+            if DADATA_UNAVAILABLE_NOTE not in self.warnings:
+                self.warnings.append(DADATA_UNAVAILABLE_NOTE)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -941,13 +984,24 @@ def _organization_record(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+#: Что оператор видит, когда адреса не удалось привести к стандартному виду.
+DADATA_UNAVAILABLE_NOTE = (
+    "DaData недоступна — адреса оставлены так, как вы их написали"
+)
+
+
 def clean_address(address: str) -> Tuple[str, str]:
     """
     Стандартный вид адреса через DaData (A.3).
 
-    Возвращает ``(адрес, замечание)``. Пусто и без замечания — DaData
-    выключена, ключа нет или сервис не ответил: разбор продолжается с тем,
-    что написал оператор (внешний сервис не должен ломать заполнение).
+    Возвращает ``(адрес, замечание)``. Правило проекта: ошибка ВНЕШНЕГО
+    сервиса не должна ронять основную операцию (B.2), поэтому при любом
+    сбое — нет ключа, 403 «ключ не принят», лимит, сеть, неожиданный ответ —
+    возвращается адрес КАК ЕСТЬ и замечание для оператора. Автозаполнение
+    продолжается, просто без стандартизации адресов; в лог идёт WARNING,
+    а не ERROR: программа не сломалась, отказал внешний сервис.
+
+    Пусто и без замечания — адрес пустой, спрашивать нечего.
     """
     text = str(address or "").strip()
     if not text:
@@ -958,15 +1012,27 @@ def clean_address(address: str) -> Tuple[str, str]:
 
         result = check_address_dadata(address=text)
     except Exception as e:  # noqa: BLE001 — DaData не обязательна
-        logger.debug("DaData: адрес не проверен (%s)", type(e).__name__)
-        return "", ""
+        logger.warning(
+            "DaData: адрес не проверен (%s) — оставляю как есть",
+            type(e).__name__,
+        )
+        return text, DADATA_UNAVAILABLE_NOTE
 
     if not isinstance(result, dict) or not result.get("ok"):
-        return "", ""
+        # Инструмент отвечает словарём и сам не поднимает исключений, но
+        # «не ok» — это тоже «стандартизировать не вышло».
+        logger.warning(
+            "DaData: адрес не стандартизирован (%s) — оставляю как есть",
+            str((result or {}).get("error") or "сервис не ответил")[:120],
+        )
+        return text, DADATA_UNAVAILABLE_NOTE
+
     data = result.get("data") or {}
     cleaned = str(data.get("address") or data.get("result") or "").strip()
     if not cleaned:
-        return "", ""
+        # Сервис ответил, но разобрать адрес не смог: это не сбой, а ответ
+        # «такой адрес не знаю». Молча оставляем как написал оператор.
+        return text, ""
     note = ""
     quality = data.get("qc")
     if quality not in (None, 0, "0"):
@@ -1480,7 +1546,17 @@ def parse_text(text: Any, use_dadata: bool = True) -> ParsedFill:
     result._resolve_entities()
     result._resolve_entity_items()
     if use_dadata:
-        result._clean_points()
+        try:
+            result._clean_points()
+        except Exception as e:  # noqa: BLE001 — внешний сервис: разбор важнее
+            # Последний рубеж перед выдачей результата: что бы ни случилось
+            # на стороне DaData, разобранный текст оператор получит (B.2).
+            logger.warning(
+                "DaData: адреса не стандартизированы (%s) — разбор продолжен",
+                type(e).__name__,
+            )
+            if DADATA_UNAVAILABLE_NOTE not in result.warnings:
+                result.warnings.append(DADATA_UNAVAILABLE_NOTE)
 
     for item in result.items:
         if item.status == "warning" and item.note:
@@ -1793,6 +1869,7 @@ def _dedupe(values: Sequence[str]) -> List[str]:
 
 __all__ = [
     "CONTRACT_FIELD_TITLES",
+    "DADATA_UNAVAILABLE_NOTE",
     "IGNORED_KEYS",
     "KEYWORD_FIELDS",
     "ORGANIZATION_FIELDS",

@@ -167,6 +167,26 @@ def _short(value: Any, limit: int = 300) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _fail(exc: Exception, action: str) -> Dict[str, Any]:
+    """
+    Отказ внешнего сервиса → обычный ответ инструмента (НЕ исключение).
+
+    Правило проекта: ошибка внешнего API не должна ронять основную операцию.
+    DaData недоступна, ключ не принят, лимит исчерпан, ответ не разобрался —
+    инструмент возвращает ``ok=False`` с текстом, модель говорит оператору,
+    что не получилось, и работа продолжается (в автозаполнении адрес остаётся
+    таким, как его ввёл оператор).
+
+    Ловится ЛЮБОЕ исключение, а не только ``ValueError``/``RuntimeError``:
+    кроме клиента DaData здесь бывает системное хранилище ключей, сеть и
+    разбор ответа — падать из-за них приложение не должно.
+    """
+    kind = type(exc).__name__
+    logger.warning("DaData: %s не выполнен (%s)", action, kind)
+    text = str(exc).strip() or f"DaData недоступна ({kind}). Повторите позже."
+    return _error(text, source="DaData")
+
+
 def _digits(value: Any) -> str:
     """Только цифры из значения («ИНН 7701 234 567» → «7701234567»)."""
     return "".join(char for char in str(value or "") if char.isdigit())
@@ -217,10 +237,8 @@ def check_inn_dadata(inn: str = "", **_) -> Dict[str, Any]:
 
     try:
         found = cached(f"inn:{digits}", fetch)
-    except ValueError as e:
-        return _error(str(e))
-    except RuntimeError as e:
-        return _error(str(e))
+    except Exception as e:  # noqa: BLE001 — внешний сервис: операцию не роняем
+        return _fail(e, "поиск по ИНН")
 
     if not found:
         return _ok({}, found=False, message="организация с таким ИНН не найдена")
@@ -274,10 +292,8 @@ def search_company_dadata(query: str = "", limit: int = COMPANY_SEARCH_COUNT,
 
     try:
         rows = cached(f"name:{text.casefold()}:{count}", fetch)
-    except ValueError as e:
-        return _error(str(e))
-    except RuntimeError as e:
-        return _error(str(e))
+    except Exception as e:  # noqa: BLE001 — внешний сервис: операцию не роняем
+        return _fail(e, "поиск по названию")
 
     found = [{
         "full_name": _short(row.get("full_name")),
@@ -323,11 +339,10 @@ def check_address_dadata(address: str = "", **_) -> Dict[str, Any]:
 
     try:
         cleaned = cached(f"addr:{text.casefold()}", fetch)
-    except ValueError as e:
-        return _error(str(e))
-    except RuntimeError as e:
-        # «нет секретного ключа» — не сбой, а понятная инструкция.
-        return _error(str(e))
+    except Exception as e:  # noqa: BLE001 — внешний сервис: операцию не роняем
+        # «нет секретного ключа», «403 — ключ не принят», сеть, лимит: адрес
+        # остаётся таким, как его ввёл оператор, автозаполнение продолжается.
+        return _fail(e, "стандартизация адреса")
 
     if not cleaned:
         return _ok({}, found=False,

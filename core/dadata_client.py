@@ -22,6 +22,15 @@
   * тело ответа (название, адрес, ФИО руководителя, банк) не логируется;
   * по ошибкам пишутся только тип исключения и HTTP-статус.
 
+Уровень записи при отказе сервиса — WARNING, а не ERROR. DaData — внешний
+сервис: «403 — ключ не принят» или «429 — лимит» это НЕ сбой программы, а
+условие, о котором оператор узнаёт и продолжает работу (адрес остаётся таким,
+как его ввели; реквизиты заполняются вручную). Запись уровня ERROR попадала бы
+в logs/errors.log с присоединённым стеком вызова (config/logging_config.py,
+StackInfoFilter) и выглядела бы как падение приложения, хотя приложение
+работает. Настоящие ошибки (сеть, TLS, таймаут, не-JSON) тоже WARNING по той
+же причине: их обрабатывает вызывающий код, а не программа падает.
+
 Ожидаемая структура ответа DaData (findById/party):
 
     {
@@ -424,26 +433,38 @@ class DadataClient:
         logger.debug("DaData: ответ очистки адреса | статус=%s", status)
 
         if status in (401, 403):
-            logger.error("DaData: HTTP %s — ключ или секрет не принят", status)
+            logger.warning(
+                "DaData: HTTP %s — ключ или секрет не принят; "
+                "адрес остаётся как ввёл оператор", status,
+            )
             raise RuntimeError(
                 "DaData: неверный или отозванный ключ (секрет) DaData.\n\n"
                 "Проверьте ключи: python set_dadata_key.py --check и "
                 "python set_dadata_secret.py --check"
             )
         if status == 429:
-            logger.error("DaData: HTTP 429 — превышен лимит запросов")
+            logger.warning(
+                "DaData: HTTP 429 — превышен лимит запросов; "
+                "адрес остаётся как ввёл оператор",
+            )
             raise RuntimeError(
                 f"DaData: превышен лимит запросов ({RATE_LIMIT_HINT}). "
                 f"Подождите и повторите."
             )
         if 500 <= status < 600:
-            logger.error("DaData: HTTP %s — сервер недоступен", status)
+            logger.warning(
+                "DaData: HTTP %s — сервер недоступен; "
+                "адрес остаётся как ввёл оператор", status,
+            )
             raise RuntimeError(
                 f"DaData: сервер DaData недоступен (HTTP {status}), "
                 f"повторите позже."
             )
         if not 200 <= status < 300:
-            logger.error("DaData: HTTP %s — неожиданный ответ очистки", status)
+            logger.warning(
+                "DaData: HTTP %s — неожиданный ответ очистки; "
+                "адрес остаётся как ввёл оператор", status,
+            )
             raise RuntimeError(
                 f"DaData: ошибка API очистки адреса (HTTP {status}). "
                 f"Подробности — в logs/errors.log."
@@ -452,8 +473,8 @@ class DadataClient:
         try:
             body = response.json()
         except ValueError as exc:
-            logger.error("DaData: ответ очистки не является JSON (%s)",
-                         type(exc).__name__)
+            logger.warning("DaData: ответ очистки не является JSON (%s)",
+                           type(exc).__name__)
             raise RuntimeError(
                 "DaData: некорректный ответ API (не JSON). Повторите позже."
             ) from exc
@@ -624,25 +645,25 @@ class DadataClient:
         logger.debug("DaData: ответ получен | статус=%s", status)
 
         if status in (401, 403):
-            logger.error("DaData: HTTP %s — ключ не принят", status)
+            logger.warning("DaData: HTTP %s — ключ не принят", status)
             raise RuntimeError(
                 "DaData: неверный или отозванный ключ DaData.\n\n"
                 "Проверьте ключ командой: python set_dadata_key.py --check"
             )
         if status == 429:
-            logger.error("DaData: HTTP 429 — превышен лимит запросов")
+            logger.warning("DaData: HTTP 429 — превышен лимит запросов")
             raise RuntimeError(
                 f"DaData: превышен лимит запросов ({RATE_LIMIT_HINT}). "
                 f"Подождите и повторите."
             )
         if 500 <= status < 600:
-            logger.error("DaData: HTTP %s — сервер недоступен", status)
+            logger.warning("DaData: HTTP %s — сервер недоступен", status)
             raise RuntimeError(
                 f"DaData: сервер DaData недоступен (HTTP {status}), "
                 f"повторите позже."
             )
         if not 200 <= status < 300:
-            logger.error("DaData: HTTP %s — неожиданный ответ", status)
+            logger.warning("DaData: HTTP %s — неожиданный ответ", status)
             raise RuntimeError(
                 f"DaData: ошибка API (HTTP {status}). "
                 f"Подробности — в logs/errors.log."
@@ -651,7 +672,8 @@ class DadataClient:
         try:
             body = response.json()
         except ValueError as exc:
-            logger.error("DaData: ответ не является JSON (%s)", type(exc).__name__)
+            logger.warning("DaData: ответ не является JSON (%s)",
+                           type(exc).__name__)
             raise RuntimeError(
                 "DaData: некорректный ответ API (не JSON). "
                 "Повторите позже."
