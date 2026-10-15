@@ -643,6 +643,8 @@ class AgentPanel(QFrame):
     settings_requested = pyqtSignal()
     #: Оператор просит открыть диагностику программы (задание, часть 3).
     diagnostics_requested = pyqtSignal()
+    #: Оператор включил/выключил режим «Обучение» (подсказки на каждом шаге).
+    tutorial_toggled = pyqtSignal(bool)
 
     def __init__(self, agent_name: str = "Максимилиан",
                  persona_key: str = DEFAULT_PERSONA,
@@ -743,6 +745,17 @@ class AgentPanel(QFrame):
         self.btn_diagnostics.clicked.connect(self.diagnostics_requested)
         row.addWidget(self.btn_diagnostics)
 
+        #: Кнопка режима «Обучение» (задание: система обучения): подсказки
+        #: на каждом шаге заполнения. Состояние хранится в настройках.
+        self.btn_tutorial = QToolButton()
+        self.btn_tutorial.setText("🎓")
+        self.btn_tutorial.setObjectName("agentToolButton")
+        self.btn_tutorial.setToolTip("Обучение: подсказки на каждом шаге заполнения")
+        self.btn_tutorial.setAutoRaise(True)
+        self.btn_tutorial.setCheckable(True)
+        self.btn_tutorial.toggled.connect(self.tutorial_toggled)
+        row.addWidget(self.btn_tutorial)
+
         self.btn_close = QToolButton()
         self.btn_close.setText("✕")
         self.btn_close.setObjectName("agentToolButton")
@@ -770,6 +783,13 @@ class AgentPanel(QFrame):
     def set_owner(self, owner: Any) -> None:
         """Запоминает владельца панели (AgentWidget)."""
         self._owner = owner
+
+    def set_tutorial_mode(self, enabled: bool) -> None:
+        """Ставит кнопку «Обучение» в нужное состояние, не стреляя сигналом."""
+        if self.btn_tutorial.isChecked() != bool(enabled):
+            self.btn_tutorial.blockSignals(True)
+            self.btn_tutorial.setChecked(bool(enabled))
+            self.btn_tutorial.blockSignals(False)
 
     # ── Сообщения ──
     def append_message(self, text: str, author: str = "agent",
@@ -978,6 +998,9 @@ class AgentWidget(QObject):
         #: ли снова», таймер периодически смотрит форму. Родитель таймеров —
         #: сам AgentWidget: они живут ровно столько же, сколько окно.
         self._suggestions: Optional[Any] = None
+        #: Подсказки режима «Обучение» (система обучения): отдельный движок
+        #: с нулевым интервалом — подсказка меняется на каждом шаге.
+        self._tutorial_engine: Optional[Any] = None
         self._suggestion_timer = QTimer(self)
         self._suggestion_timer.setInterval(SUGGESTION_CHECK_MS)
         self._suggestion_timer.timeout.connect(self._check_suggestions)
@@ -1040,6 +1063,8 @@ class AgentWidget(QObject):
         self._apply_hotkey(enabled and show_panel_possible, values["hotkey"])
         # Подсказки без вопроса (часть 4): только у включённого помощника.
         self._apply_proactive(values if enabled else {"proactive": False})
+        # Режим «Обучение» (система обучения): подсказки на каждом шаге.
+        self._apply_tutorial(values if enabled else {"tutorial_mode": False})
 
         if self.icon_button is not None:
             self.icon_button.setVisible(show_icon)
@@ -1054,6 +1079,9 @@ class AgentWidget(QObject):
                 self.show_panel()
         elif self.panel is not None:
             self.panel.set_persona(persona_key)
+
+        if self.panel is not None:
+            self.panel.set_tutorial_mode(bool(values["tutorial_mode"]))
 
         logger.info(
             "Максимилиан: включён=%s, режим=%s, образ=%s, плавающий=%s",
@@ -1108,6 +1136,7 @@ class AgentWidget(QObject):
             self.panel.clear_requested.connect(self.on_clear_history)
             self.panel.settings_requested.connect(self.on_open_settings)
             self.panel.diagnostics_requested.connect(self.on_open_diagnostics)
+            self.panel.tutorial_toggled.connect(self.on_tutorial_toggled)
             #: Просьба инструмента `diagnose` (из рабочего потока) открыть
             #: тот же диалог: связь сигналом — диалог создаётся в потоке
             #: интерфейса, а не в потоке агента.
@@ -1496,11 +1525,54 @@ class AgentWidget(QObject):
                 AGENT_NAME, values["avatar"],
                 int(values["max_history"]), int(values["max_tool_steps"]),
             )
-            if not self._suggestion_timer.isActive():
-                self._suggestion_timer.start()
-            return
 
-        self._suggestion_timer.stop()
+        self._update_suggestion_timer()
+
+    def _apply_tutorial(self, values: Dict[str, Any]) -> None:
+        """
+        Включает или выключает подсказки режима «Обучение».
+
+        В отличие от проактивных подсказок (не чаще одной в 5 минут), режим
+        «Обучение» подсказывает на КАЖДОМ шаге: интервал движка нулевой,
+        а повторы гасит сам движок (тот же текст второй раз не показывается).
+        """
+        enabled = bool(values.get("tutorial_mode", False))
+
+        if self._tutorial_engine is None:
+            from core.agent.proactivity import SuggestionEngine
+
+            self._tutorial_engine = SuggestionEngine(enabled=enabled, interval=0)
+        else:
+            self._tutorial_engine.configure(enabled, 0)
+
+        if enabled:
+            self._ensure_panel(
+                AGENT_NAME, values["avatar"],
+                int(values["max_history"]), int(values["max_tool_steps"]),
+            )
+
+        self._update_suggestion_timer()
+
+    def _update_suggestion_timer(self) -> None:
+        """Таймер подсказок работает, пока включён хотя бы один вид подсказок."""
+        active = (
+            (self._suggestions is not None and self._suggestions.enabled)
+            or (self._tutorial_engine is not None and self._tutorial_engine.enabled)
+        )
+        if active:
+            self._suggestion_timer.start()
+        else:
+            self._suggestion_timer.stop()
+
+    def on_tutorial_toggled(self, enabled: bool) -> None:
+        """
+        Кнопка «Обучение» в панели: включает/выключает подсказки по шагам.
+
+        Состояние пишется в настройки (`agent.tutorial_mode`) и применяется
+        сразу — подсказки появляются без перезапуска.
+        """
+        self.settings.update_agent({"tutorial_mode": bool(enabled)})
+        self._apply_tutorial(self.agent_settings())
 
     def _check_suggestions(self) -> None:
         """
@@ -1511,12 +1583,18 @@ class AgentWidget(QObject):
         просит избегать. И только после паузы тишины (`_idle_timer`):
         подсказка посреди заполнения формы мешает.
         """
-        engine = self._suggestions
-        if engine is None or not engine.enabled:
-            return
         if self.panel is None or not self.panel.isVisible():
             return
         if self._idle_timer.isActive():
+            return
+
+        self._offer_proactive()
+        self._offer_tutorial()
+
+    def _offer_proactive(self) -> None:
+        """Показывает проактивную подсказку, если пора (часть 4)."""
+        engine = self._suggestions
+        if engine is None or not engine.enabled:
             return
 
         from core.agent.proactivity_tools import proactive_text
@@ -1526,13 +1604,31 @@ class AgentWidget(QObject):
         except Exception as e:  # noqa: BLE001 — подсказка не должна ломать окно
             logger.warning("Подсказка не собрана: %s", e)
             return
+        self._show_hint(engine.offer(text))
 
-        offer = engine.offer(text)
+    def _offer_tutorial(self) -> None:
+        """Показывает подсказку режима «Обучение» (система обучения)."""
+        engine = self._tutorial_engine
+        if engine is None or not engine.enabled:
+            return
+
+        from core.agent.tutorial_hints import tutorial_step_hint
+
+        try:
+            text = tutorial_step_hint(self._context())
+        except Exception as e:  # noqa: BLE001 — подсказка не должна ломать окно
+            logger.warning("Подсказка обучения не собрана: %s", e)
+            return
+        self._show_hint(engine.offer(text))
+
+    def _show_hint(self, text: str) -> None:
+        """Показывает готовую подсказку в панели (пустая строка — ничего)."""
+        offer = str(text or "").strip()
         if not offer:
             return
         self.panel.append_message(offer, author="agent")
         self.panel.set_status("Подсказка", False)
-        logger.info("Максимилиан: показана подсказка без вопроса")
+        logger.info("Максимилиан: показана подсказка")
 
     def _on_operator_action(self, *_args: Any) -> None:
         """
@@ -1541,8 +1637,15 @@ class AgentWidget(QObject):
         Слот принимает лишние аргументы (сигнал журнала может передать
         их): `lambda` в связях запрещены (AGENTS.md § 5.1).
         """
-        if self._suggestions is not None and self._suggestions.enabled:
+        if self._any_hints_enabled():
             self._idle_timer.start()
+
+    def _any_hints_enabled(self) -> bool:
+        """Включён ли хотя бы один вид подсказок (проактивность или обучение)."""
+        return (
+            (self._suggestions is not None and self._suggestions.enabled)
+            or (self._tutorial_engine is not None and self._tutorial_engine.enabled)
+        )
 
     def _panel_call(self, func, *args) -> None:
         """
