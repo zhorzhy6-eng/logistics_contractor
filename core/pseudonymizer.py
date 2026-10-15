@@ -53,7 +53,9 @@ WARNING с именем токена — без оригинала.
 """
 
 import logging
+import os
 import re
+import sys
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -430,6 +432,14 @@ _HSPACE_OPT = _HSPACE + "?"
 #: вторая — обычное слово; обе требуют минимум двух букв, поэтому
 #: одиночные инициалы словами ФИО не становятся.
 _PERSON_WORD = r"(?:[А-ЯЁ][а-яё]*(?:['’\-][А-ЯЁ][а-яё]+)+|[А-ЯЁ][а-яё]+)"
+#: Одно слово-ФИО целиком (для одиночной фамилии после команды).
+_PERSON_WORD_RE = re.compile(_PERSON_WORD)
+#: Одиночное слово-ФИО с проверкой границ — якорь для поиска перебором.
+#: Группа 1 обязательна: наружу нужны ГРАНИЦЫ слова, а вокруг него стоят
+#: проверки нулевой ширины (тем же приёмом сделаны образцы на два и три слова).
+_PERSON_SINGLE_RE = re.compile(
+    r"(?=((?<![А-Яа-яЁё])" + _PERSON_WORD + r"(?![А-Яа-яЁё])))"
+)
 _PERSON_THREE_RE = re.compile(
     r"(?=((?<![А-Яа-яЁё])" + _PERSON_WORD + _HSPACE_PLUS + _PERSON_WORD
     + _HSPACE_PLUS + _PERSON_WORD + r"(?![А-Яа-яЁё])))"
@@ -462,6 +472,134 @@ _PERSON_STOPWORDS = frozenset({
     "февраля", "марта", "апреля", "мая", "июня", "июля", "августа",
     "сентября", "октября", "ноября", "декабря", "телефон", "адрес",
 })
+
+#: Первое слово ФИО не может быть словом-КОМАНДОЙ: «Удали Иванов» — это
+#: команда и фамилия, а не человек по фамилии «Удали».
+#:
+#: Откуда взялось. Регулярка ФИО берёт два заглавных слова подряд, а рядом
+#: стоящий маркер («ФИО:», «Водитель», «Директор») делает такое совпадение
+#: допустимым. В документе, куда попала команда оператора, маска закрывала
+#: ДВА слова одним токеном: «ФИО: Удали Иванов» → «ФИО: <<PERSON_1>>», и
+#: настоящая фамилия уезжала в облако под чужим именем. Живой случай из
+#: задачи: «Удали» → <<PERSON_1>>.
+#:
+#: Список строится ЛЕНИВО и берётся из общей таблицы служебных слов
+#: (`core/agent/words.py`) — она уже одна на весь проект (см. докстроку того
+#: модуля). Плюс слова, которые командой не являются, но фамилией быть не
+#: могут: разделы программы и реквизиты. Иначе «Сумма Договора», «Дата
+#: Номера» и «Машина Клиента» закрывались бы как люди.
+#:
+#: Почему файлом, а не импортом. Обычное `from core.agent.words import …`
+#: сначала выполняет `core/agent/__init__.py`, а тот тянет весь пакет агента
+#: (`agent.py` → `llm.py` → сюда же) — из ядра обезличивания это даёт
+#: «partially initialized module». Подмодуль ``words`` не зависит ни от чего,
+#: кроме ``typing``, поэтому здесь он загружается ФАЙЛОМ: `sys.modules` при
+#: этом заполняется, и обычный импорт агента позже берёт уже готовый модуль.
+#: Если файла нет — работаем на собственном стоп-листе, маска не ломается.
+#:
+#: Обратной зависимости нет: ядро обезличивания знает про таблицу
+#: служебных слов, таблица про ядро — нет.
+_WORDS_MODULE = "core.agent.words"
+
+
+def load_words_module():
+    """Модуль общей таблицы служебных слов (или None, если недоступен)."""
+    module = sys.modules.get(_WORDS_MODULE)
+    if module is not None:
+        return module
+
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "agent", "words.py")
+    if not os.path.exists(path):
+        return None
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(_WORDS_MODULE, path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[_WORDS_MODULE] = module
+        spec.loader.exec_module(module)
+        return module
+    except Exception as e:  # noqa: BLE001 — маска обязана работать и без агента
+        sys.modules.pop(_WORDS_MODULE, None)
+        logger.warning("Таблица служебных слов не загружена (%s)", e)
+        return None
+
+
+def _service_words() -> frozenset:
+    """Служебные слова проекта: команды, вопросы, роли (из общей таблицы)."""
+    module = load_words_module()
+    if module is None:
+        return frozenset()
+
+    try:
+        words = (
+            tuple(module.COMMAND_WORDS) + tuple(module.QUESTION_WORDS)
+            + tuple(module.ASK_WORDS) + tuple(module.ROLE_WORDS)
+        )
+    except AttributeError as e:  # noqa: BLE001 — чужой модуль может измениться
+        logger.warning("Таблица служебных слов без ожидаемых списков: %s", e)
+        return frozenset()
+
+    return frozenset(word.casefold() for word in words)
+
+
+#: Разделы программы и реквизиты: фамилией быть не могут, а заглавными
+#: словами в документе стоят («Договор № 5», «Сумма 80000»).
+#: Падежные формы перечислены явно: сверка идёт по ПЕРВОМУ слову целиком,
+#: а не по основе — основы команд ловят настоящие фамилии («Показеев»,
+#: «Заполянский», «Удальцов»), и такая ошибка дороже пропущенной команды.
+_SERVICE_NOUNS = frozenset({
+    # Реквизиты и суммы
+    "сумма", "суммы", "сумму", "сумме", "суммой", "суммах",
+    "цена", "цены", "цену", "цене", "ценой",
+    "дата", "даты", "дату", "дате", "датой",
+    "номер", "номера", "номеру", "номером", "номере", "номеров",
+    "адрес", "адреса", "адресу", "адресом",
+    "статус", "статуса", "статусу", "тариф", "тарифа", "тарифы",
+    "ндс", "предоплата", "оплата", "оплаты", "срок", "сроки", "срока",
+    "период", "периода", "итог", "итоги", "итого", "отчёт", "отчет",
+    "справка", "справки", "акт", "акта", "акты",
+    # Груз и маршрут
+    "груз", "груза", "грузу", "грузом", "грузы", "грузов", "грузам",
+    "маршрут", "маршрута", "маршруту", "маршруты", "маршрутов",
+    # Разделы программы (падежные формы — по ним маска тоже ошибалась)
+    "аренда", "аренды", "аренду", "аренде", "арендой",
+    "клиент", "клиента", "клиенту", "клиенты", "клиентов",
+    "машина", "машины", "машину", "машине", "машиной", "машин",
+    "водитель", "водителя", "водителю", "водители", "водителей",
+    "договор", "договора", "договору", "договоры", "договоров",
+    "заявка", "заявки", "заявку", "заявке", "заявок",
+    "перевозчик", "перевозчика", "перевозчики", "перевозчиков",
+    "заказчик", "заказчика", "заказчики", "заказчиков",
+})
+
+#: СТОП-ЛИСТ МАСКИРОВАНИЯ: слово, с которого НЕ начинается ФИО.
+#: Проверяется в `_find_person` перед принятием кандидата (см. `_is_service_word`).
+#: Вычисляется при первом обращении: список общий с агентом (`_service_words`),
+#: а пакет агента к моменту импорта ядра может быть ещё не загружен.
+_PERSON_STOP_CACHE: Optional[frozenset] = None
+
+
+def person_stop_words() -> frozenset:
+    """
+    Стоп-лист маскирования ФИО: служебные слова + разделы и реквизиты.
+
+    Вычисляется один раз за процесс. Тесты могут сбросить кэш
+    (`reset_person_stop_words`), если подменили таблицу служебных слов.
+    """
+    global _PERSON_STOP_CACHE
+    if _PERSON_STOP_CACHE is None:
+        _PERSON_STOP_CACHE = _service_words() | _SERVICE_NOUNS
+    return _PERSON_STOP_CACHE
+
+
+def reset_person_stop_words() -> None:
+    """Забывает вычисленный стоп-лист (нужно тестам и пробам)."""
+    global _PERSON_STOP_CACHE
+    _PERSON_STOP_CACHE = None
 
 #: Адрес: улица и дом (маркеры + значение). Город НЕ трогаем — он не
 #: идентифицирует человека и нужен модели для маршрута и поля «city».
@@ -618,15 +756,155 @@ def _find_phones(text: str, out: List[_Candidate]) -> None:
             _add(out, match, "PHONE")
 
 
+def _first_token(value: str):
+    """
+    Первое слово совпадения: (слово для сверки, длина в тексте).
+
+    Длина нужна, чтобы продолжить разбор РОВНО за этим словом: у ведущих
+    пробелов длина другая, и позиция «после слова» по ней не считается.
+    """
+    head = re.split(r"[\s\-]+", value.strip(), maxsplit=1)[0]
+    return head.strip(".,;:!?()\"'«»").casefold(), len(head)
+
+
+def _is_service_word(value: str) -> bool:
+    """
+    Начинается ли совпадение со служебного слова (см. `person_stop_words`).
+
+    Проверяется ПЕРВОЕ слово, а не любое: «Иванов Иван» — человек, даже
+    если второе слово случайно совпало с ролью. Обратное («Сумма Договора»)
+    человеком не является, потому что первое слово — реквизит.
+    """
+    if not value:
+        return False
+    return _first_token(value)[0] in person_stop_words()
+
+
+def _person_at(text: str, start: int,
+               limit: Optional[int] = None) -> Optional[_Candidate]:
+    """
+    Ближайший кандидат в ФИО, начинающийся в ``[start, limit)``.
+
+    Нужен после отказа: если совпадение начиналось со служебного слова
+    («Удали Иванов»), разбор продолжается ЗА этим словом — иначе настоящая
+    фамилия осталась бы ненайденной. ``limit`` не даёт заглянуть за пределы
+    исходного совпадения: хвост одного кандидата не должен захватывать
+    начало следующего.
+
+    Почему ``finditer``, а не ``pattern.match(text, start)``: образцы ФИО
+    начинаются с нулевой проверки ``(?=…)``, и у неё тоже есть начало.
+    ``match`` требует совпадения РОВНО в ``start`` и на «Иванова» (одно
+    слово там, где образец ждёт два) не находит ничего, тогда как
+    ``finditer`` доходит до слова и возвращает его.
+    """
+    for pattern in (_PERSON_THREE_RE, _PERSON_TWO_RE, _PERSON_INITIALS_RE):
+        for match in pattern.finditer(text, start):
+            if limit is not None and match.start(1) >= limit:
+                break
+            value = match.group(1)
+            if not value:
+                continue
+            return _Candidate(match.start(1), match.end(1), "PERSON", value)
+    return None
+
+
+def _single_word_at(text: str, start: int,
+                    limit: Optional[int] = None) -> Optional[_Candidate]:
+    """
+    Одно слово, похожее на фамилию, начиная с ``start``.
+
+    Отдельный поиск нужен потому, что общий образец ФИО ждёт ДВА слова:
+    на «Иванова» он не срабатывает вовсе (второго слова нет), а на «Удали
+    Иванова» отдаёт оба слова вместе. Вызывается ТОЛЬКО из разбора после
+    служебного слова — там, где контекст уже задан командой («Удали
+    Иванова» — оператор говорит про человека).
+    """
+    for match in _PERSON_SINGLE_RE.finditer(text, start):
+        if limit is not None and match.start(1) >= limit:
+            break
+        value = match.group(1)
+        if not value:
+            continue
+        return _Candidate(match.start(1), match.end(1), "PERSON", value)
+    return None
+
+
+def _tail_after_service_word(text: str, start: int, end: int) -> Optional[_Candidate]:
+    """
+    ФИО, целиком лежащее в ХВОСТЕ совпадения, начавшегося со служебного слова.
+
+    «Удали Иванова» — регулярка ФИО взяла два слова, но первое из них не имя,
+    а команда. Хвост после неё разбирается заново, в пределах исходного
+    совпадения:
+
+      * два-три слова — общим правилом (``_person_at``);
+      * ОДНО слово — отдельным поиском (``_single_word_at``). Контекст здесь
+        и есть команда: «Удали Иванова» оператор пишет про человека, а не про
+        слово «Иванова». «Создай заявку» под правило не попадает — «заявку»
+        со строчной буквы именем не является (``_PERSON_WORD`` требует
+        заглавной), а «Удали Договор» отсекает стоп-лист.
+
+    Возвращает кандидата или None; границы не выходят за ``[start, end)``,
+    поэтому хвост одного совпадения не захватывает начало следующего.
+    """
+    word, length = _first_token(text[start:end])
+    resume = start + length
+    if resume >= end:
+        return None
+
+    for candidate in (_person_at(text, resume, limit=end),
+                      _single_word_at(text, resume, limit=end)):
+        if candidate is None:
+            continue
+        if candidate.value.casefold() in _PERSON_STOPWORDS:
+            continue
+        if candidate.value.casefold() in person_stop_words():
+            continue
+        return candidate
+    return None
+
+
+def _accept_tail(tail: Optional[_Candidate]) -> bool:
+    """
+    Принимать ли ФИО, найденное В ХВОСТЕ совпадения со служебным словом.
+
+    Общее правило `allowed` здесь не подходит: одиночная фамилия без
+    отчества и без маркера ФИО («Удали Иванова») им отвергается — а она и
+    есть то, что нужно закрыть. Контекст в этом случае задаёт сама команда:
+    оператор пишет её про человека.
+
+    Что остаётся проверкой: слово похоже на имя (заглавная кириллица) и не
+    из стоп-листов (организации, регионы, реквизиты, служебные слова).
+    """
+    if tail is None or not tail.value:
+        return False
+    word = tail.value.strip()
+    if not _PERSON_WORD_RE.fullmatch(word):
+        return False
+    folded = word.casefold()
+    if folded in _PERSON_STOPWORDS or folded in person_stop_words():
+        return False
+    parts = re.split(r"[\s\-]+", word)
+    if any(part.casefold() in _PERSON_STOPWORDS for part in parts if part):
+        return False
+    return True
+
+
 def _find_person(text: str, out: List[_Candidate]) -> None:
     def allowed(value: str, context: str) -> bool:
         """
         ФИО принимается, если есть отчество или рядом слово-маркер
         (ФИО, водитель, директор, ...). Организации и регионы отсекаются
         стоп-словами, иначе «Республика Башкортостан» стало бы человеком.
+
+        Служебные слова (команды, разделы программы, реквизиты) отсекаются
+        отдельно — см. `person_stop_words`: «Удали Иванов» это команда и
+        фамилия, а не человек с фамилией «Удали».
         """
         words = re.split(r"[\s\-]+", value)
         if any(word.casefold() in _PERSON_STOPWORDS for word in words if word):
+            return False
+        if _is_service_word(value):
             return False
         if words and _PATRONYMIC_RE.search(words[-1]):
             return True
@@ -638,6 +916,16 @@ def _find_person(text: str, out: List[_Candidate]) -> None:
             start, end = match.start(1), match.end(1)
             if allowed(value, _context(text, start, end)):
                 out.append(_Candidate(start, end, "PERSON", value))
+                continue
+
+            # Отказали из-за служебного слова — разбираем ХВОСТ совпадения:
+            # за командой может стоять настоящее ФИО («ФИО: Удали Иванов» →
+            # маскируется «Иванов»).
+            if not _is_service_word(value):
+                continue
+            tail = _tail_after_service_word(text, start, end)
+            if _accept_tail(tail):
+                out.append(tail)
 
 
 def _find_address(text: str, out: List[_Candidate]) -> None:
@@ -759,11 +1047,19 @@ def _find_person_natasha(text: str, out: List[_Candidate]) -> None:
         if not value:
             continue
         # NER иногда принимает за фамилию слово-метку («Водитель»,
-        # «Директор») или название организации. Отсекаем их тем же
-        # списком стоп-слов, что и регулярный детектор ФИО; сам список
-        # не меняется — регулярный слой работает как раньше.
+        # «Директор»), название организации или КОМАНДУ оператора
+        # («Удали Иванова»). Отсекаем их тем же списком стоп-слов, что и
+        # регулярный детектор ФИО.
         words = re.split(r"[\s\-]+", value)
         if any(word.casefold() in _PERSON_STOPWORDS for word in words if word):
+            continue
+        if _is_service_word(value):
+            # Span начинается со служебного слова: если внутри него есть
+            # настоящая фамилия («Удали Иванова»), маскируем ТОЛЬКО её —
+            # тот же разбор, что и в регулярном слое.
+            tail = _tail_after_service_word(text, span.start, span.stop)
+            if _accept_tail(tail):
+                out.append(tail)
             continue
         out.append(_Candidate(span.start, span.stop, "PERSON_NATASHA", value))
 
