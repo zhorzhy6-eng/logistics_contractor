@@ -186,7 +186,9 @@ def init_db(conn: Optional[sqlite3.Connection] = None) -> None:
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
     """Преобразует строку БД в словарь (extra разбирается из JSON)."""
-    data = {key: row[key] for key in row.keys()}
+    # Именно row.keys(): sqlite3.Row при переборе отдаёт ЗНАЧЕНИЯ, а не имена
+    # колонок (в отличие от dict). Подсказка линтера здесь не подходит.
+    data = {key: row[key] for key in row.keys()}  # noqa: SIM118
     raw = data.get("extra") or "{}"
     try:
         data["extra"] = json.loads(raw)

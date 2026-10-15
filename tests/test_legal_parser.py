@@ -1047,7 +1047,7 @@ def test_normalize_legal_settings_limits(raw, expected):
     from ui import legal_settings
 
     result = legal_settings.normalize_legal_settings(raw)
-    assert result[list(raw)[0]] == expected
+    assert result[next(iter(raw))] == expected
 
 
 def test_settings_json_snippet():

@@ -41,7 +41,6 @@ if PROJECT_ROOT not in sys.path:
 
 from config.logging_config import setup_logging  # noqa: E402
 from core.legal_parser import LegalParser, human_size  # noqa: E402
-from db.crud import legal_metadata  # noqa: E402
 
 logger = logging.getLogger("tools.download_legal")
 

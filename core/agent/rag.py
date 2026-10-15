@@ -32,7 +32,6 @@ RAG по правовой базе: поиск норм и контекст дл
 """
 
 import logging
-import os
 from typing import Any, Callable, Dict, List, Optional
 
 from core.legal_indexer import (

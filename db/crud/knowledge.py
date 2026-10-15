@@ -32,7 +32,7 @@ db/crud/legal_metadata.py — правила те же (WAL, busy_timeout, py_lo
 import logging
 import re
 import sqlite3
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 from db.crud import legal_metadata
 
@@ -44,7 +44,7 @@ TOKENIZER = "unicode61 remove_diacritics 2"
 #: Имя FTS-таблицы фрагментов.
 FTS_TABLE = "knowledge_fts"
 
-SCHEMA_SQL = f"""
+SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     doc_id      TEXT NOT NULL,

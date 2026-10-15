@@ -37,11 +37,10 @@ from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QProgressBar,
-    QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from core.legal_parser import LegalParser, human_size
-from db.crud import legal_metadata
 from ui import theme
 
 logger = logging.getLogger("ui.legal_base_dialog")
@@ -185,9 +184,9 @@ def _results_text(title: str, results) -> str:
     skipped = [item for item in results if item.skipped]
     unavailable = [item for item in results if item.unavailable]
     failed = [item for item in results if item.failed]
-    lines = [title,
-             f"Скачано: {len(ok)} | уже было: {len(skipped)} | "
-             f"без источника: {len(unavailable)} | ошибок: {len(failed)}", ""]
+    summary = (f"Скачано: {len(ok)} | уже было: {len(skipped)} | "
+               f"без источника: {len(unavailable)} | ошибок: {len(failed)}")
+    lines = [title, summary, ""]
     for item in ok:
         note = " [OCR]" if item.ocr_used else ""
         lines.append(f"  OK {item.document.display_title[:60]}{note}: {item.text_chars} символов")

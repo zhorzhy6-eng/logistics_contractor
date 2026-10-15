@@ -40,13 +40,12 @@
 
 import json
 import logging
-import os
 from typing import Any, Dict, Optional
 
-from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import (
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
-    QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QSpinBox, QVBoxLayout, QWidget,
 )
 
 from core.legal_parser import LegalParser, human_size
