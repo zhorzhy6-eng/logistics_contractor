@@ -73,6 +73,95 @@ SUGGESTION_IDLE_MS = 2000
 #: Для остальных опасных действий остаётся обычный вопрос «Да / Нет».
 FILL_PREVIEW_TOOL = "parse_and_fill"
 
+#: Сколько рабочий поток ждёт ответа оператора на вопрос о подтверждении.
+#: Оператор может думать сколько угодно — ждём долго; ограничение стоит
+#: только чтобы закрытая панель не подвесила агента навсегда.
+CONFIRM_WAIT_SECONDS = 1800.0
+
+
+class _PendingConfirmation:
+    """
+    Запрос подтверждения, который рабочий поток передал интерфейсу.
+
+    Рабочий поток не может показать диалог (виджеты живут в главном) и не
+    может просто «вызвать сигнал и пойти дальше» — ему нужен ОТВЕТ. Поэтому
+    запрос кладётся сюда, главный поток показывает диалог и кладёт ответ,
+    а рабочий ждёт на ``event``.
+    """
+
+    __slots__ = ("tool", "arguments", "event", "answer", "handled")
+
+    def __init__(self, tool: Tool, arguments: Dict[str, Any]):
+        import threading
+
+        self.tool = tool
+        self.arguments = arguments
+        self.event = threading.Event()
+        self.answer = False
+        #: Диалог показан (нужно, чтобы отличить «отказ» от «никто не пришёл»).
+        self.handled = False
+
+    def answer_with(self, value: bool) -> None:
+        """Главный поток кладёт ответ и будит рабочего."""
+        self.answer = bool(value)
+        self.handled = True
+        self.event.set()
+
+    def wait(self, timeout: float) -> bool:
+        """Рабочий поток ждёт ответа (True — ответ пришёл)."""
+        return bool(self.event.wait(timeout))
+
+
+def ask_in_gui_thread(widget: Any, tool: Tool,
+                      arguments: Dict[str, Any]) -> bool:
+    """
+    Спрашивает оператора, показывая диалог В ПОТОКЕ ИНТЕРФЕЙСА.
+
+    Зачем отдельная функция. Агент работает в рабочем потоке, а диалог —
+    виджет. Создание виджета в рабочем потоке (да ещё с родителем из
+    главного) роняет процесс: Qt отвечает «QObject::setParent: Cannot set
+    parent, new parent is in a different thread» и завершает программу
+    аварийно. Проверено 15.10.2026 на прогоне 200 запросов: три падения
+    подряд на запросе «Перевозчик: ООО «Ромашка»…» (инструмент
+    ``parse_and_fill`` — он единственный спрашивает подтверждение диалогом
+    превью).
+
+    Как устроено: из главного потока диалог показывается сразу; из рабочего
+    запрос уходит сигналом ``confirmation_requested``, рабочий ждёт на
+    ``threading.Event``, а главный поток показывает диалог и кладёт ответ.
+
+    :return: ответ оператора (False — отказ, ошибка или интерфейса рядом нет).
+    """
+    if _current_thread() is _gui_thread():
+        return bool(widget._confirm_in_gui_thread(tool, arguments))
+
+    pending = _PendingConfirmation(tool, arguments)
+    widget._confirmation = pending
+    widget.confirmation_requested.emit()
+    if not pending.wait(CONFIRM_WAIT_SECONDS):
+        logger.warning(
+            "Ответа на подтверждение (%s) не дождались за %.0f с — действие "
+            "отменено", tool.name, CONFIRM_WAIT_SECONDS,
+        )
+        return False
+    if not pending.handled:
+        return False
+    return bool(pending.answer)
+
+
+def _gui_thread() -> Any:
+    """Поток интерфейса (поток, в котором живёт QApplication)."""
+    app = QApplication.instance()
+    thread = getattr(app, "thread", None) if app is not None else None
+    return thread() if thread is not None else None
+
+
+def _current_thread() -> Any:
+    """Текущий поток Qt."""
+    from PyQt5.QtCore import QThread
+
+    return QThread.currentThread()
+
 
 # ─────────────────────────────────────────────────────────────
 # Рабочий поток: запрос к агенту
@@ -714,6 +803,15 @@ class AgentWidget(QObject):
     #: он доставляется в очередь главного потока и там открывает диалог.
     diagnostics_requested = pyqtSignal()
 
+    #: Шаг агента («Выполняю: поиск водителя») — тоже из РАБОЧЕГО потока.
+    #: Сигнал, а не вызов панели на месте: см. on_activity_reported —
+    #: это была причина падений прогона 15.10.2026.
+    activity_reported = pyqtSignal(str)
+
+    #: Просьба показать диалог подтверждения (агент работает в рабочем
+    #: потоке, диалог строится в главном — см. ask_in_gui_thread).
+    confirmation_requested = pyqtSignal()
+
     def __init__(self, window: QWidget,
                  client_factory: Optional[Callable[[], Any]] = None,
                  auto_confirm: Optional[bool] = None):
@@ -724,6 +822,15 @@ class AgentWidget(QObject):
         #: Ответ за оператора в диалоге подтверждения (None — спросить).
         #: Нужно пробам и скриншотам: они идут без живого оператора.
         self.auto_confirm = auto_confirm
+
+        #: Подписка на шаги агента — здесь, а не в _ensure_panel: сигнал
+        #: должен быть связан ДО первого запроса, иначе первые шаги пропали
+        #: бы, а вызов панели остался бы в рабочем потоке.
+        self.activity_reported.connect(self.on_activity_reported)
+        #: Запрос подтверждения из рабочего потока: диалог показывает
+        #: главный поток (см. on_confirmation_requested).
+        self._confirmation: Optional[_PendingConfirmation] = None
+        self.confirmation_requested.connect(self.on_confirmation_requested)
 
         self.panel: Optional[AgentPanel] = None
         self.icon_button: Optional[AgentIconButton] = None
@@ -1060,6 +1167,23 @@ class AgentWidget(QObject):
         (задание, часть 1, пункты B.1–B.3). Правки складываются в
         ``on_edit`` инструмента и попадают в аргументы вызова до заполнения.
         Остальные опасные действия спрашивают как прежде — «Да / Нет».
+
+        ВАЖНО ПРО ПОТОКИ. Метод зовётся ИЗ РАБОЧЕГО ПОТОКА (там работает
+        агент), а диалог — виджет: создавать его можно только в потоке
+        интерфейса. Раньше диалог создавался прямо здесь, в рабочем потоке,
+        да ещё и с родителем из главного потока — Qt отвечал
+        «QObject::setParent: Cannot set parent, new parent is in a different
+        thread» и РОНЯЛ процесс (проверено 15.10.2026: прогон 200 запросов
+        трижды умирал на запросе про автозаполнение). Теперь диалог строит
+        главный поток, а рабочий ЖДЁТ ответа — см. ``ask_in_gui_thread``.
+        """
+        return ask_in_gui_thread(self, tool, arguments)
+
+    def _confirm_in_gui_thread(self, tool: Tool,
+                               arguments: Dict[str, Any]) -> bool:
+        """
+        Показывает диалог подтверждения. Вызывается ТОЛЬКО из потока
+        интерфейса (см. ``ask_in_gui_thread``).
         """
         parent = self.panel if self.panel is not None else self.window
 
@@ -1126,10 +1250,50 @@ class AgentWidget(QObject):
         return True
 
     def _on_activity(self, message: str) -> None:
-        """Показывает шаг агента в панели (вызывает рабочий поток)."""
+        """
+        Шаг агента — вызывается ИЗ РАБОЧЕГО ПОТОКА.
+
+        Здесь нельзя трогать панель: виджеты живут в потоке интерфейса.
+        Раньше вызов уходил через ``QTimer.singleShot(0, lambda: …)``, но
+        таймер, созданный в рабочем потоке, срабатывает В НЁМ ЖЕ — и панель
+        менялась из чужого потока. Итог: два падения прогона из 200 запросов
+        (`QObject::setParent: Cannot set parent, new parent is in a different
+        thread` → `QObject::killTimer: Timers cannot be stopped from another
+        thread` → процесс завершался с кодом 1). Теперь шаг уходит СИГНАЛОМ:
+        Qt доставляет его в очередь главного потока и вызывает слот там.
+        """
         if self.panel is None:
             return
-        self._panel_call(self.panel.set_status, message, True)
+        self.activity_reported.emit(str(message or ""))
+
+    @pyqtSlot(str)
+    def on_activity_reported(self, message: str) -> None:
+        """Показывает шаг агента в панели — уже в потоке интерфейса."""
+        if self.panel is None:
+            return
+        self.panel.set_status(message, True)
+
+    @pyqtSlot()
+    def on_confirmation_requested(self) -> None:
+        """
+        Показывает диалог подтверждения, который просит рабочий поток.
+
+        Слот вызывается в потоке интерфейса (сигнал из рабочего потока Qt
+        доставляет очередью), поэтому диалог создаётся там, где положено.
+        Ответ уходит рабочему потоку через ``_PendingConfirmation``.
+        """
+        pending = self._confirmation
+        if pending is None:
+            return
+        try:
+            answer = self._confirm_in_gui_thread(pending.tool,
+                                                 pending.arguments)
+        except Exception:  # noqa: BLE001 — диалог не должен ронять агента
+            logger.exception("Диалог подтверждения упал — действие отменено")
+            answer = False
+        finally:
+            self._confirmation = None
+        pending.answer_with(answer)
 
     # ---------------------------------------------------------
     # Подсказки без вопроса (задание, часть 4)
@@ -1214,17 +1378,24 @@ class AgentWidget(QObject):
 
     def _panel_call(self, func, *args) -> None:
         """
-        Вызывает метод панели в главном потоке.
+        УСТАРЕЛО и не используется: вызов панели из рабочего потока.
 
-        Из рабочего потока менять виджеты нельзя: если мы не в главном
-        потоке, вызов уходит сигналом Qt.
+        Оставлено только чтобы не ломать внешние пробы, которые звали метод
+        напрямую. Панель из рабочего потока НЕ меняется — для этого есть
+        сигнал ``activity_reported`` (см. ``_on_activity``). Раньше здесь
+        стоял ``QTimer.singleShot(0, lambda: …)``: таймер создавался в
+        рабочем потоке и срабатывал в нём же, то есть виджет менялся из
+        чужого потока (падение процесса, см. ``_on_activity``).
         """
         app = QApplication.instance()
         thread = getattr(app, "thread", None) if app is not None else None
         if thread is None or thread() is None or thread() is _current_thread():
             func(*args)
             return
-        QTimer.singleShot(0, lambda: func(*args))
+        logger.warning(
+            "Вызов панели из рабочего потока пропущен — меняйте интерфейс "
+            "сигналом (AgentWidget.activity_reported)"
+        )
 
     # ---------------------------------------------------------
     # Диалог
