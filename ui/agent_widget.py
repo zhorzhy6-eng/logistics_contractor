@@ -1765,7 +1765,10 @@ class AgentWidget(QObject):
         self._busy = False
         self._request = None
         self.panel.append_message(text, "agent", tool_names)
-        status = "Достигнут лимит шагов — уточните запрос" if limit else ""
+        #: Предохранитель сработал (лимит шагов, таймаут или зацикливание) —
+        #: ответ уже объясняет причину и предлагает, с чего начать; здесь
+        #: только короткая подсказка в строке состояния.
+        status = "Остановился — уточните, с чего начать" if limit else ""
         self.panel.set_status(status, False)
 
     def _on_failed(self, error: str) -> None:

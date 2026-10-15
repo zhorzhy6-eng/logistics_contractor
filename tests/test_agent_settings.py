@@ -68,7 +68,7 @@ def test_defaults_match_specification(service):
     assert values["show_panel_on_start"] is False
     assert values["hotkey"] == "Ctrl+M"
     assert values["max_history"] == 20
-    assert values["max_tool_steps"] == 5
+    assert values["max_tool_steps"] == 20
 
 
 def test_agent_enabled_default_true(service):
@@ -90,7 +90,7 @@ def test_settings_file_contains_agent_section(settings_path):
 def test_agent_setting_by_key(service):
     """Отдельные значения доступны по ключу."""
     assert service.agent_setting("hotkey") == "Ctrl+M"
-    assert service.agent_setting("max_tool_steps") == 5
+    assert service.agent_setting("max_tool_steps") == 20
     # Неизвестный ключ — значение по умолчанию, без исключения.
     assert service.agent_setting("нет_такого_ключа", "запасное") == "запасное"
 

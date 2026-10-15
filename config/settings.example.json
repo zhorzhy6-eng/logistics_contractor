@@ -26,7 +26,7 @@
     "show_panel_on_start": false,
     "hotkey": "Ctrl+M",
     "max_history": 20,
-    "max_tool_steps": 5,
+    "max_tool_steps": 20,
     "proactive": false,
     "proactive_interval": 300,
     "tutorial_mode": false,

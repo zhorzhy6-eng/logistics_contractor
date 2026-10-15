@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Служебный ответ, когда инструментов вызвано больше лимита.
+Служебный ответ, когда запрос остановлен предохранителем.
 
 НАЙДЕНО СТРЕСС-ТЕСТОМ (200 запросов, 15.10.2026, запросы №22 «Найди в базе»,
 №23 «Покажи всё», №31 «Покажи отчёт»). Оператор получал вместо ответа
@@ -12,9 +12,14 @@
     • get_form_state: carrier_tab={'filled': {'license_date': '2026-10-15',
       ...}}, driver_tab={...}, trailer_tab={'tractor': {...}}, ...
 
-Три беды в одном ответе: машинные имена инструментов (`get_form_state`),
-`repr` вложенных словарей и длина в две тысячи символов. Проверяется, что
-теперь в ответе — человеческие названия инструментов и сжатые данные.
+Две беды в одном ответе: машинные имена инструментов (`get_form_state`) и
+`repr` вложенных словарей. Сначала ответ стал человечнее (сжатые данные), а
+затем, после поднятия лимита шагов до 20, стал ещё и полезнее: оператор
+получает предложение разбить задачу на части и выбрать первый шаг.
+
+Проверяется, что в ответе нет ни машинных имён, ни `repr`, ни технических
+идентификаторов (`window=Генератор…`, `contract_type=perevozka`), а лимит
+назван по-человечески.
 """
 
 import json
@@ -134,15 +139,20 @@ def test_brief_describes_empty_dict_as_empty():
 
 def test_brief_compresses_form_state_into_counters():
     """
-    Вложенное состояние формы — счётчиками, а не свалкой ключей.
+    Состояние формы — счётчиками, а не свалкой ключей.
 
     Именно это и печаталось оператору: `carrier_tab={'filled': {...}}`.
+    Имена вкладок (`carrier_tab`, `driver_tab`) — технические: из ответа
+    оператору они убраны (задание: без технических идентификаторов), а сами
+    счётчики заполненных полей остались.
     """
-    text = _brief(form_state()["data"])
-    assert text == ("carrier_tab: заполнено 3, пусто 16; "
-                    "driver_tab: заполнено 4, пусто 12; "
-                    "trailer_tab: заполнено 2, пусто 0")
-    assert "{" not in text and "}" not in text
+    text = _brief({"Поля формы": {"filled_count": 3, "empty_count": 16}})
+    assert text == "Поля формы: заполнено 3, пусто 16"
+
+    state = _brief(form_state()["data"])
+    assert "{" not in state and "}" not in state
+    for machine_name in ("carrier_tab", "driver_tab", "trailer_tab"):
+        assert machine_name not in state
 
 
 def test_brief_keeps_short_scalar_values():
@@ -194,17 +204,18 @@ def test_call_title_without_anything_is_generic():
 
 def test_answer_after_limit_has_no_machine_names_or_dumps():
     """
-    Ответ оператору: человеческие названия и сжатые данные.
+    Ответ оператору: человеческое название инструмента и никаких дампов.
 
-    Машинного имени `look_at_form` и фигурных скобок `repr` быть не должно.
+    Машинного имени `look_at_form`, фигурных скобок `repr` и имён вкладок
+    (`carrier_tab`) быть не должно: это имена из кода, оператор их не знает.
     """
     reply = build_agent().send("Покажи всё")
 
     assert reply.step_limit_reached is True
     assert "look_at_form" not in reply.text
     assert "{" not in reply.text and "}" not in reply.text
+    assert "carrier_tab" not in reply.text
     assert "список открытых вкладок" in reply.text.lower()
-    assert "заполнено 3, пусто 16" in reply.text
 
 
 def test_answer_after_limit_is_short():
@@ -236,20 +247,44 @@ def test_answer_after_limit_keeps_declined_mark():
 
 
 def test_answer_after_limit_names_the_step_limit_in_human_words():
-    """Про лимит сказано по-человечески, без «шагов» в машинном смысле."""
+    """
+    Про лимит сказано по-человечески: сколько шагов успеваю.
+
+    Счёт идёт по НАСТРОЙКЕ, а не по факту: оператору важно, сколько он
+    может получить за один запрос.
+    """
     reply = build_agent().send("Покажи всё")
     assert "успеваю 2 шага" in reply.text
-    assert "Уточните запрос" in reply.text
+    assert "лимит исчерпан" in reply.text
 
 
-def test_answer_after_limit_shows_at_most_three_results():
-    """В ответе — итог, а не журнал: не больше трёх результатов."""
-    agent = build_agent()
-    tool = agent.registry.get("look_at_form")
-    calls = [
-        ToolCall(name="look_at_form", tool=tool,
-                 result={"ok": True, "data": [index]})
-        for index in range(6)
-    ]
-    text = agent._final_text_after_limit(calls)
-    assert text.count("•") == 3
+def test_answer_after_limit_offers_to_split_the_task():
+    """
+    Главное в ответе — предложение разбить задачу и выбор первого шага.
+
+    Это и есть «человеческий ответ» из задания: оператор получает выход из
+    тупика, а не отчёт о том, что лимит кончился.
+    """
+    reply = build_agent().send("Куда тыкать? Мне нужно внести данные "
+                               "по организации")
+
+    assert "Задача большая — не успел за один запрос" in reply.text
+    assert "Давай по частям" in reply.text
+    assert "Что сделать первым:" in reply.text
+    assert "• Найти организацию в базе?" in reply.text
+    assert "• Заполнить форму?" in reply.text
+    assert "• Проверить в ЕГРЮЛ?" in reply.text
+
+
+def test_answer_after_limit_says_what_was_done_without_a_dump():
+    """
+    Сделанное — одной строкой с количеством, а не разделом с дампом.
+
+    Раньше в ответе был блок «Что успел узнать:» и по строке на инструмент с
+    его данными. Теперь это одна строка «Успел: …».
+    """
+    reply = build_agent().send("Покажи всё")
+
+    assert "Что успел узнать" not in reply.text
+    assert reply.text.count("Успел:") == 1
+    assert "{" not in reply.text and "}" not in reply.text

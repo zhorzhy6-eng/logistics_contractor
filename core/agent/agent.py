@@ -15,6 +15,23 @@
 которые он может сделать, — заполнить поля открытой формы, и каждое такое
 действие проходит через подтверждение оператора.
 
+Три предохранителя (запрос «лимит шагов 3 → 20»). Лимит шагов поднят до 20,
+поэтому одного его мало: длинный цикл надо чем-то ограничивать, кроме
+счётчика вызовов.
+
+  1. ``max_tool_steps`` — сколько вызовов инструментов разрешено на запрос;
+  2. ``max_request_seconds`` — общий таймаут запроса: пока идут шаги,
+     оператор ждёт ответа, и «20 шагов по 30 секунд» — это десять минут
+     молчания. Проверка идёт ПЕРЕД каждым обращением к модели и ПЕРЕД каждым
+     инструментом;
+  3. ``REPEAT_LIMIT`` — защита от зацикливания: если модель зовёт ОДИН И ТОТ
+     ЖЕ инструмент с теми же аргументами и результат не меняется (нет
+     данных), шаги прекращаются.
+
+Таймаут проверяется по часам, а не прерывает сетевой вызов: один запрос к
+GigaChat может идти до ``gigachat_timeout`` (150 с), и оборвать его изнутри
+нечем. Поэтому гарантия такая: НОВЫЙ шаг после истечения срока не начинается.
+
 Зависимости: GigaChat приходит снаружи (клиент или подставной объект с
 методом ``complete_chat``), Qt не нужен вовсе — цикл проверяется тестами
 с мок-моделью.
@@ -22,6 +39,8 @@
 
 import json
 import logging
+import math
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -39,7 +58,22 @@ from core.agent.tools import AgentContext, Tool, ToolRegistry, build_registry
 logger = logging.getLogger("core.agent.agent")
 
 #: Лимит шагов вызова инструментов на один запрос (задание, часть G.5).
-DEFAULT_MAX_TOOL_STEPS = 5
+#: Поднят с 5 до 20: на сложных запросах («внеси данные по организации»)
+#: пяти шагов не хватало, и оператор получал ответ «лимит исчерпан» вместо
+#: работы. Ровно это число стоит в config/settings.json и в верхней границе
+#: AGENT_LIMITS (core/settings_service.py).
+DEFAULT_MAX_TOOL_STEPS = 20
+
+#: Общий таймаут одного запроса оператора, секунды. Вторая страховка после
+#: лимита шагов: 20 шагов с ответами модели — это минуты ожидания, и в
+#: какой-то момент лучше честно остановиться и сказать об этом.
+DEFAULT_MAX_REQUEST_SECONDS = 120.0
+
+#: Сколько РАЗ ПОДРЯД можно позвать один и тот же инструмент с теми же
+#: аргументами, не получив новых данных, прежде чем это признается
+#: зацикливанием. Три, а не два: модель законно повторяет поиск (память
+#: подсказывает другое слово, оператор уточнил запрос).
+REPEAT_LIMIT = 3
 
 #: Инструменты поиска и имя поля, в котором им передаётся запрос. Память
 #: работает именно с ними: учиться на «сколько договоров» нечему, а на
@@ -89,8 +123,15 @@ class AgentReply:
     text: str
     #: Выполненные вызовы инструментов (для журнала и тестов).
     calls: List[ToolCall] = field(default_factory=list)
-    #: Упёрлись в лимит шагов?
+    #: Упёрлись в предохранитель (шаги, таймаут или повтор)?
     step_limit_reached: bool = False
+    #: Почему остановились: ``steps`` / ``timeout`` / ``loop`` — или пусто.
+    #: Нужно панели и тестам: формулировка ответа одна, а причины разные.
+    stop_reason: str = ""
+    #: Модель звала один и тот же инструмент с теми же аргументами.
+    loop_detected: bool = False
+    #: Запрос не уложился в общий таймаут.
+    timed_out: bool = False
     #: Сколько шагов (запросов к модели) понадобилось.
     steps: int = 0
     #: Что помощник запомнил из этой фразы (задание, часть 5).
@@ -114,6 +155,8 @@ class Agent:
     :param registry: реестр инструментов (по умолчанию — 15 из tools.py);
     :param persona_key: образ (см. personas.py);
     :param max_tool_steps: лимит вызовов инструментов на один запрос.
+    :param max_request_seconds: общий таймаут одного запроса (секунды).
+        0 или меньше — таймаут выключен (нужно тестам и разбору).
     """
 
     def __init__(
@@ -125,10 +168,14 @@ class Agent:
         persona_key: str = DEFAULT_PERSONA,
         max_tool_steps: int = DEFAULT_MAX_TOOL_STEPS,
         max_history: int = DEFAULT_MAX_HISTORY,
+        max_request_seconds: float = DEFAULT_MAX_REQUEST_SECONDS,
     ):
         self.context = context if context is not None else AgentContext()
         self.persona_key = persona_key
         self.max_tool_steps = max(1, int(max_tool_steps))
+        #: Ноль и меньше — «без таймаута»: так удобнее тестам, которым важна
+        #: логика шагов, а не часы.
+        self.max_request_seconds = _as_seconds(max_request_seconds)
         self.memory = memory if memory is not None else AgentMemory(
             max_history=max_history
         )
@@ -235,11 +282,21 @@ class Agent:
 
         calls: List[ToolCall] = []
         steps = 0
-        limit_reached = False
+        #: Момент, позже которого новый шаг не начинается. Считается от
+        #: НАЧАЛА запроса: оператору важно общее время ожидания.
+        deadline = (time.monotonic() + self.max_request_seconds
+                    if self.max_request_seconds > 0 else None)
+        #: Отпечаток ПОСЛЕДНЕГО ВЫПОЛНЕННОГО вызова и сколько раз он
+        #: повторился подряд, не принеся новых данных (см. _tracks_repeat).
+        previous = ""
+        repeats = 0
 
         self.chat.begin_turn()
         try:
             while True:
+                if _expired(deadline):
+                    return self._stop("timeout", calls, steps, remembered,
+                                      recalled)
                 steps += 1
                 prompt = self.system_prompt(text, extra=state_block)
                 message_data = self.chat.complete(
@@ -282,9 +339,29 @@ class Agent:
                     ],
                 )
 
+                #: Проверка времени ДО работы инструментов. Заодно убирается
+                #: недоигранный блок: ответ модели с вызовами уже в истории,
+                #: а результатов не будет — обращение к модели с таким
+                #: хвостом не имеет смысла.
+                if _expired(deadline):
+                    self.memory.rewind(1)
+                    logger.info("Агент: таймаут запроса до вызова инструментов")
+                    return self._stop("timeout", calls, steps, remembered,
+                                      recalled)
+
                 for raw_call in parsed:
+                    #: Зацикливание проверяется ДО вызова: если предыдущий
+                    #: ТАКОЙ ЖЕ вызов не принёс данных, а повторяется он уже
+                    #: REPEAT_LIMIT-й раз, инструмент звать незачем —
+                    #: иначе он вызовется на один раз больше лимита.
+                    if _same_unproductive_call(raw_call, calls, previous,
+                                               repeats):
+                        return self._stop("loop", calls, steps, remembered,
+                                          recalled, previous)
+
                     call = self._execute(raw_call, text)
                     calls.append(call)
+                    signature = _call_signature(call)
                     #: Память учится на поиске (часть 5, B.1–B.2): «что
                     #: оператор сказал» → «что нашлось». Запись идёт ДО
                     #: ответа модели, чтобы повторный запрос в этом же
@@ -302,19 +379,17 @@ class Agent:
                         tool_name=call.name,
                         tool_call_id=call.call_id,
                     )
+                    repeats = (repeats + 1
+                               if _tracks_repeat(call, signature, previous)
+                               else 0)
+                    previous = signature
+                    if repeats >= REPEAT_LIMIT:
+                        return self._stop("loop", calls, steps, remembered,
+                                          recalled, signature)
 
                 if len(calls) >= self.max_tool_steps:
-                    limit_reached = True
-                    logger.info(
-                        "Агент: достигнут лимит шагов инструментов (%s)",
-                        self.max_tool_steps,
-                    )
-                    answer = self._final_text_after_limit(calls)
-                    self.memory.add("assistant", answer)
-                    return AgentReply(
-                        text=answer, calls=calls, step_limit_reached=True,
-                        steps=steps, remembered=remembered, recalled=recalled,
-                    )
+                    return self._stop("steps", calls, steps, remembered,
+                                      recalled)
         finally:
             self.chat.end_turn()
 
@@ -646,43 +721,91 @@ class Agent:
     # ---------------------------------------------------------
     # Служебное
     # ---------------------------------------------------------
-    def _final_text_after_limit(self, calls: Sequence[ToolCall]) -> str:
+    def _stop(
+        self,
+        reason: str,
+        calls: Sequence[ToolCall],
+        steps: int,
+        remembered: Sequence[Dict[str, Any]],
+        recalled: Sequence[Dict[str, Any]],
+        signature: str = "",
+    ) -> AgentReply:
         """
-        Ответ, когда инструментов вызвано больше лимита.
+        Останавливает запрос и возвращает ОПЕРАТОРУ человеческий ответ.
 
-        Данные уже собраны — оператору они полезнее, чем извинение модели.
-        Текст формируется БЕЗ обращения к GigaChat: лишний запрос на
-        последнем шаге не нужен.
+        Одна дверь для всех трёх предохранителей: какой бы из них ни
+        сработал, оператор видит один и тот же понятный текст с выбором
+        «что делать первым», а не машинный отчёт. Разница только в первой
+        строке — она объясняет причину (``reason``).
 
-        Текст — ДЛЯ ОПЕРАТОРА, а не отладочный дамп (стресс-тест
-        15.10.2026, запросы №22, №23, №31): раньше сюда попадали имена
-        инструментов (`get_form_state`) и `repr` их данных — в ответе
-        оказывалась свалка вида ``carrier_tab={'filled': {...}}`` длиной
-        больше двух тысяч символов. Теперь инструмент называется своим
-        человеческим описанием (``Tool.summary``), а данные сжимаются до
-        счётчиков и коротких значений (см. `_brief`).
+        Ответ формируется БЕЗ обращения к GigaChat: шаг, который упёрся в
+        лимит, — последний, и тратить его на «объясни оператору» нечего.
+        Текст кладётся в историю: следующий запрос продолжает разговор с
+        того, что оператору уже сказали.
+
+        :param reason: ``steps`` (лимит шагов), ``timeout`` (общий таймаут),
+            ``loop`` (зацикливание);
+        :param steps: сколько ВЫЗОВОВ МОДЕЛИ реально сделано — по нему
+            считается «успел N шагов»;
+        :param signature: отпечаток зациклившегося вызова (для ``loop``).
         """
-        done = [call for call in calls if call.result and call.result.get("ok")]
-        failed = [call for call in calls if not call.result or not call.result.get("ok")]
-        steps = self.max_tool_steps
-        lines = [
-            f"За один запрос я успеваю {steps} {_steps_word(steps)} — "
-            f"лимит исчерпан."
-        ]
+        answer = self._final_text_after_limit(calls, steps, reason, signature)
+        self.memory.add("assistant", answer)
+        logger.info(
+            "Агент: остановлен (%s), шагов=%s, вызовов инструментов=%s",
+            reason, steps, len(calls),
+        )
+        return AgentReply(
+            text=answer,
+            calls=list(calls),
+            step_limit_reached=True,
+            stop_reason=reason,
+            loop_detected=reason == "loop",
+            timed_out=reason == "timeout",
+            steps=steps,
+            remembered=list(remembered),
+            recalled=list(recalled),
+        )
+
+    def _final_text_after_limit(
+        self,
+        calls: Sequence[ToolCall],
+        spent: Optional[int] = None,
+        reason: str = "steps",
+        signature: str = "",
+    ) -> str:
+        """
+        Ответ, когда запрос остановлен предохранителем.
+
+        Оператору нужен выход из тупика, а не отчёт (стресс-тест 15.10.2026,
+        запросы №22, №23, №31): раньше сюда попадали имена инструментов
+        (`get_form_state`) и `repr` их данных — свалка вида
+        ``carrier_tab={'filled': {...}}`` длиной больше двух тысяч символов.
+        Теперь основа ответа — предложение разбить задачу на части, а из
+        сделанного остаётся одна строка с количеством (см. ``_done_line``).
+
+        Технических идентификаторов в ответе нет: ни имени окна, ни типа
+        договора, ни списка вкладок. Только слова оператора.
+
+        :param spent: сколько вызовов модели реально сделано. В тексте ответа
+            число не повторяется (лимит уже назван), но параметр остаётся:
+            по нему считается причина, и его читает ``_reason_line``;
+        :param reason: причина остановки, см. ``_stop``;
+        :param signature: отпечаток зациклившегося вызова.
+        """
+        if spent is None:
+            spent = self.max_tool_steps
+        seconds = (self.max_request_seconds
+                   or DEFAULT_MAX_REQUEST_SECONDS)
+        lines = [_reason_line(reason, spent, self.max_tool_steps, signature,
+                              seconds)]
+        done = _done_line(calls)
         if done:
-            lines.append("Что успел узнать:")
-            for call in done[-3:]:
-                lines.append(f"• {_call_title(call)}: "
-                             f"{_brief(call.result.get('data'))}")
+            lines.append(done)
+        failed = _failed_line(calls)
         if failed:
-            lines.append(
-                "Не получилось: " + ", ".join(
-                    _call_title(call)
-                    + (" (отменено вами)" if call.declined else "")
-                    for call in failed
-                )
-            )
-        lines.append("Уточните запрос — отвечу точнее.")
+            lines.append(failed)
+        lines.extend(HELP_CHOICES)
         return _cap("\n".join(lines), ANSWER_LIMIT_AFTER_LIMIT)
 
     def clear_history(self) -> int:
@@ -692,6 +815,188 @@ class Agent:
 
 #: Предел длины служебного ответа: оператору нужен итог, а не отчёт.
 ANSWER_LIMIT_AFTER_LIMIT = 700
+
+#: Что можно сделать первым — список из задания. Оператор выбирает шаг, а не
+#: читает отчёт: «задача большая, давай по частям».
+HELP_CHOICES = (
+    "Задача большая — не успел за один запрос. Давай по частям.",
+    "Что сделать первым:",
+    "• Найти организацию в базе?",
+    "• Заполнить форму?",
+    "• Проверить в ЕГРЮЛ?",
+)
+
+
+def _reason_line(reason: str, spent: int, limit: int, signature: str,
+                 seconds: float = DEFAULT_MAX_REQUEST_SECONDS) -> str:
+    """
+    Первая строка ответа: почему остановились — словами для оператора.
+
+    Ни одного машинного имени: причина называется по-человечески, а не
+    «stop_reason=loop». Вызов инструмента упоминается только тогда, когда
+    без этого непонятно, что именно застряло. Число сделанных шагов в
+    тексте не повторяется: лимит уже назван, а «сделано 20 из 20» ничего не
+    добавляет.
+    """
+    if reason == "timeout":
+        shown = max(1, int(math.ceil(float(seconds))))
+        return (f"Не уложился в {shown} секунд — остановился, "
+                f"чтобы не держать вас в ожидании.")
+    if reason == "loop":
+        name = _signature_tool(signature)
+        if name:
+            return (f"Я {REPEAT_LIMIT} раза подряд повторил одно и то же "
+                    f"действие ({name}) и не продвинулся — остановился.")
+        return (f"Я {REPEAT_LIMIT} раза подряд повторил одно и то же "
+                f"действие и не продвинулся — остановился.")
+    return (f"За один запрос я успеваю {limit} {_steps_word(limit)} — "
+            f"лимит исчерпан.")
+
+
+def _done_line(calls: Sequence[ToolCall]) -> str:
+    """
+    Одна строка о том, что успело получиться: количеством, без dump'ов.
+
+    Список инструментов, имена окон и типы договоров сюда не попадают —
+    оператору нужно знать «сколько нашлось», а не как это называется в коде.
+    Одинаковые строки не повторяются: десять удачных поисков одного и того
+    же — это один пункт, а не десять (иначе строка разрастается и вытесняет
+    из ответа сам выбор дальнейших шагов).
+    """
+    done = [call for call in calls if call.result and call.result.get("ok")]
+    if not done:
+        return ""
+    parts: List[str] = []
+    seen: List[str] = []
+    for call in done[-6:]:
+        brief = _brief(call.result.get("data"))
+        item = f"{_call_title(call)} — {brief}" if brief else _call_title(call)
+        if item in seen:
+            continue
+        seen.append(item)
+        parts.append(item)
+    #: Показываем не больше трёх РАЗНЫХ результатов: ответ — не журнал.
+    return "Успел: " + "; ".join(parts[-3:]) + "."
+
+
+def _failed_line(calls: Sequence[ToolCall]) -> str:
+    """
+    Одна строка о том, что не получилось: названия действий, без причин.
+
+    Внутренние тексты ошибок («нет доступа к таблице») оператору не
+    пересказываются: это либо его отмена, либо сбой, о котором он узнает из
+    логов и диагностики.
+    """
+    failed = [call for call in calls
+              if not call.result or not call.result.get("ok")]
+    if not failed:
+        return ""
+    items = [
+        _call_title(call) + (" (отменено вами)" if call.declined else "")
+        for call in failed
+    ]
+    return "Не получилось: " + ", ".join(items) + "."
+
+
+def _as_seconds(value: Any) -> float:
+    """
+    Таймаут запроса из настройки: число секунд или 0.0 («без таймаута»).
+
+    Мусор в настройке не должен ронять запрос: непонятное значение — это
+    «без таймаута», а не исключение при создании агента.
+    """
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if seconds != seconds or seconds < 0:  # NaN и отрицательные
+        return 0.0
+    return seconds
+
+
+def _expired(deadline: Optional[float]) -> bool:
+    """Вышел ли срок запроса (``None`` — таймаут выключен)."""
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def _call_signature(call: ToolCall) -> str:
+    """
+    Отпечаток вызова: имя инструмента + аргументы.
+
+    Аргументы сортируются по ключам: ``{"a": 1, "b": 2}`` и ``{"b": 2,
+    "a": 1}`` — один и тот же вызов, а модель может переставить ключи.
+    """
+    try:
+        arguments = json.dumps(call.arguments, ensure_ascii=False, sort_keys=True,
+                               default=str)
+    except (TypeError, ValueError):
+        arguments = str(call.arguments)
+    return f"{call.name}|{arguments}"
+
+
+def _tracks_repeat(call: ToolCall, signature: str,
+                   previous: str) -> bool:
+    """
+    Считать ли этот ВЫПОЛНЕННЫЙ вызов повтором предыдущего.
+
+    Повтором считается только вызов с теми же аргументами, который к тому же
+    не принёс новых данных: пустой результат или ошибка. Так под правило не
+    попадают законные повторы — оператор уточнил запрос, память подсказала
+    другое слово, поиск во второй раз нашёл запись.
+    """
+    if not previous or signature != previous:
+        return False
+    return _unproductive(call)
+
+
+def _same_unproductive_call(raw_call: Dict[str, Any],
+                            calls: Sequence[ToolCall], previous: str,
+                            repeats: int) -> bool:
+    """
+    Пора ли остановиться, НЕ выполняя этот вызов.
+
+    Условие ровно одно: следующий вызов — тот же самый, что и предыдущий,
+    предыдущий не принёс данных, и этот повтор был бы уже
+    ``REPEAT_LIMIT``-м по счёту. Тогда инструмент зовётся ровно
+    ``REPEAT_LIMIT`` раз, а не на один больше.
+
+    :param calls: уже выполненные вызовы (результат последнего и решает дело);
+    :param previous: отпечаток последнего выполненного вызова;
+    :param repeats: сколько раз подряд этот вызов повторился без данных.
+    """
+    if not calls or repeats + 1 < REPEAT_LIMIT:
+        return False
+    candidate = ToolCall(
+        name=str(raw_call.get("name") or ""),
+        arguments=dict(raw_call.get("arguments") or {}),
+    )
+    if _call_signature(candidate) != previous:
+        return False
+    return _unproductive(calls[-1])
+
+
+def _unproductive(call: ToolCall) -> bool:
+    """
+    Вызов не принёс новых данных: ошибка, отмена или пустой результат.
+
+    Продуктивный вызов (есть ``data``) повтором не считается никогда:
+    оператор уточнил запрос, память подсказала другое слово — работа идёт.
+    """
+    if call.declined:
+        return True
+    result = call.result
+    if result is None:
+        #: Результата ещё нет — вызов только собирается выполняться.
+        return True
+    if not result.get("ok"):
+        return True
+    return not result.get("data")
+
+
+def _signature_tool(signature: str) -> str:
+    """Человеческое название инструмента из отпечатка (часть до «|»)."""
+    name = str(signature or "").split("|", 1)[0].strip()
+    return name.replace("_", " ")
 
 
 def _steps_word(number: int) -> str:
@@ -731,6 +1036,12 @@ def _brief(data: Any, limit: int = 160) -> str:
     Правила: список — количеством, словарь — счётчиками и короткими
     значениями, вложенные структуры — количеством, а не свалкой ключей.
     Строка обрезается: служебный ответ не место для полотна.
+
+    Ключи с подчёркиваниями (``contract_type``, ``filled_count``) и поля
+    интерфейса (``window``, ``tabs``) пропускаются: это имена из кода, и
+    оператору они ничего не объясняют (задание: убрать технические ID).
+    Так же пропускаются значения, похожие на код (``perevozka``): если
+    инструмент вернул только их, вызывающий код строку не добавляет.
     """
     if isinstance(data, list):
         return f"найдено {len(data)}" if data else "ничего не найдено"
@@ -739,6 +1050,8 @@ def _brief(data: Any, limit: int = 160) -> str:
             return "пусто"
         parts: List[str] = []
         for key, value in data.items():
+            if _technical_key(key):
+                continue
             if isinstance(value, dict):
                 #: Так выглядит состояние формы: важно «сколько заполнено»,
                 #: а не перечень всех полей со значениями.
@@ -758,7 +1071,46 @@ def _brief(data: Any, limit: int = 160) -> str:
         return "; ".join(parts) or "пусто"
     text = "" if data is None else str(data)
     text = " ".join(text.split())
+    if _technical_key(text):
+        return ""
     return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+#: Поля, которыми инструменты описывают СЕБЯ, а не работу: имя окна, тип
+#: договора, список вкладок. В ответе оператору они не нужны (задание).
+_TECHNICAL_KEYS = frozenset({
+    "window", "tabs", "tab", "contract_type", "type", "key", "contract_key",
+})
+
+#: Служебные имена полей, которые оператору ПОНЯТНЫ: «сколько нашлось»,
+#: «по какому запросу». Они состоят из строчных букв, но техническими не
+#: считаются — иначе из ответа пропало бы самое полезное.
+_SERVICE_KEYS = frozenset({
+    "count", "total", "found", "query", "name", "title", "result", "results",
+    "status", "ok", "error", "note", "hint", "date", "sum", "amount", "items",
+})
+
+
+def _technical_key(key: Any) -> bool:
+    """
+    Похоже ли на технический идентификатор: ``window``, ``contract_type``,
+    ``filled_count``, ``perevozka``.
+
+    Признак: короткое слово из строчных латинских букв с подчёркиваниями
+    (так пишут имена в коде) либо поле из списка ``_TECHNICAL_KEYS``.
+    Человеческие данные («Ромашка», «г. Москва, Ленина 5», «поля формы»)
+    под правило не попадают: там есть заглавные буквы, пробелы, цифры,
+    точки и запятые. Служебные имена из ``_SERVICE_KEYS`` остаются.
+    """
+    text = " ".join(str(key or "").split())
+    if not text or len(text) > 27:
+        return False
+    folded = text.casefold()
+    if folded in _TECHNICAL_KEYS:
+        return True
+    if folded in _SERVICE_KEYS:
+        return False
+    return text.isascii() and text.islower() and text.replace("_", "").isalpha()
 
 
 def _short_value(value: Any, limit: int = 60) -> str:
@@ -786,7 +1138,11 @@ def _cap(text: str, limit: int) -> str:
 
 
 __all__ = [
+    "ANSWER_LIMIT_AFTER_LIMIT",
+    "DEFAULT_MAX_REQUEST_SECONDS",
     "DEFAULT_MAX_TOOL_STEPS",
+    "HELP_CHOICES",
+    "REPEAT_LIMIT",
     "Agent",
     "AgentReply",
     "ToolCall",
