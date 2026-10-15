@@ -78,6 +78,24 @@ FILL_PREVIEW_TOOL = "parse_and_fill"
 #: только чтобы закрытая панель не подвесила агента навсегда.
 CONFIRM_WAIT_SECONDS = 1800.0
 
+#: Сколько рабочий поток ждёт выполнения инструмента в потоке интерфейса.
+#: Внутри бывают и сетевые проверки (DaData), поэтому запас большой.
+GUI_CALL_WAIT_SECONDS = 300.0
+
+#: Инструменты, которые ТРОГАЮТ ФОРМУ — то есть виджеты. Их вызов обязан
+#: идти в потоке интерфейса: агент работает в рабочем потоке, а виджет,
+#: созданный или изменённый из чужого потока, Qt роняет вместе с программой
+#: («Cannot create children for a parent that is in a different thread»,
+#: «Cannot set parent, new parent is in a different thread»). Проверено
+#: стресс-тестом 15.10.2026: прогон умирал на автозаполнении (№83).
+GUI_TOOLS = (
+    "get_current_form", "get_form_state", "get_open_tabs", "get_current_window",
+    "get_selected_row", "get_recent_actions", "validate_current_form",
+    "check_required", "fill_field", "fill_from_entity", "fill_entity_fields",
+    "parse_and_fill", "apply_recognized_fields", "suggest_next_field",
+    "suggest_from_history", "warn_expiring", "diagnose",
+)
+
 
 class _PendingConfirmation:
     """
@@ -110,6 +128,90 @@ class _PendingConfirmation:
     def wait(self, timeout: float) -> bool:
         """Рабочий поток ждёт ответа (True — ответ пришёл)."""
         return bool(self.event.wait(timeout))
+
+
+class _PendingGuiCall:
+    """
+    Вызов инструмента, который рабочий поток передал интерфейсу.
+
+    Устроен как ``_PendingConfirmation``: рабочий ждёт на ``threading.Event``,
+    поток интерфейса выполняет вызов и кладёт результат (или исключение).
+    """
+
+    __slots__ = ("function", "arguments", "event", "result", "error")
+
+    def __init__(self, function: Any, arguments: Dict[str, Any]):
+        import threading
+
+        self.function = function
+        self.arguments = arguments
+        self.event = threading.Event()
+        self.result: Any = None
+        self.error: Optional[BaseException] = None
+
+    def finish(self, result: Any) -> None:
+        """Поток интерфейса кладёт результат и будит рабочего."""
+        self.result = result
+        self.event.set()
+
+    def fail(self, error: BaseException) -> None:
+        """Поток интерфейса кладёт ошибку и будит рабочего."""
+        self.error = error
+        self.event.set()
+
+    def wait(self, timeout: float) -> bool:
+        return bool(self.event.wait(timeout))
+
+
+class _GuiTool:
+    """
+    Инструмент, который выполняется в ПОТОКЕ ИНТЕРФЕЙСА.
+
+    Обёртка вместо правки самих инструментов: `core/agent/tools.py` про Qt не
+    знает и знать не должен, а решение «этот инструмент трогает виджеты»
+    принимает интерфейс (см. ``GUI_TOOLS``).
+    """
+
+    def __init__(self, widget: "AgentWidget", name: str, function: Any):
+        self.widget = widget
+        self.name = name
+        self.function = function
+
+    def __call__(self, **arguments: Any) -> Any:
+        return run_in_gui_thread(self.widget, self.function, arguments)
+
+    def __repr__(self) -> str:  # pragma: no cover — для отладки
+        return f"<GuiTool {self.name}>"
+
+
+def run_in_gui_thread(widget: Any, function: Any,
+                      arguments: Dict[str, Any]) -> Any:
+    """
+    Выполняет функцию в потоке интерфейса и возвращает её результат.
+
+    Из потока интерфейса функция вызывается сразу. Из рабочего (там работает
+    агент) — передаётся сигналом ``gui_call_requested``; рабочий ЖДЁТ, пока
+    главный поток её выполнит, и получает результат или исключение.
+
+    :raises RuntimeError: если поток интерфейса не ответил за отведённое
+        время (окно закрыто) — инструмент сообщит об этом модели, а не
+        подвесит программу навсегда.
+    """
+    if widget.is_gui_thread():
+        return function(**arguments)
+
+    pending = _PendingGuiCall(function, arguments)
+    widget._gui_call = pending
+    widget.gui_call_requested.emit()
+    if not pending.wait(GUI_CALL_WAIT_SECONDS):
+        widget._gui_call = None
+        raise RuntimeError(
+            "интерфейс не ответил на вызов инструмента за "
+            f"{GUI_CALL_WAIT_SECONDS:.0f} с"
+        )
+    if pending.error is not None:
+        raise pending.error
+    return pending.result
 
 
 def ask_in_gui_thread(widget: Any, tool: Tool,
@@ -812,6 +914,10 @@ class AgentWidget(QObject):
     #: потоке, диалог строится в главном — см. ask_in_gui_thread).
     confirmation_requested = pyqtSignal()
 
+    #: Просьба выполнить инструмент, который трогает форму (виджеты можно
+    #: менять только в потоке интерфейса — см. run_in_gui_thread).
+    gui_call_requested = pyqtSignal()
+
     def __init__(self, window: QWidget,
                  client_factory: Optional[Callable[[], Any]] = None,
                  auto_confirm: Optional[bool] = None):
@@ -822,6 +928,12 @@ class AgentWidget(QObject):
         #: Ответ за оператора в диалоге подтверждения (None — спросить).
         #: Нужно пробам и скриншотам: они идут без живого оператора.
         self.auto_confirm = auto_confirm
+        #: Опознавательный знак потока интерфейса. Сравнение именно по
+        #: ``threading.get_ident()``: обёртки QThread у PyQt сравнивать
+        #: ненадёжно, а виджет ВСЕГДА создаётся в потоке интерфейса.
+        import threading
+
+        self._gui_thread_id = threading.get_ident()
 
         #: Подписка на шаги агента — здесь, а не в _ensure_panel: сигнал
         #: должен быть связан ДО первого запроса, иначе первые шаги пропали
@@ -831,6 +943,10 @@ class AgentWidget(QObject):
         #: главный поток (см. on_confirmation_requested).
         self._confirmation: Optional[_PendingConfirmation] = None
         self.confirmation_requested.connect(self.on_confirmation_requested)
+        #: Вызов инструмента формы из рабочего потока: выполняет главный
+        #: поток (см. on_gui_call_requested).
+        self._gui_call: Optional[_PendingGuiCall] = None
+        self.gui_call_requested.connect(self.on_gui_call_requested)
 
         self.panel: Optional[AgentPanel] = None
         self.icon_button: Optional[AgentIconButton] = None
@@ -1104,7 +1220,39 @@ class AgentWidget(QObject):
             max_tool_steps=max_tool_steps,
             max_history=max_history,
         )
+        self._route_gui_tools(agent)
         return agent
+
+    def is_gui_thread(self) -> bool:
+        """Мы в потоке интерфейса? (по нему решается, звать ли сигнал)."""
+        import threading
+
+        return threading.get_ident() == self._gui_thread_id
+
+    def _route_gui_tools(self, agent: Agent) -> int:
+        """
+        Переводит инструменты формы на выполнение в потоке интерфейса.
+
+        Агент работает в рабочем потоке, а инструменты вида ``get_form_state``
+        и ``parse_and_fill`` читают и меняют ВИДЖЕТЫ формы. Qt такое не
+        прощает: в консоли появлялись «Cannot set parent, new parent is in a
+        different thread», «installEventFilter(): Cannot filter events for
+        objects in a different thread», а затем программа падала
+        («Cannot create children for a parent that is in a different thread»).
+        Стресс-тест 15.10.2026 умирал на третьем запросе автозаполнения.
+
+        :return: сколько инструментов переведено (для журнала и тестов).
+        """
+        routed = 0
+        for name in GUI_TOOLS:
+            tool = agent.registry.get(name)
+            if tool is None or isinstance(tool.function, _GuiTool):
+                continue
+            tool.function = _GuiTool(self, name, tool.function)
+            routed += 1
+        if routed:
+            logger.info("Инструментов формы в потоке интерфейса: %s", routed)
+        return routed
 
     def _client(self) -> Any:
         """Клиент GigaChat для агента (создаётся при первом запросе)."""
@@ -1294,6 +1442,26 @@ class AgentWidget(QObject):
         finally:
             self._confirmation = None
         pending.answer_with(answer)
+
+    @pyqtSlot()
+    def on_gui_call_requested(self) -> None:
+        """
+        Выполняет инструмент формы, который просит рабочий поток.
+
+        Слот вызывается в потоке интерфейса: только здесь можно читать и
+        менять виджеты формы. Результат (или исключение) уходит рабочему
+        потоку через ``_PendingGuiCall``.
+        """
+        pending = self._gui_call
+        if pending is None:
+            return
+        try:
+            pending.finish(pending.function(**pending.arguments))
+        except Exception as e:  # noqa: BLE001 — ошибку увидит модель
+            logger.exception("Инструмент в потоке интерфейса упал")
+            pending.fail(e)
+        finally:
+            self._gui_call = None
 
     # ---------------------------------------------------------
     # Подсказки без вопроса (задание, часть 4)
