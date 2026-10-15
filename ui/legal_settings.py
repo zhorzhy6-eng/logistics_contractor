@@ -42,10 +42,10 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
-from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import (
-    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
-    QSpinBox, QVBoxLayout, QWidget,
+    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget, QMessageBox,
+    QProgressBar, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from core.legal_parser import LegalParser, human_size
@@ -277,22 +277,48 @@ class LegalSettingsSection(QGroupBox):
         outer.addLayout(form)
 
         buttons = QHBoxLayout()
-        download_button = theme.secondary_button(
-            "Скачать правовую базу", "Открыть диалог загрузки документов с pravo.gov.ru")
-        download_button.clicked.connect(self.open_download_dialog)
-        buttons.addWidget(download_button)
+        self.update_all_button = theme.secondary_button(
+            "Обновить всё",
+            "Скачать все категории правовой базы с pravo.gov.ru и обновить индекс")
+        self.update_all_button.clicked.connect(self.update_all)
+        buttons.addWidget(self.update_all_button)
 
+        self.download_document_button = theme.secondary_button(
+            "Скачать документ",
+            "Найти акт на портале по названию или номеру и добавить в базу")
+        self.download_document_button.clicked.connect(self.download_document)
+        buttons.addWidget(self.download_document_button)
+
+        self.download_category_button = theme.secondary_button(
+            "Скачать категорию",
+            "Отметить категории и скачать их целиком")
+        self.download_category_button.clicked.connect(self.download_category)
+        buttons.addWidget(self.download_category_button)
+
+        buttons.addStretch(1)
+        outer.addLayout(buttons)
+
+        buttons2 = QHBoxLayout()
         self.index_button = theme.primary_button(
             "Индексировать правовую базу", "Собрать RAG-индекс по скачанным документам")
         self.index_button.clicked.connect(self.index_documents)
-        buttons.addWidget(self.index_button)
+        buttons2.addWidget(self.index_button)
 
         self.reindex_button = theme.secondary_button(
             "Переиндексировать", "Удалить индекс и собрать его заново")
         self.reindex_button.clicked.connect(self.reindex_documents)
-        buttons.addWidget(self.reindex_button)
-        buttons.addStretch(1)
-        outer.addLayout(buttons)
+        buttons2.addWidget(self.reindex_button)
+        buttons2.addStretch(1)
+        outer.addLayout(buttons2)
+
+        documents_title = QLabel("Скачанные документы:")
+        outer.addWidget(documents_title)
+        self.documents_list = QListWidget()
+        self.documents_list.setObjectName("legalDocumentsList")
+        self.documents_list.setMaximumHeight(140)
+        self.documents_list.setToolTip(
+            "Документы правовой базы: сколько места занимает каждый акт")
+        outer.addWidget(self.documents_list)
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
@@ -323,6 +349,7 @@ class LegalSettingsSection(QGroupBox):
             f"последняя проверка: {data['last_check'] or '—'}<br>"
             f"RAG-индекс: {index_info}"
         )
+        self._fill_documents()
 
     def _index_stats(self) -> str:
         """Строка о состоянии RAG-индекса (пустая база — не ошибка)."""
@@ -344,6 +371,39 @@ class LegalSettingsSection(QGroupBox):
 
     # ── действия ──
 
+    def _fill_documents(self) -> None:
+        """
+        Показывает список скачанных документов (что уже есть в базе).
+
+        Список нужен оператору рядом с кнопками загрузки: видно, что уже
+        скачано, сколько места занимает и когда обновлялось.
+        """
+        self.documents_list.clear()
+        try:
+            rows = self.parser.documents(only_downloaded=True, limit=200)
+        except Exception as e:  # noqa: BLE001 — база может быть занята
+            logger.debug(f"Правовая база: список документов недоступен: {e}")
+            self.documents_list.addItem("Список недоступен — база занята")
+            return
+
+        if not rows:
+            self.documents_list.addItem(
+                "Пока ничего не скачано — нажмите «Обновить всё»"
+            )
+            return
+
+        for row in rows:
+            title = str(row.get("short_title") or row.get("title") or row["id"])
+            size = row.get("original_bytes") or 0
+            parts = [title]
+            if row.get("number"):
+                parts.append(str(row["number"]))
+            if row.get("downloaded_at"):
+                parts.append(f"скачан {str(row['downloaded_at'])[:10]}")
+            if size:
+                parts.append(human_size(int(size)))
+            self.documents_list.addItem(" · ".join(parts))
+
     def open_download_dialog(self) -> None:
         """Открывает диалог «Правовая база» и обновляет подписи после него."""
         from ui.legal_base_dialog import LegalBaseDialog
@@ -351,6 +411,42 @@ class LegalSettingsSection(QGroupBox):
         dialog = LegalBaseDialog(parent=self.window(), parser=self.parser)
         dialog.exec_()
         self.refresh()
+
+    def _open_dialog_with(self, action: str) -> None:
+        """
+        Открывает диалог «Правовая база» и сразу запускает в нём действие.
+
+        Кнопки раздела [Обновить всё], [Скачать документ] и [Скачать
+        категорию] ведут в тот же диалог: там поле ввода, чек-боксы
+        категорий, таблица документов и отчёт о загрузке. Дублировать эту
+        логику в настройках незачем — но оператору удобно попадать сразу в
+        нужное место, поэтому нужная кнопка нажимается сама.
+
+        :param action: имя метода диалога («download_all»,
+            «download_categories», «download_document»).
+        """
+        from ui.legal_base_dialog import LegalBaseDialog
+
+        dialog = LegalBaseDialog(parent=self.window(), parser=self.parser)
+        #: Действие запускается после показа окна: диалог стартует поток, и
+        #: делать это до появления окна нельзя — оператор не увидит прогресс.
+        trigger = getattr(dialog, action, None)
+        if callable(trigger):
+            QTimer.singleShot(0, trigger)
+        dialog.exec_()
+        self.refresh()
+
+    def update_all(self) -> None:
+        """[Обновить всё]: скачать все категории правовой базы."""
+        self._open_dialog_with("download_all")
+
+    def download_document(self) -> None:
+        """[Скачать документ]: открыть диалог с полем ввода названия акта."""
+        self._open_dialog_with("download_document")
+
+    def download_category(self) -> None:
+        """[Скачать категорию]: открыть диалог с чек-боксами категорий."""
+        self._open_dialog_with("download_categories")
 
     def index_documents(self) -> None:
         """Запускает индексацию (без пересборки)."""

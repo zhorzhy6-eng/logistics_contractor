@@ -260,6 +260,14 @@ class AgentSettingsDialog(QDialog):
         # ── Что Максимилиан помнит (часть 5) ──
         content_layout.addWidget(self._build_memory_group())
 
+        # ── Правовая база (RAG + pravo.gov.ru) ──
+        # Готовый виджет из ui/legal_settings.py: объём базы, дата
+        # последнего обновления, список скачанных документов, кнопки
+        # [Обновить всё] / [Скачать документ] / [Скачать категорию] и
+        # индексация. Тот же раздел, что и в окне правовой базы — одной
+        # строкой, без дублирования логики.
+        content_layout.addWidget(self._build_legal_group())
+
         # ── Подсказка про возможности v1 ──
         abilities = QLabel(
             "💡 Максимилиан умеет: объяснять поля, искать в справочниках, "
@@ -382,6 +390,43 @@ class AgentSettingsDialog(QDialog):
         #: выглядит «пустым»; гасим для единообразия.
         self.name_label.setEnabled(enabled)
         logger.debug("Настройки Максимилиана: поля активны=%s", enabled)
+
+    # ---------------------------------------------------------
+    # Правовая база (задание, часть 3, пункт C)
+    # ---------------------------------------------------------
+    def _build_legal_group(self) -> QGroupBox:
+        """
+        Раздел «Правовая база»: объём, список документов и загрузка.
+
+        Виджет берётся готовым из ``ui/legal_settings.py``
+        (``LegalSettingsSection``): там объём базы, дата последнего
+        обновления, размер индекса, список скачанных документов и кнопки
+        [Обновить всё], [Скачать документ], [Скачать категорию],
+        [Индексировать], [Переиндексировать]. Здесь он только создаётся —
+        дублировать логику загрузки и индексации нельзя.
+
+        Ошибка создания раздела не должна ломать окно настроек: без
+        правовой базы Максимилиан работает, а настройки нужны всегда.
+        """
+        try:
+            from ui.legal_settings import LegalSettingsSection
+
+            self.legal_section = LegalSettingsSection(parent=self)
+            return self.legal_section
+        except Exception as e:  # noqa: BLE001 — раздел не должен ронять настройки
+            logger.exception("Раздел «Правовая база» не создан")
+            group = QGroupBox("Правовая база")
+            layout = QVBoxLayout(group)
+            label = QLabel(
+                f"Раздел недоступен: {type(e).__name__}. "
+                f"Правовая база лежит в отдельном окне "
+                f"(«Справка → Правовая база»)."
+            )
+            label.setObjectName("mutedLabel")
+            label.setWordWrap(True)
+            layout.addWidget(label)
+            self.legal_section = None
+            return group
 
     # ---------------------------------------------------------
     # Что Максимилиан помнит (часть 5)
