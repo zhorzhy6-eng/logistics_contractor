@@ -286,26 +286,44 @@ class AgentMemory:
         отбрасывается: ответ ассистента с вызовами инструментов без
         результатов этих вызовов GigaChat не принимает, а обрыв случается
         штатно — например, оператор закрыл программу посреди ответа.
+
+        Начало блока инструментов хранится ДВАЖДЫ, и это не дублирование:
+
+          * ``block_start`` — место в СПИСКЕ ЗАПРОСА (``wire``): по нему
+            блок вырезается;
+          * ``block_assistant`` — САМО сообщение ассистента: по нему
+            проверяется, все ли вызовы получили ответ.
+
+        Раньше для проверки бралось ``self._messages[block_start]`` — то
+        есть индекс из запроса применялся к истории. Списки не совпадают
+        (системный промпт добавляет элемент, «висячие» результаты
+        инструментов пропускаются), поэтому проверялось ЧУЖОЕ сообщение:
+        незакрытый блок оставался в запросе и следующий запрос оператора
+        отвергался вместе с ним. Нашлось перебором историй
+        (tests/test_agent_memory_wire.py).
         """
         wire: List[Dict[str, Any]] = []
         if system_prompt:
             wire.append({"role": "system", "content": system_prompt})
 
-        # Начало незавершённого блока: ответ ассистента с вызовами и ответы
-        # инструментов на них. Если блок не закрылся — он в запрос не идёт.
+        #: Начало незавершённого блока: ответ ассистента с вызовами и ответы
+        #: инструментов на них. Если блок не закрылся — он в запрос не идёт.
         block_start: Optional[int] = None
+        block_assistant: Optional[Message] = None
         answered: set = set()
 
         for message in self._messages:
-            if block_start is not None and message.role != "tool":
+            if block_assistant is not None and message.role != "tool":
                 # Блок закрылся: все вызовы получили ответы (иначе — выбросить).
-                if not self._all_answered(self._messages[block_start], answered):
+                if not self._all_answered(block_assistant, answered):
                     del wire[block_start:]
                 block_start = None
+                block_assistant = None
                 answered = set()
 
             if message.role == "assistant" and message.tool_calls:
                 block_start = len(wire)
+                block_assistant = message
                 answered = set()
             elif message.role == "tool" and block_start is None:
                 # Результат инструмента без своего вызова: так выглядит
@@ -317,8 +335,8 @@ class AgentMemory:
 
             wire.append(message.wire())
 
-        if block_start is not None and not self._all_answered(
-            self._messages[-1], answered
+        if block_assistant is not None and not self._all_answered(
+            block_assistant, answered
         ):
             del wire[block_start:]
         return wire
