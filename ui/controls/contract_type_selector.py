@@ -17,7 +17,7 @@ from typing import Optional
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QComboBox, QHBoxLayout, QLabel, QWidget
 
-from core.contracts.picker_order import PICKER_ORDER
+from core.contracts.picker_order import picker_items
 
 logger = logging.getLogger("ui.controls.contract_type_selector")
 
@@ -40,8 +40,10 @@ class ContractTypeSelector(QWidget):
         self.combo = QComboBox()
         self.combo.setObjectName("contractTypeCombo")
         # data пункта — ключ ContractType: логика переключения не зависит
-        # от того, как пункт называется в интерфейсе.
-        for key, title in PICKER_ORDER:
+        # от того, как пункт называется в интерфейсе. Показываются только
+        # зарегистрированные типы: клиентские типы живут в приватной части
+        # проекта (см. core/contracts/picker_order.py::picker_items).
+        for key, title in picker_items():
             self.combo.addItem(title, key)
         self.set_current_type(current_type)
 

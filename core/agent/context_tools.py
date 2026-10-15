@@ -26,13 +26,18 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger("core.agent.context_tools")
 
 #: Заголовки, которыми подписываются окна типов, если у окна нет своего.
+#: Публичный тип известен ядру; названия клиентских типов лежат в приватной
+#: части проекта и подмешиваются ниже (нет приватной папки — их просто нет).
 TYPE_TITLES: Dict[str, str] = {
     "perevozka": "Экспедиторство",
-    "arenda_ts": "клиентский тип D ТС",
-    "logistiks_rus": "клиентский тип B",
-    "formika": "клиентский тип A",
-    "zayavka_excel": "клиентский тип C (заявка)",
 }
+
+try:  # приватная часть проекта: названия клиентских типов
+    from core.agent.labels import TYPE_TITLES as _PRIVATE_TYPE_TITLES
+except ImportError:  # режим ядра
+    _PRIVATE_TYPE_TITLES = {}
+
+TYPE_TITLES.update(_PRIVATE_TYPE_TITLES)
 
 #: Русские названия разделов формы (те же, что в подсказках инструментов).
 SECTION_TITLES: Dict[str, str] = {

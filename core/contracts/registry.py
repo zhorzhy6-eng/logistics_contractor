@@ -90,13 +90,29 @@ def register_contract_type(
 
 #: Встроенные типы, которые реестр подгружает при старте. Наполняется по
 #: мере появления типов: шаг 2 — perevozka, шаг 8 — заглушки остальных,
-#: шаг 1 инфраструктуры типов договоров (UI) — formika и logistiks_rus.
+#: шаг 1 инфраструктуры типов договоров (UI) — клиентские типы.
+#:
+#: Публичными остаются два модуля: ``perevozka`` (рабочий тип) и
+#: ``expediciya`` (служебный). Остальные пакеты живут в приватной части
+#: проекта: их находит ``__path__`` пакета ``core.contracts``, расширенный
+#: вызовом ``core.private_path.attach_private_root()`` (main.py,
+#: tests/conftest.py). Приватной части нет — импорт падает в изоляции,
+#: модуль попадает в ``failures()``, а приложение работает в режиме ядра.
 BUILTIN_TYPE_MODULES: Tuple[str, ...] = (
     "core.contracts.perevozka",
     "core.contracts.formika",
     "core.contracts.logistiks_rus",
     "core.contracts.arenda_ts",
     "core.contracts.expediciya",
+    "core.contracts.zayavka",
+)
+
+#: Модули, отсутствие которых НЕ считается сбоем загрузки: они лежат
+#: в приватной части проекта и могут быть не установлены.
+OPTIONAL_TYPE_MODULES: Tuple[str, ...] = (
+    "core.contracts.formika",
+    "core.contracts.logistiks_rus",
+    "core.contracts.arenda_ts",
     "core.contracts.zayavka",
 )
 
@@ -235,6 +251,13 @@ class ContractTypeRegistry:
         try:
             importlib.import_module(module)
         except Exception as exc:  # noqa: BLE001 — изоляция: тип не должен ронять остальных
+            if cls._is_optional_absent(module, exc):
+                # Клиентский тип не установлен: это режим ядра, а не сбой.
+                logger.info(
+                    f"Клиентский тип не установлен (модуль {module}) — "
+                    f"работаем без него"
+                )
+                return
             cls._failures[module] = f"{type(exc).__name__}: {exc}"
             logger.exception(
                 f"Тип договора не загружен (модуль {module}): "
@@ -242,3 +265,18 @@ class ContractTypeRegistry:
             )
         else:
             cls._failures.pop(module, None)
+
+    @staticmethod
+    def _is_optional_absent(module: str, exc: Exception) -> bool:
+        """
+        «Приватного модуля просто нет» — в отличие от «модуль есть, но сломан».
+
+        Разница принципиальная: первый случай — нормальный режим ядра
+        (приватная часть проекта не установлена), второй обязан быть виден
+        в ``failures()`` и в журнале с трассировкой.
+        """
+        if module not in OPTIONAL_TYPE_MODULES:
+            return False
+        if not isinstance(exc, ModuleNotFoundError):
+            return False
+        return bool(exc.name) and module.startswith(exc.name)

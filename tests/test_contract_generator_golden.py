@@ -21,7 +21,13 @@ from pathlib import Path
 import pytest
 
 from core.contract_generator import ContractGenerator
-from tools.make_golden import GOLDEN_DIR, SCENARIOS, fingerprint, strip_embedded_fonts
+from tools.make_golden import (
+    GOLDEN_DIR,
+    SCENARIOS,
+    fingerprint,
+    strip_embedded_fonts,
+    template_path,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,8 +37,12 @@ def test_golden_document_matches_baseline(scenario, work_dir):
     """
     Сценарий (ООО / ИП с НДС / ИП без НДС / маршрут с «дыркой») даёт
     документ, идентичный эталону шага 0 по структуре и тексту.
+
+    Сценарий описывается тройкой (шаблон, данные, вид генератора): здесь
+    проверяются только публичные сценарии перевозки, но словарь общий с
+    приватной частью проекта — оттуда приходят клиентские сценарии.
     """
-    template_name, payload = SCENARIOS[scenario]
+    template_name, payload = SCENARIOS[scenario][0], SCENARIOS[scenario][1]
 
     expected = json.loads(
         (GOLDEN_DIR / f"{scenario}.json").read_text(encoding="utf-8")
@@ -42,7 +52,7 @@ def test_golden_document_matches_baseline(scenario, work_dir):
     shutil.rmtree(templates_dir, ignore_errors=True)
     templates_dir.mkdir(parents=True, exist_ok=True)
     strip_embedded_fonts(
-        PROJECT_ROOT / "templates" / template_name,
+        template_path(template_name),
         templates_dir / template_name,
     )
 

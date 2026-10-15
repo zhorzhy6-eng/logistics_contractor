@@ -192,11 +192,12 @@ def folder_key_from_form(contract_data: Any) -> Dict[str, Any]:
         и лежат в блоке ``zayavka`` (``driver_last_name``,
         ``loading_city`` / ``unloading_city``, ``date``).
 
-    Нужна затем, что у клиентского типа C выход — .xlsx и ContractData не собирается
-    (см. ui/windows/havaly/data.py), поэтому общая функция имени папки
-    получает от генератора знакомую ей форму. Ключи не выдумываются:
-    водитель складывается из тех полей, что заполнены, маршрут — из городов
-    погрузки и доставки, дата берётся как есть.
+    Нужна затем, что у клиентских Excel-типов выход — .xlsx и ContractData
+    не собирается (см. ui/windows/<тип>/data.py в приватной части проекта),
+    поэтому общая функция имени папки получает от генератора знакомую ей
+    форму. Ключи не выдумываются: водитель складывается из тех полей, что
+    заполнены, маршрут — из городов погрузки и доставки, дата берётся как
+    есть.
     """
     source: Dict[str, Any] = contract_data if isinstance(contract_data, dict) else {}
     if _block_of(contract_data, "driver") or _block_of(contract_data, "contract"):

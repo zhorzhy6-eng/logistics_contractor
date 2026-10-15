@@ -78,64 +78,18 @@ _REQUIRED_BASE: Dict[str, Tuple[Tuple[str, str], ...]] = {
 }
 
 #: Обязательные поля по типам договоров (задание, часть 4: «check_required»).
+#: Публичный тип известен ядру; клиентские типы добавляются ниже из приватной
+#: части проекта (нет приватной папки — их просто нет).
 REQUIRED: Dict[str, Dict[str, Tuple[Tuple[str, str], ...]]] = {
     "perevozka": dict(_REQUIRED_BASE),
-    "arenda_ts": {
-        "lessor_tab": (
-            ("full_name", "наименование арендодателя"),
-            ("inn", "ИНН арендодателя"),
-        ),
-        "lessee_tab": (
-            ("full_name", "наименование арендатора"),
-            ("inn", "ИНН арендатора"),
-        ),
-        "crew_tab": (
-            ("full_name", "ФИО водителя"),
-            ("license_number", "номер водительского удостоверения"),
-        ),
-        "vehicle_tab": (
-            ("brand_model", "марка и модель ТС"),
-            ("plate_number", "госномер ТС"),
-        ),
-        "price_tab": (
-            ("price_with_vat", "стоимость аренды"),
-        ),
-    },
-    "logistiks_rus": {
-        "cargo_tab": (
-            ("brand_model", "марка и модель машины"),
-            ("vin", "VIN машины"),
-        ),
-        "route_tab": (
-            ("loading_address", "адрес погрузки"),
-            ("unloading_address", "адрес выгрузки"),
-        ),
-        "contract_tab": (
-            ("number", "номер договора"),
-            ("date", "дата договора"),
-        ),
-    },
-    "formika": {
-        "cargo_tab": (
-            ("brand_model", "марка и модель машины"),
-            ("vin", "VIN машины"),
-        ),
-        "contract_tab": (
-            ("number", "номер договора"),
-            ("date", "дата договора"),
-        ),
-    },
-    "zayavka_excel": {
-        "cargo_tab": (
-            ("brand_model", "марка и модель машины"),
-            ("vin", "VIN машины"),
-        ),
-        "contract_tab": (
-            ("number", "номер заявки"),
-            ("date", "дата заявки"),
-        ),
-    },
 }
+
+try:  # приватная часть проекта: обязательные поля клиентских типов
+    from core.agent.labels import REQUIRED_EXTRA as _PRIVATE_REQUIRED
+except ImportError:  # режим ядра
+    _PRIVATE_REQUIRED = {}
+
+REQUIRED.update(_PRIVATE_REQUIRED)
 
 #: Порядок заполнения формы: что за чем логично вводить. Порядок общий для
 #: всех типов — он про работу оператора, а не про конкретный бланк.

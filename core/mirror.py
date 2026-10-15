@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Зеркало данных: Экспедиторство → клиентский тип A / клиентский тип B (ШАГ FIX-4).
+Зеркало данных: Экспедиторство → клиентские типы (ШАГ FIX-4).
 
 Зачем это нужно
 ---------------
 Оператор заполняет один и тот же рейс дважды: сначала в «Экспедиторстве»
-(договор с перевозчиком), потом в «клиентском типе A» (приложение к генеральному
-договору) или в «клиентский тип B» (заявка генподрядчику). Списки машин (VIN),
+(договор с перевозчиком), потом в окне клиентского типа (приложение к
+генеральному договору или заявка генподрядчику). Списки машин (VIN),
 адреса погрузок и выгрузок, водитель и автовоз в этих документах совпадают,
 и вводить их второй раз — потеря времени.
 
@@ -17,29 +17,34 @@
   1. **собрать источник** — данные вкладок MainWindow (Экспедиторство)
      в словарь по разделам (collect_source);
   2. **построить план переноса** — что и куда кладём, по картам соответствия
-     (plan_for_formika / plan_for_logistiks);
+     (карты живут в приватной части проекта, см. TARGETS_MODULE);
   3. **найти конфликты** — что в целевом окне уже заполнено и отличается
      (collect_conflicts).
 
 Нажатие кнопки, диалог конфликтов и раскладка по вкладкам живут в
 ui/windows/base_window.py: ядро не знает ни про кнопки, ни про QMessageBox.
 
+Карты целевых типов — приватная часть
+-------------------------------------
+Движок не знает ни одного клиентского ключа: какие типы принимают зеркало
+и что именно в них переносится, описано в модуле ``core.mirror_targets``
+(приватная папка проекта). Он ищется лениво при первом обращении
+(``supported_targets()``, ``target_profiles()``); нет модуля — зеркало
+просто не находит целей, и Экспедиторство продолжает работать.
+
 Что НЕ переносится (осознанно)
 ------------------------------
   * **стоимость** — price_input / price_without_vat / price_with_vat /
     vat_rate / vat_rate_num / payment_days. У каждого типа свой порядок
-    расчёта и своя ставка НДС: у клиентского типа A сумма считается от итога, у
-    клиента B вариант бланка зависит от типа экспедитора. Перенесённая
-    сумма «как было» разошлась бы с бланком молча;
-  * **реквизиты сторон** — customer / carrier. В клиентском типе A и клиенте B
-    стороны ФИКСИРОВАНЫ бланком (ООО «клиентский тип A», ООО «ЗАКАЗЧИК»,
-    ООО «клиентского типа B»): переносить туда
-    заказчика экспедиторского договора значило бы напечатать в документе
-    чужую сторону;
+    расчёта и своя ставка НДС: перенесённая сумма «как было» разошлась бы
+    с бланком молча;
+  * **реквизиты сторон** — customer / carrier. В бланках клиентских типов
+    стороны ФИКСИРОВАНЫ, поэтому переносить туда заказчика экспедиторского
+    договора значило бы напечатать в документе чужую сторону;
   * **особые условия** — special_conditions: они относятся к конкретному
     договору, а не к рейсу.
 
-Обратное зеркало (клиентский тип A / клиента B → Экспедиторство) в этом шаге НЕ
+Обратное зеркало (клиентский тип → Экспедиторство) в этом шаге НЕ
 делается: источник пока только Экспедиторство (SOURCE_TYPE).
 
 Границы модуля
@@ -51,6 +56,7 @@ ui/windows/base_window.py: ядро не знает ни про кнопки, н
 количества (AGENTS.md § 3.3).
 """
 
+import importlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -60,8 +66,9 @@ logger = logging.getLogger("core.mirror")
 #: Источник — пока только Экспедиторство.
 SOURCE_TYPE = "perevozka"
 
-#: Целевые типы, поддерживающие зеркало.
-SUPPORTED_TARGETS = {"formika", "logistiks_rus"}
+#: Модуль с картами целевых типов (приватная часть проекта).
+#: Здесь только имя: сам импорт — ленивый, внутри ``_load_targets()``.
+TARGETS_MODULE = "core.mirror_targets"
 
 #: Человекочитаемые названия разделов источника — для сообщений в логе.
 SOURCE_SECTIONS: Dict[str, str] = {
@@ -73,6 +80,12 @@ SOURCE_SECTIONS: Dict[str, str] = {
     "trailer": "полуприцеп",
     "contract": "условия договора",
 }
+
+#: Найдённый модуль карт (None — ещё не искали; False — искали и не нашли).
+_targets_module: Any = None
+
+#: Причина, по которой карт нет (для сообщений инструменту и в лог).
+_targets_error: str = ""
 
 
 @dataclass
@@ -95,9 +108,9 @@ class FieldProfile:
     Как сравнивать значение поля цели с тем, что несёт план.
 
     Простое равенство тут не работает: целевые вкладки отдают данные своими
-    ключами и своими структурами — адреса погрузки клиента B приходят
+    ключами и своими структурами — адреса погрузки одной цели приходят
     списком строк, грузополучатели — списком словарей {name, address},
-    машины клиентского типа A — списком словарей {brand_model, vin}. Поэтому у поля
+    машины другой — списком словарей {brand_model, vin}. Поэтому у поля
     есть профиль: для списков — по каким вложенным ключам сравнивать.
 
     :param keys: ключи вложенных словарей (пусто — поле сравнивается как есть).
@@ -122,21 +135,6 @@ class FieldProfile:
         return (text(value),)
 
 
-#: Профили сравнения по вкладкам цели: ключ вкладки → поле → профиль.
-#: Поля, которых здесь нет, сравниваются как обычный текст.
-TARGET_PROFILES: Dict[str, Dict[str, FieldProfile]] = {
-    "formika": {
-        "cargo_tab": {"vehicles": FieldProfile(("brand_model", "vin"))},
-    },
-    "logistiks_rus": {
-        "cargo_tab": {"vehicles": FieldProfile(("brand_model", "vin"))},
-        "route_tab": {
-            "loading_addresses": FieldProfile(),
-            "consignees": FieldProfile(("name", "address")),
-        },
-    },
-}
-
 #: Порядок вкладок в плане: по нему же идёт раскладка по вкладкам окна.
 TAB_ORDER: Tuple[str, ...] = (
     "customer_tab",
@@ -146,6 +144,98 @@ TAB_ORDER: Tuple[str, ...] = (
     "vehicle_tab",
     "price_tab",
 )
+
+
+# ─────────────────────────────────────────────────────────────
+# Карты целевых типов (приватная часть проекта)
+# ─────────────────────────────────────────────────────────────
+
+def _load_targets():
+    """
+    Модуль с картами целевых типов или False, если его нет.
+
+    Карты (какие типы принимают зеркало, что и куда переносится) лежат
+    в приватной части проекта: состав вкладок клиентских типов —
+    коммерческая информация. Здесь остаётся движок: он одинаков для всех
+    целей и не знает ни одного клиентского ключа.
+
+    Импорт ленивый и запоминается: модуль подключается ровно один раз,
+    а его отсутствие — нормальный режим ядра, а не ошибка.
+    """
+    global _targets_module, _targets_error
+
+    if _targets_module is not None:
+        return _targets_module
+
+    try:
+        _targets_module = importlib.import_module(TARGETS_MODULE)
+    except Exception as exc:  # noqa: BLE001 — без карт зеркало просто недоступно
+        _targets_module = False
+        _targets_error = f"{type(exc).__name__}: {exc}"
+        logger.info(
+            "Зеркало: карты целевых типов недоступны (%s) — переносить некуда",
+            _targets_error,
+        )
+
+    return _targets_module
+
+
+def supported_targets() -> frozenset:
+    """
+    Целевые типы, поддерживающие зеркало.
+
+    Пустое множество — приватной части нет: зеркалить некуда, и кнопка
+    зеркала сообщает об этом, а не падает.
+    """
+    module = _load_targets()
+    if not module:
+        return frozenset()
+    return frozenset(getattr(module, "SUPPORTED_TARGETS", ()) or ())
+
+
+def target_profiles() -> Mapping[str, Mapping[str, "FieldProfile"]]:
+    """Карты сравнения полей цели (пусто — если карт нет)."""
+    module = _load_targets()
+    if not module:
+        return {}
+    return getattr(module, "TARGET_PROFILES", {}) or {}
+
+
+def targets_error() -> str:
+    """Почему карт нет (пустая строка — карты есть или ещё не искали)."""
+    return _targets_error
+
+
+def _plan_builder(target_type: str) -> Optional[Any]:
+    """Функция «источник → план» для целевого типа (None — типа нет)."""
+    module = _load_targets()
+    if not module:
+        return None
+    builders = getattr(module, "PLAN_BUILDERS", {}) or {}
+    return builders.get(str(target_type))
+
+
+def __getattr__(name: str):
+    """
+    Совместимость имён модуля: ``from core.mirror import SUPPORTED_TARGETS``.
+
+    ``SUPPORTED_TARGETS`` и ``TARGET_PROFILES`` теперь живут в приватном
+    модуле карт, а функции планов (``plan_for_<тип>`` и подобные) — там же,
+    под своими именами. Старые вызовы (в том числе тесты приватной части)
+    обязаны работать, поэтому неизвестное имя модуля разрешается здесь:
+    сначала два словаря движка, затем атрибут приватного модуля.
+    """
+    if name == "SUPPORTED_TARGETS":
+        return supported_targets()
+    if name == "TARGET_PROFILES":
+        return target_profiles()
+
+    module = _load_targets()
+    if module is not None and hasattr(module, name):
+        return getattr(module, name)
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 
 # ─────────────────────────────────────────────────────────────
@@ -386,11 +476,12 @@ def _drop_empty(data: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────
-# Карта: Экспедиторство → клиентский тип A
+# Поля водителя (общие для источника и целей)
 # ─────────────────────────────────────────────────────────────
 
-#: Поля водителя: у клиентского типа A те же ключи, что у вкладки Экспедиторства
-#: (ui/tabs/driver_tab.py и ui/windows/formika/tabs/driver_tab.py).
+#: Поля водителя: у целевых вкладок те же ключи, что у вкладки
+#: Экспедиторства (ui/tabs/driver_tab.py). Карты целей берут этот
+#: список из движка, чтобы ключи не разъезжались между типами.
 DRIVER_FIELDS: Tuple[str, ...] = (
     "full_name",
     "birth_date",
@@ -420,7 +511,7 @@ def carrier_id(value: Any) -> Any:
     с id, а не со строкой.
 
     Переносится именно ССЫЛКА на перевозчика, а не его реквизиты: стороны
-    договора зеркало не переносит (в бланках клиентского типа A и клиента B они
+    договора зеркало не переносит (в бланках клиентских типов стороны
     фиксированы), а привязка водителя — часть карточки водителя.
     """
     if value is None or isinstance(value, bool):
@@ -442,9 +533,9 @@ def _keep_target_carrier(plan: MirrorPlan, target_window: Any) -> None:
     его нельзя. Пустое значение цели конфликтом не считается — заполнить
     пустое поле можно молча (как и у остальных полей плана).
 
-    Вкладка цели, которая такого поля не отдаёт вовсе (у клиентского типа A
-    и клиента B в форме водителя его нет), ничего не перезапишет: ключ
-    просто не найдётся в её данных. Проверка на это и опирается.
+    Вкладка цели, которая такого поля не отдаёт вовсе (в форме водителя
+    клиентских типов его нет), ничего не перезапишет: ключ просто
+    не найдётся в её данных. Проверка на это и опирается.
     """
     fields = plan.tabs.get("driver_tab")
     if not fields or "default_carrier_id" not in fields:
@@ -477,8 +568,8 @@ def _vehicle_rows(vehicles: Any, keys: Iterable[str]) -> List[Dict[str, str]]:
     Машины источника строками целевой вкладки.
 
     Берутся только перечисленные ключи: у вкладки Экспедиторства машина
-    богаче (госномер, год, цвет, тип, привязка к точкам), но у клиентского типа A и
-    клиента B в таблице груза есть только марка/модель и VIN.
+    богаче (госномер, год, цвет, тип, привязка к точкам), а в таблице
+    груза цели есть только марка/модель и VIN.
     """
     rows: List[Dict[str, str]] = []
     for vehicle in (vehicles if isinstance(vehicles, (list, tuple)) else []):
@@ -488,185 +579,6 @@ def _vehicle_rows(vehicles: Any, keys: Iterable[str]) -> List[Dict[str, str]]:
         if any(row.values()):
             rows.append(row)
     return rows
-
-
-def plan_for_formika(source: Mapping[str, Any]) -> MirrorPlan:
-    """
-    Экспедиторство → клиентский тип A.
-
-    Переносится (по вкладкам окна клиентского типа A):
-
-        cargo_tab     — vehicles[*].vin, vehicles[*].brand_model
-        route_tab     — маршрут (contract.route), адрес первой погрузки,
-                        адрес первой выгрузки
-        driver_tab    — все поля водителя (ФИО, паспорт, ВУ, телефон)
-        vehicle_tab   — марка/номер тягача и полуприцепа, тип тягача
-        customer_tab  — номер и дата договора (contract.number, contract.date)
-
-    Погрузок и выгрузок в экспедиторском договоре может быть несколько,
-    а в бланке клиентского типа A место ровно под одну точку с каждой стороны, поэтому
-    берётся ПЕРВАЯ точка: остальные адреса в этот бланк не помещаются.
-
-    НЕ переносится: стоимость (price_*, vat_rate, payment_days), реквизиты
-    сторон (customer, carrier) и особые условия — см. docstring модуля.
-    """
-    contract = source.get("contract") if isinstance(source, Mapping) else {}
-    contract = contract if isinstance(contract, Mapping) else {}
-
-    loading = _first_point(source, "loadings")
-    unloading = _first_point(source, "unloadings")
-    tractor = _as_mapping(source.get("tractor"))
-    trailer = _as_mapping(source.get("trailer"))
-    driver = _as_mapping(source.get("driver"))
-
-    tabs: Dict[str, Dict[str, Any]] = {
-        "customer_tab": _drop_empty({
-            "date": _contract_field(source, "date"),
-            "number": _contract_field(source, "number"),
-        }),
-        "cargo_tab": _drop_empty({
-            "vehicles": _vehicle_rows(source.get("vehicles"), ("brand_model", "vin")),
-        }),
-        "route_tab": _drop_empty({
-            "route": text(contract.get("route")),
-            "loading_address": text(loading.get("address")),
-            "unloading_address": text(unloading.get("address")),
-        }),
-        "driver_tab": _drop_empty({
-            **{field: text(driver.get(field)) for field in DRIVER_FIELDS},
-            # Основной перевозчик водителя (ШАГ «Привязка водителей
-            # к перевозчикам»): переносится ссылка, а не реквизиты.
-            "default_carrier_id": carrier_id(driver.get("default_carrier_id")),
-        }),
-        "vehicle_tab": _drop_empty({
-            "tractor_brand": text(tractor.get("brand_model")),
-            "tractor_plate": text(tractor.get("plate_number")),
-            # Тип ТС у Экспедиторства лежит в tractor_type (см. трактовку
-            # в ui/windows/formika/data.py::_build_vehicle).
-            "tractor_type": text(
-                tractor.get("vehicle_type") or tractor.get("tractor_type")
-            ),
-            "trailer_brand": text(trailer.get("brand_model")),
-            "trailer_plate": text(trailer.get("plate_number")),
-        }),
-    }
-
-    plan = MirrorPlan(tabs=_ordered_tabs(tabs))
-    logger.info(
-        "Зеркало: план для клиентского типа A — вкладок=%s, полей=%s",
-        len(plan.tabs), plan.field_count(),
-    )
-    return plan
-
-
-# ─────────────────────────────────────────────────────────────
-# Карта: Экспедиторство → клиентский тип B
-# ─────────────────────────────────────────────────────────────
-
-def plan_for_logistiks(source: Mapping[str, Any]) -> MirrorPlan:
-    """
-    Экспедиторство → клиентский тип B.
-
-    Переносится (по вкладкам окна клиента B):
-
-        cargo_tab    — vehicles[*] (марка/модель и VIN)
-        route_tab    — маршрут, адреса ВСЕХ погрузок, грузополучатели
-                       (наименование + адрес) и «Грузоотправитель»
-        driver_tab   — ФИО водителя (в бланке клиента B других полей нет)
-        vehicle_tab  — марка/номер тягача и прицепа
-        customer_tab — номер и дата заявки
-
-    Особенность раздела 1 заявки: грузоотправитель ОДИН, а адресов погрузки
-    до десяти. Поэтому из погрузок источника берутся ВСЕ адреса подряд
-    (loading_addresses), а имя грузоотправителя — из ПЕРВОЙ погрузки, у
-    которой оно заполнено (shipper_name). Остальные имена не теряются молча:
-    о них говорит лог, а в бланке места для второго грузоотправителя нет —
-    ровно как в ui/windows/logistiks_rus/data.py.
-
-    Раздел 2 — грузополучатели: имя и адрес каждой выгрузки.
-
-    НЕ переносится: стоимость, реквизиты сторон (заказчик в этой заявке
-    фиксирован) и особые условия.
-    """
-    contract = source.get("contract") if isinstance(source, Mapping) else {}
-    contract = contract if isinstance(contract, Mapping) else {}
-
-    loadings = [
-        point for point in (source.get("loadings") or [])
-        if isinstance(point, Mapping)
-    ]
-    unloadings = [
-        point for point in (source.get("unloadings") or [])
-        if isinstance(point, Mapping)
-    ]
-
-    loading_addresses = [
-        text(point.get("address")) for point in loadings if text(point.get("address"))
-    ]
-
-    shipper_name = ""
-    for point in loadings:
-        shipper_name = text(point.get("name"))
-        if shipper_name:
-            break
-
-    named = [text(point.get("name")) for point in loadings if text(point.get("name"))]
-    if len(set(named)) > 1:
-        logger.info(
-            "Зеркало: у погрузок источника %s разных наименований — "
-            "в клиента B идёт первое (грузоотправитель в бланке один)",
-            len(set(named)),
-        )
-
-    consignees = [
-        {"name": text(point.get("name")), "address": text(point.get("address"))}
-        for point in unloadings
-        if text(point.get("name")) or text(point.get("address"))
-    ]
-
-    tractor = _as_mapping(source.get("tractor"))
-    trailer = _as_mapping(source.get("trailer"))
-    driver = _as_mapping(source.get("driver"))
-
-    tabs: Dict[str, Dict[str, Any]] = {
-        "customer_tab": _drop_empty({
-            "date": _contract_field(source, "date"),
-            "number": _contract_field(source, "number"),
-        }),
-        "cargo_tab": _drop_empty({
-            "vehicles": _vehicle_rows(
-                source.get("vehicles"), ("brand_model", "vin")
-            ),
-        }),
-        "route_tab": _drop_empty({
-            "route": text(contract.get("route")),
-            "shipper_name": shipper_name,
-            "loading_addresses": loading_addresses,
-            "consignees": consignees,
-        }),
-        "driver_tab": _drop_empty({
-            "full_name": text(driver.get("full_name")),
-            # Основной перевозчик водителя (ШАГ «Привязка водителей»):
-            # у клиента B в бланке печатается только ФИО, но привязка
-            # едет вместе с карточкой водителя.
-            "default_carrier_id": carrier_id(driver.get("default_carrier_id")),
-        }),
-        "vehicle_tab": _drop_empty({
-            "tractor_brand": text(tractor.get("brand_model")),
-            "tractor_plate": text(tractor.get("plate_number")),
-            "trailer_brand": text(trailer.get("brand_model")),
-            "trailer_plate": text(trailer.get("plate_number")),
-        }),
-    }
-
-    plan = MirrorPlan(tabs=_ordered_tabs(tabs))
-    logger.info(
-        "Зеркало: план для клиента B — вкладок=%s, полей=%s, "
-        "адресов погрузки=%s, грузополучателей=%s",
-        len(plan.tabs), plan.field_count(),
-        len(loading_addresses), len(consignees),
-    )
-    return plan
 
 
 def _ordered_tabs(tabs: Mapping[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -738,10 +650,10 @@ def collect_conflicts(target_window: Any, plan: MirrorPlan,
     можно молча. Поля, которых в данных вкладки нет вовсе, пропускаются:
     раскладывать их некуда, и предупреждать о них не о чем.
     """
-    profiles = (TARGET_PROFILES.get(target_type) or {})
+    profiles = (target_profiles().get(target_type) or {})
     if not profiles:
-        # Тип цели без профилей — это не цель зеркала (Аренда, клиентский тип C,
-        # само Экспедиторство): сравнивать нечего и предупреждать не о чем.
+        # Тип цели без профилей — это не цель зеркала (клиентский тип без
+        # карты сравнения или само Экспедиторство): сравнивать нечего и предупреждать не о чем.
         logger.info(
             "Зеркало: у типа %r нет карты сравнения — конфликты не считаются",
             target_type,
@@ -788,7 +700,7 @@ def mirror_from_expedition(target_window: Any,
     """
     Собирает данные источника (MainWindow), строит план, находит конфликты.
 
-    :param target_window: окно цели (клиентский тип A / клиентский тип B).
+    :param target_window: окно цели (клиентский тип).
     :param target_type: ключ типа цели (ContractType.value).
     :param main_window: окно «Экспедиторство». Обычно не передаётся: окно
         цели ищется само (find_expedition_window), а аргумент нужен тестам
@@ -798,8 +710,11 @@ def mirror_from_expedition(target_window: Any,
         * источник (окно «Экспедиторство») недоступен;
         * в источнике нет данных (все VIN и адреса пустые).
     """
-    if target_type not in SUPPORTED_TARGETS:
-        logger.info("Зеркало: тип %r не поддержан — перенос пропущен", target_type)
+    if target_type not in supported_targets():
+        logger.info(
+            "Зеркало: тип %r не поддержан — перенос пропущен (карты целей: %s)",
+            target_type, sorted(supported_targets()) or "нет",
+        )
         return None
 
     if main_window is None:
@@ -821,10 +736,12 @@ def mirror_from_expedition(target_window: Any,
         )
         return None
 
-    if target_type == "formika":
-        plan = plan_for_formika(source)
-    else:
-        plan = plan_for_logistiks(source)
+    builder = _plan_builder(target_type)
+    if builder is None:
+        logger.info("Зеркало: у типа %r нет карты переноса", target_type)
+        return None
+
+    plan = builder(source)
 
     if not plan.tabs:
         logger.info("Зеркало: план пуст — перенос пропущен")
@@ -839,9 +756,8 @@ def mirror_from_expedition(target_window: Any,
 
 __all__ = [
     "SOURCE_TYPE",
-    "SUPPORTED_TARGETS",
+    "TARGETS_MODULE",
     "TAB_ORDER",
-    "TARGET_PROFILES",
     "DRIVER_FIELDS",
     "SOURCE_SECTIONS",
     "MirrorPlan",
@@ -851,9 +767,10 @@ __all__ = [
     "collect_conflicts",
     "current_target_data",
     "mirror_from_expedition",
-    "plan_for_formika",
-    "plan_for_logistiks",
     "source_has_data",
+    "supported_targets",
+    "target_profiles",
+    "targets_error",
     "text",
     "is_empty",
 ]

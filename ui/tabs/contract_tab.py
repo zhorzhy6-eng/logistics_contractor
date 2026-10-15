@@ -855,7 +855,7 @@ class ContractTab(TabMixin, QWidget):
 
         Ключ `name` — свой для вкладки; `salon_name` принимается как
         запасной (так поле называется в справочнике салонов и в ответе
-        распознавания клиента B).
+        распознавания клиентского типа).
         """
         name = item.get("name") or item.get("salon_name") or ""
         return str(name).strip()

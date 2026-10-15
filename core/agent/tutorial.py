@@ -91,10 +91,45 @@ def project_root() -> str:
 
 
 def tutorial_dir() -> str:
-    """Папка инструкций (переопределяется ``set_tutorial_dir`` для тестов)."""
+    """
+    Основная папка инструкций (первая в списке; для тестов и подсказок).
+
+    Инструкции клиентских типов лежат в приватной части проекта и стоят
+    в списке ПЕРВЫМИ, публичные — вторыми. Так «Экспедиторство» с его
+    публичными инструкциями работает и без приватной папки, а клиентские
+    темы появляются вместе с ней.
+    """
     if _tutorial_dir_override is not None:
         return _tutorial_dir_override
-    return os.path.join(project_root(), TUTORIAL_RELATIVE_PATH)
+
+    directories = tutorial_dirs()
+    return directories[0] if directories else ""
+
+
+def tutorial_dirs() -> List[str]:
+    """
+    Все папки инструкций по порядку приоритета.
+
+    Приватная часть (если подключена) → публичная папка проекта. Папки,
+    которых нет на диске, в список не попадают; список может быть пустым —
+    тогда инструкций просто нет.
+    """
+    if _tutorial_dir_override is not None:
+        return [_tutorial_dir_override] if _tutorial_dir_override else []
+
+    directories: List[str] = []
+
+    from core.private_path import private_path
+
+    private_tutorial = private_path("data", "knowledge", "tutorial")
+    if private_tutorial is not None and private_tutorial.is_dir():
+        directories.append(str(private_tutorial))
+
+    public_tutorial = os.path.join(project_root(), TUTORIAL_RELATIVE_PATH)
+    if os.path.isdir(public_tutorial):
+        directories.append(public_tutorial)
+
+    return directories
 
 
 def set_tutorial_dir(path: Optional[str]) -> Optional[str]:
@@ -204,27 +239,39 @@ def _parse_sections(body: str) -> List[Dict[str, str]]:
 
 
 def load_guides() -> List[Dict[str, Any]]:
-    """Все инструкции из папки (кэшируются до сброса)."""
+    """
+    Все инструкции из папок (кэшируются до сброса).
+
+    Папок может быть несколько (см. ``tutorial_dirs``): сначала приватная
+    часть проекта — инструкции клиентских типов, затем публичная —
+    «Экспедиторство» и общие темы. Одноимённые файлы читаются один раз:
+    приоритет у первой папки.
+    """
     global _cache
     if _cache is not None:
         return _cache
 
     guides: List[Dict[str, Any]] = []
-    directory = tutorial_dir()
-    try:
-        names = sorted(name for name in os.listdir(directory)
-                       if name.endswith(".md"))
-    except OSError as e:
-        logger.warning("Папка инструкций не читается %s: %s", directory, e)
-        names = []
+    seen: set = set()
 
-    for name in names:
-        text = _read_file(os.path.join(directory, name))
-        if text is None:
+    for directory in tutorial_dirs():
+        try:
+            names = sorted(name for name in os.listdir(directory)
+                           if name.endswith(".md"))
+        except OSError as e:
+            logger.warning("Папка инструкций не читается %s: %s", directory, e)
             continue
-        guide = _parse_guide(text, name)
-        if guide is not None:
-            guides.append(guide)
+
+        for name in names:
+            if name in seen:
+                continue
+            text = _read_file(os.path.join(directory, name))
+            if text is None:
+                continue
+            guide = _parse_guide(text, name)
+            if guide is not None:
+                guides.append(guide)
+                seen.add(name)
 
     _cache = guides
     return guides
@@ -454,4 +501,5 @@ __all__ = [
     "set_tutorial_dir",
     "tutorial",
     "tutorial_dir",
+    "tutorial_dirs",
 ]

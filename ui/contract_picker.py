@@ -65,9 +65,11 @@ class ContractPickerDialog(QDialog):
 
         self.combo = QComboBox()
         self.combo.setObjectName("contractTypeCombo")
-        for key, title in PICKER_ORDER:
+        for key, title in picker_items():
             # data пункта — ключ ContractType: логика выбора не зависит
-            # от того, как пункт называется в интерфейсе.
+            # от того, как пункт называется в интерфейсе. Показываются
+            # только зарегистрированные типы: клиентские типы живут
+            # в приватной части проекта (picker_order.picker_items).
             self.combo.addItem(title, key)
         self.combo.setCurrentIndex(self._index_of(DEFAULT_PICKER_TYPE))
         row.addWidget(self.combo, 1)

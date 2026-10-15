@@ -23,15 +23,49 @@ DaData на вкладках — то есть цикл жил ровно в т�
 """
 
 import ast
+import sys
 from pathlib import Path
 
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.private_path import private_path, private_root  # noqa: E402
 
 #: Что сканируем: точка входа и весь рабочий код интерфейса.
 SCAN_FILES = (PROJECT_ROOT / "main.py",)
-SCAN_DIRS = ("ui",)
+SCAN_DIRS = ["ui"]
+
+#: Окна клиентских типов лежат в приватной части проекта. Пути собираются
+#: из ключей типов, а не зашиты списком: нет приватной папки — список пуст,
+#: и проверка этих файлов пропускается.
+#: Ключ типа и имя папки окна совпадают не всегда (ключ описывает документ,
+#: папка — форму), поэтому связь задана явно.
+CLIENT_WINDOW_KEYS = (
+    ("arenda_ts", "arenda_ts"),
+    ("formika", "formika"),
+    ("logistiks_rus", "logistiks_rus"),
+    ("zayavka_excel", "havaly"),
+)
+CLIENT_WINDOW_MODULES = tuple(
+    f"ui/windows/{dirname}/window.py" for _key, dirname in CLIENT_WINDOW_KEYS
+)
+
+#: Корни сканирования: публичный интерфейс и (если есть) приватный.
+_private_ui = private_path("ui")
+if _private_ui is not None and _private_ui.is_dir():
+    SCAN_DIRS.append(str(_private_ui))
+
+
+def hotspot_path(relative: str) -> Path:
+    """Путь «горячего» модуля: публичный проект, затем приватная часть."""
+    path = PROJECT_ROOT / relative
+    if path.exists():
+        return path
+    root = private_root()
+    return (root / relative) if root is not None else path
 
 #: Сколько связей должно найтись: страховка от «пустого» прохода, когда
 #: сканер молча ничего не находит и тест зелёный ни за что.
@@ -128,11 +162,8 @@ def test_connect_has_no_lambda_and_no_partial():
         "ui/tabs/base_tab.py",
         "ui/tabs/contract_tab.py",
         "ui/document_import_dialog.py",
-        "ui/windows/formika/window.py",
-        "ui/windows/logistiks_rus/window.py",
-        "ui/windows/arenda_ts/window.py",
-        "ui/windows/havaly/window.py",
-    ],
+    ]
+    + list(CLIENT_WINDOW_MODULES),
 )
 def test_known_hotspots_have_connections(relative):
     """
@@ -141,9 +172,17 @@ def test_known_hotspots_have_connections(relative):
     Это места, где цикл Python ↔ Qt уже находили: сигналы задач распознавания,
     DaData, кнопки-замыкания. Список фиксирует, что модуль не выпал из скана
     (например, при переименовании файла).
+
+    Окна клиентских типов живут в приватной части проекта, поэтому их пути
+    ищутся и там: нет приватной папки — проверка пропускается явным skip,
+    а не падением на отсутствующем файле.
     """
-    path = PROJECT_ROOT / relative
-    assert path.exists(), f"файл {relative} пропал — обновите список"
+    path = hotspot_path(relative)
+    if not path.exists():
+        pytest.skip(
+            f"{relative}: файл вне публичной части проекта "
+            f"(клиентский тип не установлен)"
+        )
 
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     calls = list(_connect_calls(tree))

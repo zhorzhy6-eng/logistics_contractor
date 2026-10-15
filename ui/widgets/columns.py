@@ -9,9 +9,9 @@
   * Экспедиторство (`ui/tabs/vehicles_tab.py`) — восемь колонок: пять
     рабочих и три необязательные (госномер, год, цвет). Необязательные
     скрыты по умолчанию: в бланк договора перевозки они не печатаются;
-  * клиентский тип B, клиентский тип D, клиентский тип A, клиентский тип C — свои небольшие
-    наборы (марка, VIN, тип ТС и т.п.), у каждого типа обязательные
-    колонки свои.
+  * клиентские типы (приватная часть проекта) — свои небольшие наборы
+    (марка, VIN, тип ТС и т.п.), у каждого типа обязательные колонки свои.
+    Их описания живут в модулях соответствующих вкладок.
 
 Обязательные колонки скрыть нельзя: без VIN и марки строка машины теряет
 смысл. Остальные оператор включает и выключает сам — правый клик по шапке
@@ -63,16 +63,6 @@ VEHICLE_COLUMNS: Tuple[ColumnSpec, ...] = (
     ColumnSpec(FIELD_COLOR, "Цвет", default_visible=False),
 )
 
-#: Колонки клиентского типа C (вкладка «Груз»): схема .xlsx-заявки.
-HAVALY_VEHICLE_COLUMNS: Tuple[ColumnSpec, ...] = (
-    ColumnSpec("number", "№", required=True),
-    ColumnSpec("vin", "VIN", required=True),
-    ColumnSpec("brand", "Марка", required=True),
-    ColumnSpec("model", "Модель", required=True),
-    ColumnSpec("dealer", "Дилер", required=True),
-    ColumnSpec("dealer_code", "Код дилера", required=True),
-)
-
 __all__ = [
     "FIELD_VIN",
     "FIELD_BRAND",
@@ -83,5 +73,4 @@ __all__ = [
     "FIELD_YEAR",
     "FIELD_COLOR",
     "VEHICLE_COLUMNS",
-    "HAVALY_VEHICLE_COLUMNS",
 ]

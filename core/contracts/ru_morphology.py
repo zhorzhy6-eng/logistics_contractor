@@ -242,8 +242,8 @@ def genitive_fio(full_name: str, gender: str = "") -> str:
     Пётр» → «Иванова Петра»).
 
     Род не угадывается (одно слово, отчества нет) — склоняется только
-    то, что можно склонить однозначно: «Иванов» останется
-    «Иванов», а имя на «-а» — «Елены».
+    то, что можно склонить однозначно: «Шевченко» останется
+    «Шевченко», а имя на «-а» — «Елены».
     """
     text = strip_ip_prefix(full_name)
     if not text:
@@ -296,7 +296,7 @@ def _genitive_surname(surname: str, gender: str) -> str:
 
     lower = surname.lower()
 
-    # Несклоняемые: Шевченко, Иванов, Долгих, Кучук, Швили.
+    # Несклоняемые: Шевченко, Долгих, Кучук, Швили.
     for ending in NON_INFLECTED_SURNAME_ENDINGS:
         if lower.endswith(ending) and len(surname) > len(ending):
             return surname

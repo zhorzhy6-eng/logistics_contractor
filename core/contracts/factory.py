@@ -20,6 +20,30 @@ from core.contracts.registry import ContractTypeError, ContractTypeRegistry
 logger = logging.getLogger("core.contracts.factory")
 
 
+def default_templates_dir(subdir: str = "") -> str:
+    """
+    Папка шаблонов по умолчанию.
+
+    Если подключена приватная часть проекта, её папка шаблонов идёт ПЕРВОЙ:
+    в ней лежат бланки ВСЕХ типов (клиентские и три бланка «Экспедиторства»),
+    поэтому генератор любого типа находит свой бланк в одном месте. Публичная
+    папка — запасной вариант: она работает и без приватной части.
+
+    :param subdir: подпапка шаблонов типа (spec.templates_subdir), если задана.
+    """
+    from core.private_path import private_path
+
+    relative = ("templates", subdir) if subdir else ("templates",)
+
+    private_templates = private_path(*relative)
+    if private_templates is not None and private_templates.is_dir():
+        return str(private_templates)
+
+    if subdir:
+        return str(PROJECT_ROOT / "templates" / subdir)
+    return str(TEMPLATES_DIR)
+
+
 class GeneratorFactory:
     """Создаёт генераторы договоров по типу."""
 
@@ -34,8 +58,9 @@ class GeneratorFactory:
         """
         Генератор для типа договора.
 
-        templates_dir=None → templates/ (или templates/<templates_subdir>
-        типа, если тип объявил подпапку шаблонов).
+        templates_dir=None → папка шаблонов проекта (приватная часть, если
+        подключена, иначе публичная), либо её подпапка, если тип объявил
+        ``templates_subdir``.
         """
         spec = ContractTypeRegistry.get(contract_type, strict=strict)
 
@@ -46,10 +71,7 @@ class GeneratorFactory:
             )
 
         if templates_dir is None:
-            if spec.templates_subdir:
-                templates_dir = str(PROJECT_ROOT / "templates" / spec.templates_subdir)
-            else:
-                templates_dir = str(TEMPLATES_DIR)
+            templates_dir = default_templates_dir(spec.templates_subdir)
 
         return generator_class(templates_dir=templates_dir)
 

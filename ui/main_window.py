@@ -248,7 +248,7 @@ class MainWindow(DiagnosticsMenuMixin, QMainWindow):
         self._sync_system_theme_watcher()
 
         # ── Зеркало данных (ШАГ FIX-4): окно сообщает о себе ──
-        # MainWindow — источник переноса в клиентский тип A и клиента B. Окна типов
+        # MainWindow — источник переноса в окна клиентских типов. Окна типов
         # находят его по реестру (ui/windows/base_window.py), а не по классу:
         # им нужен только CONTRACT_TYPE и методы вкладок.
         from ui.windows.base_window import register_source_window

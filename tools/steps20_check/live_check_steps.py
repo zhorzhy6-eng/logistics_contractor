@@ -63,11 +63,29 @@ ANSWER_TIMEOUT = 200.0
 #: Проверяются именно машинные формы (`window=`, `contract_type`,
 #: `carrier_tab`), а не русские слова: «вкладка «Перевозчик»» — это
 #: подсказка оператору, её модель писать вправе.
+#: Список типов НЕ зашит здесь: он дописывается из реестра — иначе новый
+#: клиентский тип пришлось бы вписывать и в проверку.
 FORBIDDEN = (
     "window=", "contract_type", "perevozka", "get_form_state", "get_open_tabs",
-    "carrier_tab", "driver_tab", "trailer_tab", "open_tabs", "formika",
-    "logistiks_rus", "arenda_ts", "tabs=[", "current_tab_key", "{", "}",
+    "carrier_tab", "driver_tab", "trailer_tab", "open_tabs",
+    "tabs=[", "current_tab_key", "{", "}",
 )
+
+
+def _contract_type_keys() -> tuple:
+    """Ключи зарегистрированных типов договоров, кроме публичного ключа."""
+    try:
+        from core.contracts.registry import ContractTypeRegistry
+
+        ContractTypeRegistry.load_builtin()
+        return tuple(
+            key for key in ContractTypeRegistry.known_types() if key != "perevozka"
+        )
+    except Exception:  # noqa: BLE001 — проверка не должна падать из-за реестра
+        return ()
+
+
+FORBIDDEN = FORBIDDEN + _contract_type_keys()
 
 checks = []
 

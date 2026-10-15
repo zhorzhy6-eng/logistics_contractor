@@ -16,13 +16,15 @@
   ip_with_vat    — шаблон ИП с НДС, перевозчик «ИП с НДС»;
   ip_without_vat — шаблон ИП без НДС, перевозчик «ИП без НДС»;
   gap            — шаблон ООО, маршрут с «дыркой» (пустой адрес точки
-                   в середине), машины привязаны к исходным номерам точек;
-  formika_sample — шаблон клиентского типа A, 4 машины (ЭТАП 3.1.A, свой генератор).
+                   в середине), машины привязаны к исходным номерам точек.
 
-Все данные синтетические (как в tests/conftest.py), реальных ПДн нет.
+Сценарии клиентских типов лежат в приватной части проекта
+(`tools/golden_scenarios.py`) и подключаются автоматически, когда она есть.
+
+Все данные синтетические (как в tests/conftest.py), реальных ПДН нет.
 
 Перегенерация:  python tools/make_golden.py
-Один сценарий:  python tools/make_golden.py formika_sample
+Один сценарий:  python tools/make_golden.py ooo
 (без аргументов перегенерируются ВСЕ эталоны; чтобы не переписывать
 эталоны перевозки, указывайте нужный сценарий явно).
 """
@@ -36,6 +38,7 @@ import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from typing import Dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -44,6 +47,15 @@ from docx import Document  # noqa: E402
 from core.contract_generator import ContractGenerator  # noqa: E402
 from core.contracts.factory import GeneratorFactory  # noqa: E402
 from core.contracts.registry import ContractTypeRegistry  # noqa: E402
+from core.private_path import (  # noqa: E402
+    attach_private_root,
+    optional_module,
+    private_path,
+)
+
+# Приватная часть проекта подключается ДО поиска сценариев и шаблонов:
+# клиентские бланки и данные лежат в ней.
+attach_private_root()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GOLDEN_DIR = PROJECT_ROOT / "tests" / "data" / "golden"
@@ -173,15 +185,80 @@ def gap_payload() -> dict:
     return payload
 
 
+#: Модуль приватной части проекта со сценариями клиентских типов.
+#: Лежит вне публичного репозитория (см. docs/PRIVATE_MIGRATION.md):
+#: там же определяются шаблоны и данные клиентских типов. Модуль
+#: необязателен — публичный набор сценариев работает и без него.
+SCENARIO_PROVIDER_MODULE = "tools.golden_scenarios"
+
+#: Сценарии перевозки: ключ → (шаблон, данные, вид генератора).
+#: Вид "perevozka" — ContractGenerator; другие виды приходят из приватного
+#: модуля сценариев вместе со своими генераторами.
 SCENARIOS = {
     "ooo": ("shablon_ooo.docx",
-            base_payload("ООО (с НДС)", "22%", 22)),
+            base_payload("ООО (с НДС)", "22%", 22), "perevozka"),
     "ip_with_vat": ("shablon_ip_with_vat.docx",
-                    base_payload("ИП с НДС", "22%", 22)),
+                    base_payload("ИП с НДС", "22%", 22), "perevozka"),
     "ip_without_vat": ("shablon_ip_without_vat.docx",
-                       base_payload("ИП без НДС", "0%", 0)),
-    "gap": ("shablon_ooo.docx", gap_payload()),
+                       base_payload("ИП без НДС", "0%", 0), "perevozka"),
+    "gap": ("shablon_ooo.docx", gap_payload(), "perevozka"),
 }
+
+
+def load_scenarios() -> Dict[str, tuple]:
+    """
+    Все сценарии: публичные + клиентские (если приватная часть подключена).
+
+    Клиентские сценарии отдают шаблон, данные и вид генератора; их модуль
+    ищется в sys.path, поэтому приватная папка должна быть подключена
+    вызовом core.private_path.attach_private_root() — он сделан выше.
+    Синтетические данные сторон передаются провайдеру готовыми: дублировать
+    их в приватном модуле не нужно.
+    """
+    scenarios = dict(SCENARIOS)
+
+    module = optional_module(SCENARIO_PROVIDER_MODULE)
+    if module is None:
+        return scenarios
+
+    builder = getattr(module, "build_scenarios", None)
+    if not callable(builder):
+        print(f"{SCENARIO_PROVIDER_MODULE}: нет build_scenarios() — пропущен")
+        return scenarios
+
+    extra = builder(
+        driver=DRIVER,
+        organization=ORGANIZATION,
+        tractor=TRACTOR,
+        trailer=TRAILER,
+    ) or {}
+
+    for name, value in extra.items():
+        template, payload = value[0], value[1]
+        kind = value[2] if len(value) > 2 else "perevozka"
+        scenarios[str(name)] = (template, payload, kind)
+
+    print(f"Приватные сценарии: {sorted(extra)}")
+    return scenarios
+
+
+def __getattr__(name: str):
+    """
+    Совместимость имён: ``from tools.make_golden import FORMIKA_SCENARIOS``.
+
+    Раньше клиентские сценарии лежали в этом модуле отдельным словарём.
+    Теперь они приходят из приватной части (``tools/golden_scenarios.py``),
+    но старые вызовы — в том числе тесты приватной части — должны
+    работать: имя собирается на месте, без клиентских названий в ядре.
+    """
+    if name == "FORMIKA_SCENARIOS":
+        scenarios = load_scenarios()
+        return {
+            key: (value[0], value[1])
+            for key, value in scenarios.items()
+            if value[2] != "perevozka"
+        }
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -324,19 +401,39 @@ def fingerprint(docx_path: Path) -> dict:
 # Основной прогон
 # ─────────────────────────────────────────────────────────────
 
+def template_path(template_name: str) -> Path:
+    """
+    Путь шаблона сценария: публичная папка проекта, затем приватная часть.
+
+    Клиентские бланки лежат в приватной папке (templates/ приватного
+    корня), публичные — в templates/ проекта.
+    """
+    from core.private_path import private_path
+
+    public = PROJECT_ROOT / "templates" / template_name
+    if public.exists():
+        return public
+
+    private = private_path("templates", template_name)
+    if private is not None and private.exists():
+        return private
+
+    raise FileNotFoundError(f"Шаблон не найден: {template_name}")
+
+
 def _make_generator(kind: str, templates_dir: str):
     """
-    Генератор сценария: перевозка (по умолчанию) или клиентский тип A.
+    Генератор сценария: перевозка (по умолчанию) или клиентский тип.
 
     Реестр типов загружается явно (как в main.py при старте приложения):
-    без load_builtin() фабрика не знает про formika и в нестрогом режиме
-    молча отдаёт генератор перевозки — эталон тогда снимается не с того
-    типа. strict=True превращает такую ошибку в исключение.
+    без load_builtin() фабрика не знает про клиентские типы и в нестрогом
+    режиме молча отдаёт генератор перевозки — эталон тогда снимается не
+    с того типа. strict=True превращает такую ошибку в исключение.
     """
-    if kind == "formika":
+    if kind != "perevozka":
         ContractTypeRegistry.load_builtin()
         return GeneratorFactory.get_generator(
-            "formika", templates_dir=templates_dir, strict=True
+            kind, templates_dir=templates_dir, strict=True
         )
     return ContractGenerator(templates_dir=templates_dir)
 
@@ -346,7 +443,7 @@ def _render_scenario(scenario, template_name, payload, kind, work) -> dict:
     templates_dir = work / scenario
     templates_dir.mkdir(parents=True, exist_ok=True)
     strip_embedded_fonts(
-        PROJECT_ROOT / "templates" / template_name,
+        template_path(template_name),
         templates_dir / template_name,
     )
 
@@ -377,8 +474,9 @@ def main(argv=None) -> int:
     except AttributeError:  # старые Python без reconfigure
         pass
 
+    scenarios = load_scenarios()
     selected = {arg for arg in (sys.argv[1:] if argv is None else argv) if arg}
-    known = set(SCENARIOS) | set(FORMIKA_SCENARIOS)
+    known = set(scenarios)
     unknown = selected - known
     if unknown:
         print(f"Неизвестные сценарии: {sorted(unknown)}")
@@ -389,15 +487,10 @@ def main(argv=None) -> int:
 
     work = Path(tempfile.mkdtemp(prefix="make_golden_"))
     try:
-        for scenario, (template_name, payload) in SCENARIOS.items():
+        for scenario, (template_name, payload, kind) in scenarios.items():
             if selected and scenario not in selected:
                 continue
-            _render_scenario(scenario, template_name, payload, "perevozka", work)
-
-        for scenario, (template_name, payload) in FORMIKA_SCENARIOS.items():
-            if selected and scenario not in selected:
-                continue
-            _render_scenario(scenario, template_name, payload, "formika", work)
+            _render_scenario(scenario, template_name, payload, kind, work)
 
         readme = GOLDEN_DIR / "README.md"
         readme.write_text(
@@ -406,12 +499,13 @@ def main(argv=None) -> int:
             "на облегчённых копиях реальных шаблонов (без встроенных шрифтов).\n\n"
             "Сценарии перевозки (`ContractGenerator`): `ooo`, `ip_with_vat`, "
             "`ip_without_vat`, `gap` (маршрут с пустой точкой).\n"
-            "Сценарий клиентского типа A (`FormikaGenerator`, ЭТАП 3.1.A): "
-            "`formika_sample` — 4 машины в таблице груза.\n\n"
+            "Сценарии клиентских типов приходят из приватной части проекта "
+            "(`tools/golden_scenarios.py`) и появляются в этой папке только "
+            "при её наличии.\n\n"
             "Для каждого сценария: `<сценарий>.docx` — документ, "
             "`<сценарий>.json` — структурный отпечаток для сверки в "
-            "`tests/test_contract_generator_golden.py` (перевозка) и "
-            "`tests/test_formika_generator.py` (клиентский тип A).\n\n"
+            "`tests/test_contract_generator_golden.py` (перевозка) и в "
+            "тестах генераторов соответствующих типов.\n\n"
             "Перегенерация: `python tools/make_golden.py [сценарий ...]`.\n"
             "Без аргументов перегенерируются ВСЕ эталоны.\n\n"
             "Все данные синтетические, реальных ПДн нет.\n",

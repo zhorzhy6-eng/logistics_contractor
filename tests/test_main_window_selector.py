@@ -58,40 +58,63 @@ def test_selector_exists_and_shows_perevozka(window):
 
 
 def test_selector_has_all_picker_items(window):
-    from core.contracts.picker_order import PICKER_ORDER
+    """
+    Пункты селектора — ровно зарегистрированные типы, в порядке PICKER_ORDER.
 
-    assert window.selector.keys() == [key for key, _title in PICKER_ORDER]
-    assert window.selector.titles() == [title for _key, title in PICKER_ORDER]
+    Клиентские типы живут в приватной части проекта: без неё в списке
+    остаётся только «Экспедиторство», и это правильное поведение.
+    """
+    from core.contracts.picker_order import PICKER_ORDER, picker_items
+
+    expected = picker_items()
+    assert window.selector.keys() == [key for key, _title in expected]
+    assert window.selector.titles() == [title for _key, title in expected]
+
+    order = [key for key, _title in PICKER_ORDER]
+    keys = window.selector.keys()
+    assert keys == [key for key in order if key in set(keys)]
+
+
+def _switchable_key(window, *excluded):
+    """Первый ключ селектора, которого нет среди excluded."""
+    blocked = set(excluded)
+    for key in window.selector.keys():
+        if key not in blocked:
+            return key
+    pytest.skip("в этом запуске зарегистрирован только один тип")
 
 
 def test_selector_emits_switch_request(window):
     collected = []
     window.switch_to_type_requested.connect(collected.append)
 
-    index = window.selector.keys().index("formika")
+    target = _switchable_key(window, window.selector.current_type())
+    index = window.selector.keys().index(target)
     window.selector.combo.setCurrentIndex(index)
 
-    assert collected == ["formika"]
+    assert collected == [target]
 
 
 def test_programmatic_selector_change_does_not_emit(window):
     collected = []
     window.switch_to_type_requested.connect(collected.append)
 
-    window.selector.set_current_type("arenda_ts")
+    target = _switchable_key(window, window.selector.current_type())
+    window.selector.set_current_type(target)
 
     assert collected == []
-    assert window.selector.current_type() == "arenda_ts"
+    assert window.selector.current_type() == target
 
 
 def test_switch_signal_carries_string(window):
     collected = []
     window.switch_to_type_requested.connect(collected.append)
 
-    index = window.selector.keys().index("zayavka_excel")
+    target = _switchable_key(window, window.selector.current_type())
+    index = window.selector.keys().index(target)
     window.selector.combo.setCurrentIndex(index)
 
-    assert collected == ["zayavka_excel"]
+    assert collected == [target]
     assert isinstance(collected[0], str)
 
 

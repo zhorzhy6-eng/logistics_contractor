@@ -4,7 +4,8 @@
 Точка входа в приложение «Умный конструктор договоров».
 Создаёт QApplication, инициализирует БД, спрашивает тип договора и открывает
 соответствующее окно: «Экспедиторство» (договор-заявка на перевозку) —
-рабочее MainWindow, остальные типы — окно-заглушка «в разработке».
+рабочее MainWindow, клиентские типы (приватная часть проекта) — свои окна
+с вкладками.
 
 Автор: Архитектор-разработчик (30 лет опыта)
 Дата: 09.09.2026
@@ -30,6 +31,16 @@ from core.crash_handler import install_crash_handler
 # sys.excepthook, поэтому нужны инструменты уровнем ниже. Импорт также без
 # побочных действий: всё включается вызовом после setup_logging().
 from core.qt_crash_handler import install_crash_diagnostics, mark_normal_exit
+
+# ── Приватная часть проекта (клиентские типы договоров) ──
+# Вызов обязан идти ДО первого импорта пакетов типов: attach_private_root()
+# не только добавляет приватную папку в sys.path, но и расширяет __path__
+# публичных пакетов core/ui — иначе подпакеты вида core.contracts.<тип>
+# не нашлись бы (подробности в докстроке core/private_path.py). Приватной
+# папки нет — работаем в режиме ядра, только «Экспедиторство».
+from core.private_path import attach_private_root, optional_module
+
+attach_private_root()
 
 
 def _parse_args(argv=None):
@@ -65,6 +76,16 @@ install_crash_diagnostics(debug=_ARGS.debug)
 
 logger = logging.getLogger("main")
 
+#: Ключ типа договора → (модуль окна, класс окна). Модули живут в приватной
+#: части и подключаются через core.private_path.optional_module: тип без
+#: модуля в список не попадает. Ключи — значения ContractType.
+_TYPE_WINDOW_MODULES = {
+    "arenda_ts": ("ui.windows.arenda_ts", "ArendaTsWindow"),
+    "formika": ("ui.windows.formika", "FormikaWindow"),
+    "logistiks_rus": ("ui.windows.logistiks_rus", "LogistiksRusWindow"),
+    "zayavka_excel": ("ui.windows.havaly", "HavalyWindow"),
+}
+
 
 def _choose_contract_type():
     """
@@ -93,13 +114,50 @@ def _load_contract_types() -> None:
 
     Сбой импорта одного типа не мешает остальным: причина попадает
     в failures() и логируется, приложение продолжает работу.
+
+    После загрузки типов пересобирается список промптов распознавания:
+    модули промптов ищутся по ключам реестра, а он наполняется именно
+    здесь (см. core/prompts/__init__.py::refresh_prompts).
     """
     from core.contracts.registry import ContractTypeRegistry
+    from core.prompts import refresh_prompts
 
     ContractTypeRegistry.load_builtin()
     failures = ContractTypeRegistry.failures()
     if failures:
         logger.warning(f"Типы договоров загружены не полностью: {failures}")
+
+    prompt_modules = refresh_prompts()
+    logger.info(f"Промпты распознавания найдены: {sorted(prompt_modules)}")
+
+
+def _optional_class(module_name: str, class_name: str):
+    """
+    Класс окна из приватной части или None, если её нет.
+
+    Приватная часть подключается вызовом ``attach_private_root()`` в начале
+    модуля: там же объяснено, почему обычного ``sys.path`` мало. Нет
+    приватной папки — приложение работает в режиме ядра, и клиентские типы
+    просто не попадают в список окон.
+    """
+    module = optional_module(module_name)
+    if module is None:
+        return None
+    return getattr(module, class_name, None)
+
+
+def _window_factory(window_class):
+    """
+    Фабрика окна типа договора.
+
+    Именованная функция вместо ``lambda``: замыкание, захватывающее окно
+    или менеджер, создаёт цикл ссылок Python ↔ Qt (грабли 2B.7), а лямбда
+    в connect запрещена вовсе (AGENTS.md § 5.1).
+    """
+    def make_window():
+        return window_class()
+
+    return make_window
 
 
 def _make_factories():
@@ -111,40 +169,31 @@ def _make_factories():
     импортируется и в тестах (tests/test_logging_config.py), где поднимать
     Qt не нужно.
 
-    «Экспедиторство» — рабочее окно (MainWindow), у остальных типов теперь
-    свои окна-каркасы (клиентский тип A, клиентский тип B, клиентский тип D, клиентский тип C).
-    Ключи берутся из ContractType и picker_order, а не из литералов:
-    переименование типа не сломает запуск.
+    «Экспедиторство» — рабочее окно (MainWindow). Окна клиентских типов
+    живут в приватной части проекта и подключаются по имени модуля: их
+    список — ``_TYPE_WINDOW_MODULES``. Приватной части нет — в списке
+    остаётся только «Экспедиторство», и это нормальный режим ядра,
+    а не ошибка.
+
+    Ключи берутся из ContractType, а не из литералов: переименование типа
+    не сломает запуск.
     """
     from core.contracts.contract_types import DEFAULT_CONTRACT_TYPE
     from ui.main_window import MainWindow
-    from ui.windows.arenda_ts import ArendaTsWindow
-    from ui.windows.formika import FormikaWindow
-    from ui.windows.havaly import HavalyWindow
-    from ui.windows.logistiks_rus import LogistiksRusWindow
 
-    def make_main_window():
-        return MainWindow()
+    factories = {DEFAULT_CONTRACT_TYPE.value: _window_factory(MainWindow)}
 
-    def make_formika_window():
-        return FormikaWindow()
+    for contract_type, (module_name, class_name) in _TYPE_WINDOW_MODULES.items():
+        window_class = _optional_class(module_name, class_name)
+        if window_class is None:
+            logger.info(
+                "Окно типа %r недоступно: нет приватного модуля %s",
+                contract_type, module_name,
+            )
+            continue
+        factories[contract_type] = _window_factory(window_class)
 
-    def make_logistiks_rus_window():
-        return LogistiksRusWindow()
-
-    def make_arenda_ts_window():
-        return ArendaTsWindow()
-
-    def make_havaly_window():
-        return HavalyWindow()
-
-    return {
-        DEFAULT_CONTRACT_TYPE.value: make_main_window,
-        "formika": make_formika_window,
-        "logistiks_rus": make_logistiks_rus_window,
-        "arenda_ts": make_arenda_ts_window,
-        "zayavka_excel": make_havaly_window,
-    }
+    return factories
 
 
 def _make_signals_receiver(manager, app):

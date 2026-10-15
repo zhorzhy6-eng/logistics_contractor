@@ -24,8 +24,64 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# ── Рабочая папка тестов не должна собираться как тесты ──
+# ── Приватная часть проекта (клиентские типы договоров) ──
+# Строго ПОСЛЕ добавления корня проекта (иначе core.private_path не
+# импортируется) и ДО первого импорта пакетов типов: вызов расширяет
+# __path__ публичных пакетов core/ui/tools, без чего private-подпакеты
+# не находятся. Приватной папки нет — тесты ядра работают как обычно,
+# а тесты клиентских типов пропускаются маркером needs_private.
+from core.private_path import (  # noqa: E402
+    attach_private_root,
+    is_private_available,
+    private_path,
+)
+
+PRIVATE_ROOT = attach_private_root()
+
+# ── Реестр типов и список промптов ──
+# Типы регистрируются при импорте своих пакетов, а промпты ищутся по ключам
+# реестра. В приложении это делает main.py при старте; в тестах тот же шаг
+# повторяется один раз на прогон — иначе селектор типа и список промптов
+# видели бы пустой реестр, а тесты проверяли бы не то поведение.
+# Приватной папки нет — грузятся только публичные типы, и это нормально.
+from core.contracts.registry import ContractTypeRegistry  # noqa: E402
+from core.prompts import refresh_prompts  # noqa: E402
+
+ContractTypeRegistry.load_builtin()
+refresh_prompts()
+
+#: Рабочая папка тестов не должна собираться как тесты ──
+# (приватная папка лежит вне корня проекта, но pytest.ini её тоже
+# исключает: см. norecursedirs).
 collect_ignore_glob = ["_tmp/*"]
+
+
+def pytest_configure(config):
+    """Регистрирует маркер «нужна приватная часть» (иначе PytestUnknownMark)."""
+    config.addinivalue_line(
+        "markers",
+        "needs_private: тест требует приватной части проекта "
+        "(клиентские типы договоров)",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """
+    Пропускает тесты, которым нужна приватная часть, если её нет.
+
+    Публичный репозиторий самодостаточен: без клиентских типов тесты ядра
+    обязаны проходить, а тесты, которым нужен клиентский тип, — честно
+    пропускаться с причиной, а не падать на импорте.
+    """
+    if is_private_available():
+        return
+
+    skip = pytest.mark.skip(
+        reason="нет приватной части проекта (клиентские типы договоров)"
+    )
+    for item in items:
+        if "needs_private" in item.keywords:
+            item.add_marker(skip)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -87,7 +143,17 @@ def project_root() -> Path:
 
 @pytest.fixture(scope="session")
 def templates_dir() -> Path:
-    """Папка с шаблонами договоров."""
+    """
+    Папка с шаблонами договоров.
+
+    Клиентские бланки уехали в приватную часть, поэтому при её наличии
+    фикстура отдаёт приватную папку (там лежат ВСЕ бланки: и клиентские,
+    и «Экспедиторства» — генераторы получают один и тот же templates_dir).
+    Приватной части нет — публичная папка с тремя бланками Экспедиторства.
+    """
+    private_templates = private_path("templates")
+    if private_templates is not None and private_templates.is_dir():
+        return private_templates
     return PROJECT_ROOT / "templates"
 
 

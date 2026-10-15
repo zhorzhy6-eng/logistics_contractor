@@ -2192,8 +2192,8 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         ),
         parameters=_json_schema({"contract_type": {
             "type": "string",
-            "description": "ключ типа: perevozka, arenda_ts, logistiks_rus, "
-                           "formika, zayavka_excel",
+            "description": "ключ типа договора (например perevozka); "
+                           "доступные ключи перечисляет get_schema",
         }}),
         function=get_schema,
         summary="Схема полей типа договора",
