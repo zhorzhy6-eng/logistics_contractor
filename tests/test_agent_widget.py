@@ -82,7 +82,11 @@ def settings_path(work_file):
 def settings(settings_path):
     """Сервис настроек с разделом agent по умолчанию."""
     service = SettingsService(str(settings_path))
-    service.update({"agent": dict(SettingsService.DEFAULTS["agent"])})
+    defaults = dict(SettingsService.DEFAULTS["agent"])
+    #: Виджет-тесты не проверяют первый запуск: предложение «Обучение»
+    #: отключено, чтобы оно не добавляло сообщение в историю панели.
+    defaults["tutorial_seen"] = True
+    service.update({"agent": defaults})
     return service
 
 

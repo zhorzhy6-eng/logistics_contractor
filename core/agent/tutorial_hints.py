@@ -108,8 +108,28 @@ def tutorial_step_hint(context: Any = None) -> str:
         return "Откройте форму нужного типа документа и заполняйте её по вкладкам."
 
 
+def onboarding_decision(agent_settings: Dict[str, Any]) -> str:
+    """
+    Нужно ли предложить обучение при первом запуске.
+
+    Решение зависит от двух настроек: ``tutorial_seen`` (показано ли уже
+    предложение) и ``tutorial_mode`` (включён ли сам режим).
+
+    :return: ``"offer"`` — предложить включить обучение; ``"mark_seen"`` —
+        режим уже включён, осталось только поставить отметку; ``"none"`` —
+        предложение уже показывалось, ничего делать не нужно.
+    """
+    settings = agent_settings if isinstance(agent_settings, dict) else {}
+    if bool(settings.get("tutorial_seen", False)):
+        return "none"
+    if bool(settings.get("tutorial_mode", False)):
+        return "mark_seen"
+    return "offer"
+
+
 __all__ = [
     "PULLABLE_SECTIONS",
     "_build_hint",
+    "onboarding_decision",
     "tutorial_step_hint",
 ]

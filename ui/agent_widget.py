@@ -1574,6 +1574,34 @@ class AgentWidget(QObject):
         self.settings.update_agent({"tutorial_mode": bool(enabled)})
         self._apply_tutorial(self.agent_settings())
 
+    def offer_tutorial_on_first_run(self) -> None:
+        """
+        Предлагает включить режим «Обучение» при первом запуске.
+
+        Показывается один раз, когда панель открыта впервые: если предложение
+        уже было — молча; если режим уже включён — только ставится отметка;
+        иначе — короткое сообщение в панели и отметка. Без модального диалога:
+        предложение не должно перебивать оператора или вешать интерфейс.
+        """
+        from core.agent.tutorial_hints import onboarding_decision
+
+        decision = onboarding_decision(self.agent_settings())
+        if decision == "none":
+            return
+
+        if decision == "mark_seen":
+            self.settings.update_agent({"tutorial_seen": True})
+            return
+
+        self.settings.update_agent({"tutorial_seen": True})
+        if self.panel is not None:
+            self.panel.append_message(
+                "Хотите, чтобы я подсказывал на каждом шаге? Включите режим "
+                "«Обучение» кнопкой «🎓» в шапке панели — и я буду вести вас "
+                "по заполнению.",
+                author="agent",
+            )
+
     def _check_suggestions(self) -> None:
         """
         Проверяет, есть ли что подсказать, и показывает это в панели.
@@ -1832,6 +1860,10 @@ class AgentWidget(QObject):
         self._animation.setStartValue(0)
         self._animation.setEndValue(PANEL_WIDTH)
         self._animation.start()
+
+        # Предложение обучения при первом запуске (система обучения): один
+        # раз, сообщением в панели, а не диалогом.
+        self.offer_tutorial_on_first_run()
 
         if self.floating is not None and self.floating.isVisible():
             self.floating.raise_()

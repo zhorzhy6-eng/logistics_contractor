@@ -29,6 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.agent.tutorial_hints import (  # noqa: E402
     PULLABLE_SECTIONS,
     _build_hint,
+    onboarding_decision,
     tutorial_step_hint,
 )
 
@@ -118,3 +119,27 @@ def test_pullable_sections_are_titles():
     assert "Перевозчик" in PULLABLE_SECTIONS
     assert "Арендодатель" in PULLABLE_SECTIONS
     assert "Водитель" in PULLABLE_SECTIONS
+
+
+# ─────────────────────────────────────────────────────────────
+# Предложение обучения при первом запуске
+# ─────────────────────────────────────────────────────────────
+
+def test_onboarding_decision_offer():
+    """Первый запуск, режим выключен — предложить."""
+    assert onboarding_decision({"tutorial_seen": False, "tutorial_mode": False}) == "offer"
+
+
+def test_onboarding_decision_none():
+    """Предложение уже показывалось — ничего не делать."""
+    assert onboarding_decision({"tutorial_seen": True, "tutorial_mode": False}) == "none"
+
+
+def test_onboarding_decision_mark_seen():
+    """Режим уже включён — только поставить отметку, не спрашивать."""
+    assert onboarding_decision({"tutorial_seen": False, "tutorial_mode": True}) == "mark_seen"
+
+
+def test_onboarding_decision_empty_is_offer():
+    """Пустые настройки — это первый запуск: предложить."""
+    assert onboarding_decision({}) == "offer"
