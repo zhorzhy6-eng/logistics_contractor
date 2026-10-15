@@ -741,6 +741,7 @@ class PublicationApi:
     def page(self, index: int = 1, page_size: int = 100,
              name: Optional[str] = None, number: Optional[str] = None,
              document_types: Optional[Iterable[str]] = None,
+             authority: Optional[str] = None,
              sorted_by: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Одна страница списка документов.
@@ -750,6 +751,7 @@ class PublicationApi:
         :param name: подстрока названия;
         :param number: номер акта;
         :param document_types: идентификаторы видов документов;
+        :param authority: идентификатор органа, подписавшего акт (ГУИД);
         :param sorted_by: 1 — от старых к новым, 0/None — от новых к старым;
         :return: список записей API.
         """
@@ -764,6 +766,8 @@ class PublicationApi:
         types = [t for t in (document_types or []) if t]
         if types:
             params["DocumentTypes"] = list(types)
+        if authority:
+            params["SignatoryAuthorityId"] = str(authority)
         if sorted_by is not None:
             params["SortedBy"] = int(sorted_by)
 
@@ -775,6 +779,7 @@ class PublicationApi:
 
     def iter_documents(self, name: Optional[str] = None, number: Optional[str] = None,
                        document_types: Optional[Iterable[str]] = None,
+                       authority: Optional[str] = None,
                        max_pages: int = 5, page_size: int = 100,
                        sorted_by: Optional[int] = None) -> Iterator[Dict[str, Any]]:
         """
@@ -783,6 +788,7 @@ class PublicationApi:
         :param name: подстрока названия;
         :param number: номер акта;
         :param document_types: идентификаторы видов;
+        :param authority: идентификатор органа, подписавшего акт;
         :param max_pages: сколько страниц просматривать;
         :param page_size: размер страницы;
         :param sorted_by: порядок сортировки;
@@ -790,7 +796,8 @@ class PublicationApi:
         """
         for index in range(1, max(1, max_pages) + 1):
             items = self.page(index=index, page_size=page_size, name=name, number=number,
-                              document_types=document_types, sorted_by=sorted_by)
+                              document_types=document_types, authority=authority,
+                              sorted_by=sorted_by)
             if not items:
                 return
             for item in items:
@@ -1151,7 +1158,7 @@ class LegalParser:
 
     def list_updates(self, since_date: str, query: Optional[str] = None,
                      doc_type: Optional[str] = None, limit: int = 200,
-                     max_pages: int = 3) -> List[LegalDocument]:
+                     max_pages: int = 3, authority: str = "") -> List[LegalDocument]:
         """
         Документы, опубликованные не раньше указанной даты.
 
@@ -1163,6 +1170,8 @@ class LegalParser:
         :param doc_type: необязательный вид документа;
         :param limit: предел числа документов;
         :param max_pages: сколько страниц API просматривать;
+        :param authority: идентификатор органа, подписавшего акт (ГУИД) —
+            так лента сужается до нужного ведомства;
         :return: список документов (от новых к старым).
         """
         threshold = normalize_date(since_date)
@@ -1176,6 +1185,7 @@ class LegalParser:
             items = self.publication.page(
                 index=index, page_size=page_size, name=query or None,
                 document_types=[type_id] if type_id else None,
+                authority=authority or None,
             )
             if not items:
                 break
@@ -1207,6 +1217,21 @@ class LegalParser:
     def keywords(self) -> List[str]:
         """Ключевые слова поиска из списка источников."""
         return [str(word) for word in (self.sources.get("keywords") or [])]
+
+    def monitor_authorities(self) -> Dict[str, str]:
+        """
+        Ведомства, за которыми следит мониторинг обновлений.
+
+        Берутся из блока ``monitor.authorities`` списка источников:
+        «название → ГУИД органа на портале». Пустой словарь означает, что
+        ведомства не заданы и мониторинг пойдёт по ключевым словам.
+
+        :return: словарь «название органа → ГУИД».
+        """
+        raw = (self.sources.get("monitor") or {}).get("authorities") or {}
+        if isinstance(raw, list):  # допускается и список ГУИДов без названий
+            return {str(guid): str(guid) for guid in raw}
+        return {str(name): str(guid) for name, guid in raw.items() if guid}
 
     def resolve_item(self, item: Dict[str, Any], category: str = "") -> Optional[LegalDocument]:
         """
@@ -1546,45 +1571,93 @@ class LegalParser:
 
     def update(self, days: int = 30, query: Optional[str] = None,
                categories: Optional[Iterable[str]] = None,
-               limit: int = 200) -> Dict[str, Any]:
+               limit: int = 200, keywords: Optional[Iterable[str]] = None,
+               max_pages: int = 40, download: bool = False) -> Dict[str, Any]:
         """
-        Ищет и скачивает новые редакции/акты за последние N дней.
+        Ищет (и по желанию скачивает) новые акты за последние N дней.
+
+        Два режима:
+          * ``query`` задан — поиск на портале по этой строке;
+          * ``query`` пуст — обход ленты по ведомствам из блока
+            ``monitor.authorities`` списка источников (если они заданы) либо
+            по ключевым словам.
+
+        ВАЖНО про скачивание: ``download=False`` по умолчанию. Проверка
+        обновлений — это чтение, и она не должна незаметно тянуть на диск
+        десятки мегабайт сканов. Скачивание включается явно (ключ
+        ``--download`` у tools/update_legal.py).
+
+        Про ``max_pages``: портал публикует несколько сотен актов в день,
+        страница содержит 100 записей, поэтому 40 страниц — это примерно
+        двухнедельная лента. Меньшее значение сузит проверку по дате, но
+        не сломает её: обход всё равно остановится на границе периода.
 
         :param days: глубина проверки в днях;
-        :param query: подстрока названия; None — по ключевым словам списка;
+        :param query: подстрока названия; None — обход ленты;
         :param categories: категории, к которым отнести найденное;
-        :param limit: предел числа документов на один запрос;
+        :param limit: предел числа документов, возвращаемых в сводке;
+        :param keywords: свои ключевые слова для отбора (None — из списка источников);
+        :param max_pages: сколько страниц ленты просматривать;
+        :param download: скачивать ли найденное;
         :return: сводка «найдено / скачано / ошибок / документы».
         """
         since = datetime.now().timestamp() - max(1, int(days)) * 86400
         since_date = datetime.fromtimestamp(since).strftime("%Y-%m-%d")
         category = next(iter(categories), "") if categories else ""
 
-        queries = [query] if query else (self.keywords() or [""])
+        queries = [query] if query else None
         found: Dict[str, LegalDocument] = {}
-        for word in queries:
-            for document in self.list_updates(since_date, query=word or None, limit=limit):
-                found.setdefault(document.id, document)
+        if queries:
+            # Оператор спросил про конкретную тему — ищем на портале по ней.
+            for word in queries:
+                for document in self.list_updates(since_date, query=word or None,
+                                                  limit=limit, max_pages=max_pages):
+                    found.setdefault(document.id, document)
+        else:
+            authorities = self.monitor_authorities()
+            if authorities:
+                # Общая проверка идёт по ведомствам: у актов Минтранса и
+                # Правительства тема в названии почти никогда не совпадает
+                # с ключевым словом («О внесении изменений в…»), поэтому
+                # отбор по словам давал бы ноль. Ведомство — надёжный признак.
+                for name, guid in authorities.items():
+                    for document in self.list_updates(since_date, limit=max(limit, 500),
+                                                      max_pages=max_pages, authority=guid):
+                        document.extra["monitor_authority"] = name or document.authority
+                        found.setdefault(document.id, document)
+            else:
+                # Ведомства не заданы — обходим всю ленту и отбираем по словам.
+                words = [word.lower() for word in
+                         (keywords if keywords is not None else self.keywords()) if word]
+                for document in self.list_updates(since_date, limit=max(limit, 2000),
+                                                  max_pages=max_pages):
+                    title = _clean_for_match(document.title)
+                    if not words or any(word in title for word in words):
+                        found.setdefault(document.id, document)
 
         downloaded: List[DownloadResult] = []
         for document in found.values():
             if category:
                 document.category = category
             self._save(document)
-            if self._existing_file(document):
+            if not download or self._existing_file(document):
                 continue
             try:
                 downloaded.append(self.download_document(document))
             except Exception as e:  # noqa: BLE001
                 downloaded.append(DownloadResult(document=document, error=f"{type(e).__name__}: {e}"))
 
-        errors = [item for item in downloaded if item.error]
+        errors = [item.error for item in downloaded if item.failed]
         summary = {
             "since": since_date,
             "found": len(found),
             "downloaded": sum(1 for item in downloaded if item.ok),
+            "unavailable": sum(1 for item in downloaded if item.unavailable),
             "errors": len(errors),
+            "error_list": errors,
             "documents": [item.document for item in downloaded],
+            "found_documents": list(found.values()),
+            "download_enabled": bool(download),
         }
         legal_metadata.set_meta("last_update_check", datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 conn=self._connect())

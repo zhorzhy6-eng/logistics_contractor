@@ -31,7 +31,6 @@ import logging
 import os
 import subprocess
 import sys
-from functools import partial
 from typing import Any, Dict, List, Optional
 
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal, pyqtSlot
@@ -440,8 +439,12 @@ class LegalBaseDialog(QDialog):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progressed.connect(self._on_progress)
-        worker.finished.connect(partial(self._on_finished, thread))
-        worker.failed.connect(partial(self._on_failed, thread))
+        # Только связанные методы: lambda и partial в connect запрещены —
+        # замыкание держит Python-объект, связь живёт в C++ объекте сигнала,
+        # и получается цикл Python ↔ Qt (AGENTS.md § 4). Поток диалог берёт
+        # из self._thread, поэтому передавать его через сигнал не нужно.
+        worker.finished.connect(self._on_finished)
+        worker.failed.connect(self._on_failed)
         # Поток и работник удаляются после завершения: иначе QThread
         # остаётся жить и второй запуск упрётся в «уже работает».
         thread.finished.connect(thread.deleteLater)
@@ -463,24 +466,26 @@ class LegalBaseDialog(QDialog):
             self.progress.setRange(0, 0)
             self.progress.setFormat(label)
 
-    @pyqtSlot(QThread, str)
-    def _on_finished(self, thread: QThread, text: str) -> None:
+    @pyqtSlot(str)
+    def _on_finished(self, text: str) -> None:
         """Завершает операцию и обновляет список."""
-        self._stop_thread(thread)
+        self._stop_thread()
         self.log.setPlainText(text)
         self.refresh()
 
-    @pyqtSlot(QThread, str)
-    def _on_failed(self, thread: QThread, text: str) -> None:
+    @pyqtSlot(str)
+    def _on_failed(self, text: str) -> None:
         """Показывает ошибку операции."""
-        self._stop_thread(thread)
+        self._stop_thread()
         self.log.setPlainText(f"Ошибка: {text}")
         QMessageBox.warning(self, "Правовая база", f"Операция не выполнена:\n{text}")
 
-    def _stop_thread(self, thread: QThread) -> None:
+    def _stop_thread(self) -> None:
         """Останавливает поток и снимает блокировку кнопок."""
-        thread.quit()
-        thread.wait(5000)
+        thread = self._thread
+        if thread is not None:
+            thread.quit()
+            thread.wait(5000)
         self._thread = None
         self._worker = None
         self._set_busy(False)

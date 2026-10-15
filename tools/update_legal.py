@@ -35,7 +35,6 @@ if PROJECT_ROOT not in sys.path:
 
 from config.logging_config import setup_logging  # noqa: E402
 from core.legal_parser import LegalParser, human_size  # noqa: E402
-from db.crud import legal_metadata  # noqa: E402
 
 logger = logging.getLogger("tools.update_legal")
 
@@ -57,8 +56,9 @@ def main(argv=None) -> int:
     arg_parser.add_argument("--days", type=int, default=30, help="глубина проверки в днях (по умолчанию 30)")
     arg_parser.add_argument("--watch", help="своя строка поиска вместо ключевых слов списка источников")
     arg_parser.add_argument("--category", help="категория, к которой отнести найденное")
-    arg_parser.add_argument("--doc-type", help="вид документа (Федеральный закон, Постановление, Приказ, …)")
-    arg_parser.add_argument("--limit", type=int, default=200, help="предел числа документов на запрос")
+    arg_parser.add_argument("--limit", type=int, default=200, help="предел числа документов в отчёте")
+    arg_parser.add_argument("--pages", type=int, default=40,
+                            help="сколько страниц ленты просматривать (100 актов на страницу)")
     arg_parser.add_argument("--download", action="store_true", help="скачать найденные документы")
     arg_parser.add_argument("--check-only", action="store_true", help="только показать список (по умолчанию)")
     arg_parser.add_argument("--status", action="store_true", help="показать состояние базы и выйти")
@@ -79,70 +79,35 @@ def main(argv=None) -> int:
         print(f"  последнее скачивание:{data['last_download'] or ' —'}")
         return 0
 
-    queries = [args.watch] if args.watch else (parser.keywords() or [""])
-    found = {}
-    print(f"Проверяю опубликованное за последние {args.days} дн. по {len(queries)} запросам…")
-    for word in queries:
-        try:
-            documents = parser.list_updates(
-                _since_date(args.days), query=word or None,
-                doc_type=args.doc_type, limit=args.limit,
-            )
-        except Exception as e:  # noqa: BLE001 — один запрос не должен рушить проверку
-            print(f"  запрос «{word}»: ошибка {type(e).__name__}: {e}")
-            continue
-        for document in documents:
-            found.setdefault(document.id, document)
-        print(f"  «{word or 'вся лента'}»: {len(documents)}")
+    if args.watch:
+        print(f"Проверяю опубликованное за последние {args.days} дн. по запросу «{args.watch}»…")
+    else:
+        print(f"Проверяю ленту опубликования за последние {args.days} дн. "
+              f"по {len(parser.keywords())} ключевым словам списка источников…")
 
-    documents = sorted(found.values(), key=lambda item: item.publish_date, reverse=True)
+    summary = parser.update(
+        days=args.days, query=args.watch, limit=args.limit,
+        categories=[args.category] if args.category else None,
+        max_pages=args.pages, download=args.download,
+    )
+    documents = summary["found_documents"]
     show_documents(documents, "Новые документы")
+    for document in documents:
+        parser._save(document)
 
-    downloaded = 0
-    unavailable = 0
-    errors = 0
+    downloaded = summary["downloaded"]
+    unavailable = summary["unavailable"]
+    errors = summary["errors"]
     if args.download:
-        print("\nСкачивание…")
-        for document in documents:
-            if args.category:
-                document.category = args.category
-            parser._save(document)
-            if parser._existing_file(document):
-                continue
-            try:
-                result = parser.download_document(document)
-            except Exception as e:  # noqa: BLE001
-                print(f"  ОШИБКА {document.display_title[:50]}: {e}")
-                errors += 1
-                continue
-            if result.ok:
-                downloaded += 1
-                mark = " (OCR)" if result.ocr_used else ""
-                print(f"  OK {document.display_title[:50]}{mark}: {result.text_chars} символов")
-            elif result.unavailable:
-                unavailable += 1
-            else:
-                errors += 1
-                print(f"  ОШИБКА {document.display_title[:50]}: {result.error}")
-
-    legal_metadata.set_meta("last_update_check", time.strftime("%Y-%m-%d %H:%M:%S"),
-                            conn=parser._connect())
+        print("\nСкачано:")
+        for document in summary["documents"]:
+            print(f"  OK {document.display_title[:60]}: {document.text_chars} символов")
     print()
     print(f"Найдено: {len(documents)} | скачано: {downloaded} | "
           f"без источника: {unavailable} | ошибок: {errors} | время: {time.time() - started:.1f} с")
     if not args.download:
         print("Файлы не скачивались: добавьте --download.")
     return 1 if errors else 0
-
-
-def _since_date(days: int) -> str:
-    """
-    Дата «N дней назад» в ISO.
-
-    :param days: глубина в днях;
-    :return: дата в формате ГГГГ-ММ-ДД.
-    """
-    return time.strftime("%Y-%m-%d", time.localtime(time.time() - max(1, int(days)) * 86400))
 
 
 if __name__ == "__main__":

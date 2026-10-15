@@ -67,6 +67,7 @@ DEFAULT_LEGAL_SETTINGS: Dict[str, Any] = {
     "chunk_overlap": 100,
     "embedding_model": "Embeddings",
     "lexical_fallback": True,
+    "local_fallback": True,
 }
 
 
@@ -179,7 +180,8 @@ class IndexWorker(QObject):
 
     def _settings_kwargs(self) -> Dict[str, Any]:
         """Отбирает из настроек то, что понимает RAG."""
-        keys = ("top_k", "chunk_size", "chunk_overlap", "embedding_model", "lexical_fallback")
+        keys = ("top_k", "chunk_size", "chunk_overlap", "embedding_model",
+                "lexical_fallback", "local_fallback")
         return {key: self._settings[key] for key in keys if key in self._settings}
 
     def _on_progress(self, stage: str, done: int, total: int) -> None:
