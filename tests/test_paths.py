@@ -22,6 +22,16 @@ core/contracts/paths.py — contract_folder_name() и resolve_contract_folder().
 
 Все данные синтетические, реальных ПДн нет. Папки создаются во временной
 папке и удаляются за тестом.
+
+**Про «сегодня».** Часть проверок зависит от текущей даты: дата не
+разобралась — в имени папки оказывается сегодняшний день
+(`core/contracts/paths.py`). Такие проверки идут на ОСТАНОВЛЕННЫХ часах
+(фикстура `frozen_today`): иначе тест падал бы сам по себе, если прогон
+перешагнул полночь, — а один раз именно так и было (см. докстроку
+`test_folder_name_bad_date_is_today`). `freezegun` в проект не добавлен
+(`AGENTS.md` § 4: новая зависимость — только с разрешения), поэтому часы
+подменяются вручную: `core.contracts.paths` берёт `datetime` из своего
+пространства имён, и подменяется ровно он.
 """
 
 import re
@@ -32,6 +42,7 @@ from pathlib import Path
 
 import pytest
 
+from core.contracts import paths as paths_module
 from core.contracts.paths import (
     ROUTE_LIMIT,
     contract_folder_name,
@@ -42,10 +53,34 @@ from core.contracts.paths import (
 #: Ожидаемое имя папки целиком: буквы, цифры, точка, дефис, подчёркивание.
 SAFE_NAME = re.compile(r"^[\w.\-]+$", re.UNICODE)
 
-TODAY = datetime.now().strftime("%d.%m.%Y")
+#: Остановленные часы: «сегодня» для проверок, зависящих от текущей даты.
+FROZEN_TODAY = datetime(2026, 10, 15, 12, 0, 0)
+TODAY = FROZEN_TODAY.strftime("%d.%m.%Y")
 
 #: Шаблон «Без_водителя...»: столько подчёркиваний даёт сам шаблон имени.
 NO_DRIVER = "Без_водителя"
+
+
+@pytest.fixture(autouse=True)
+def frozen_today(monkeypatch):
+    """
+    Останавливает часы для `core/contracts/paths.py`.
+
+    Подменяется `datetime` в пространстве имён модуля — там его и читает
+    `_folder_date` (строка «дата не разобралась — берём сегодняшнюю»).
+    Иначе проверка «мусор вместо даты → сегодня» зависела бы от того, успел
+    ли прогон закончиться до полуночи.
+    """
+    monkeypatch.setattr(paths_module, "datetime", _FrozenDatetime)
+    return FROZEN_TODAY
+
+
+class _FrozenDatetime(datetime):
+    """`datetime` с неподвижным `now()` — только для тестов путей."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_TODAY if tz is None else FROZEN_TODAY.astimezone(tz)
 
 
 @pytest.fixture
@@ -186,6 +221,9 @@ def test_folder_name_bad_date_is_today(bad_date):
     проходил ровно один день (в день, когда разбираемая дата совпадала с
     сегодняшней) и падал сам по себе при смене дня. Проверяться должна
     ИМЕННО неразобранная дата, а не вчерашняя.
+
+    «Сегодня» берётся с остановленных часов (`frozen_today`), поэтому тест
+    не зависит от того, когда его запустили.
     """
     data = {
         "driver": {"full_name": "Иванов Иван Иванович"},
@@ -193,6 +231,29 @@ def test_folder_name_bad_date_is_today(bad_date):
     }
 
     assert contract_folder_name(data) == f"Иванов_И.И._Москва-Тверь_{TODAY}"
+
+
+def test_clock_is_really_frozen(monkeypatch):
+    """
+    Часы действительно остановлены — иначе предыдущая проверка ничего не значит.
+
+    Дата не разобралась → в имени папки ДРУГОЙ день, и он равен тому, что
+    показывает подменённый `datetime`. Без этой проверки «today» в тестах
+    мог бы оказаться обычным `datetime.now()`, и весь смысл фикстуры пропал.
+    """
+    other_day = datetime(2027, 3, 4, 9, 30, 0)
+
+    class _OtherDay(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return other_day
+
+    monkeypatch.setattr(paths_module, "datetime", _OtherDay)
+
+    data = {"driver": {"full_name": "Иванов Иван Иванович"},
+            "contract": {"route": "Москва-Тверь", "date": "мусор"}}
+
+    assert contract_folder_name(data) == "Иванов_И.И._Москва-Тверь_04.03.2027"
 
 
 def test_folder_name_takes_first_ten_characters_of_date():
