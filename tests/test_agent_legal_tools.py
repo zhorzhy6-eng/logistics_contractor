@@ -316,7 +316,7 @@ def test_search_legal_says_no_norm_in_base():
 
 
 def test_search_legal_result_is_short(fake_rag):
-    """Результат короче лимита памяти агента — обрезки не будет."""
+    """Результат с запасом короче лимита памяти агента — обрезки не будет."""
     chunks = [make_chunk(article=str(700 + index), text=FINE_TEXT * 2)
               for index in range(5)]
     fake_rag.chunks = chunks
@@ -324,7 +324,9 @@ def test_search_legal_result_is_short(fake_rag):
     result = legal_tools.search_legal(query="штраф за просрочку")
 
     assert len(result["data"]["chunks"]) == 5
-    assert payload_size(result) < 4000
+    #: Замер на настоящей базе (5 фрагментов, реальные названия и ссылки) —
+    #: 3,4 КБ. Держим запас: 3 800, а не «впритык» к 4 000.
+    assert payload_size(result) < 3800
 
 
 def test_search_legal_truncates_long_text(fake_rag):

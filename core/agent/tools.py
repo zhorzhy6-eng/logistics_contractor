@@ -2852,7 +2852,8 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
             "query": {
                 "type": "string",
                 "description": "название или номер акта («ФЗ-259», «Правила "
-                               "перевозок грузов») или путь к файлу",
+                               "перевозок грузов», «Устав автомобильного "
+                               "транспорта»)",
             },
             "force": {
                 "type": "boolean",

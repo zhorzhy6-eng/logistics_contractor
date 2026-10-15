@@ -47,7 +47,16 @@ LEGAL_TOP_K = 5
 #: Сколько символов цитаты уходит модели в одном фрагменте. Фрагмент в
 #: индексе — 900 символов; для ответа достаточно начала нормы, а остальное
 #: оператор читает в диалоге правовой базы.
-MAX_CHUNK_CHARS = 500
+#:
+#: 450 выбрано замером: пять фрагментов с реальными названиями актов и
+#: ссылками дают ~3,4 КБ — с запасом меньше лимита памяти агента (4 КБ).
+#: С 500 символами замер давал 3 787 символов: проходило, но без запаса на
+#: длинные названия и ссылки.
+MAX_CHUNK_CHARS = 450
+
+#: Сколько символов ссылки на портал оставлять. Настоящие ссылки
+#: pravo.gov.ru — около 55 символов; 120 — это уже с большим запасом.
+MAX_URL_CHARS = 120
 
 #: Сколько кандидатов показывать при поиске акта на портале.
 LEGAL_SEARCH_LIMIT = 5
@@ -171,7 +180,7 @@ def _chunk_for_model(chunk: Dict[str, Any], number: int) -> Dict[str, Any]:
         "article": _article_text(chunk),
         "number": _short(chunk.get("doc_number"), 40),
         "date": _short(chunk.get("doc_date"), 20),
-        "url": _short(chunk.get("doc_url"), 200),
+        "url": _short(chunk.get("doc_url"), MAX_URL_CHARS),
         "text": _short(chunk.get("text"), MAX_CHUNK_CHARS),
     }
 
@@ -445,6 +454,7 @@ __all__ = [
     "LEGAL_SEARCH_LIMIT",
     "LEGAL_TOP_K",
     "MAX_CHUNK_CHARS",
+    "MAX_URL_CHARS",
     "download_legal",
     "get_legal_parser",
     "get_legal_rag",
