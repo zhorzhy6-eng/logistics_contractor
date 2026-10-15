@@ -653,44 +653,136 @@ class Agent:
         Данные уже собраны — оператору они полезнее, чем извинение модели.
         Текст формируется БЕЗ обращения к GigaChat: лишний запрос на
         последнем шаге не нужен.
+
+        Текст — ДЛЯ ОПЕРАТОРА, а не отладочный дамп (стресс-тест
+        15.10.2026, запросы №22, №23, №31): раньше сюда попадали имена
+        инструментов (`get_form_state`) и `repr` их данных — в ответе
+        оказывалась свалка вида ``carrier_tab={'filled': {...}}`` длиной
+        больше двух тысяч символов. Теперь инструмент называется своим
+        человеческим описанием (``Tool.summary``), а данные сжимаются до
+        счётчиков и коротких значений (см. `_brief`).
         """
         done = [call for call in calls if call.result and call.result.get("ok")]
         failed = [call for call in calls if not call.result or not call.result.get("ok")]
+        steps = self.max_tool_steps
         lines = [
-            f"Дошёл до лимита в {self.max_tool_steps} шагов — "
-            f"дальше звать инструменты не буду."
+            f"За один запрос я успеваю {steps} {_steps_word(steps)} — "
+            f"лимит исчерпан."
         ]
         if done:
-            lines.append(f"Успешно выполнено: {len(done)}. Что нашёл:")
+            lines.append("Что успел узнать:")
             for call in done[-3:]:
-                data = call.result.get("data")
-                lines.append(f"• {call.name}: {_brief(data)}")
+                lines.append(f"• {_call_title(call)}: "
+                             f"{_brief(call.result.get('data'))}")
         if failed:
             lines.append(
                 "Не получилось: " + ", ".join(
-                    f"{call.name}"
+                    _call_title(call)
                     + (" (отменено вами)" if call.declined else "")
                     for call in failed
                 )
             )
         lines.append("Уточните запрос — отвечу точнее.")
-        return "\n".join(lines)
+        return _cap("\n".join(lines), ANSWER_LIMIT_AFTER_LIMIT)
 
     def clear_history(self) -> int:
         """Очищает историю диалога (кнопка «Очистить историю»)."""
         return self.memory.clear()
 
 
-def _brief(data: Any, limit: int = 200) -> str:
-    """Короткое представление данных инструмента для служебного ответа."""
+#: Предел длины служебного ответа: оператору нужен итог, а не отчёт.
+ANSWER_LIMIT_AFTER_LIMIT = 700
+
+
+def _steps_word(number: int) -> str:
+    """Слово «шаг» в правильной форме: 1 шаг, 2 шага, 5 шагов."""
+    value = abs(int(number)) % 100
+    if 11 <= value <= 14:
+        return "шагов"
+    value %= 10
+    if value == 1:
+        return "шаг"
+    if 2 <= value <= 4:
+        return "шага"
+    return "шагов"
+
+
+def _call_title(call: ToolCall) -> str:
+    """
+    Человеческое название инструмента для служебного ответа.
+
+    Берётся `Tool.summary` («Список открытых вкладок»), а не машинное имя
+    (`get_open_tabs`): оператор не знает, что такое `get_form_state`.
+    Первая буква опускается в нижний регистр — фраза идёт после «• ».
+    """
+    summary = ""
+    if call.tool is not None:
+        summary = str(call.tool.summary or "").strip()
+    text = summary or str(call.name or "").replace("_", " ")
+    if not text:
+        return "инструмент"
+    return text[0].lower() + text[1:]
+
+
+def _brief(data: Any, limit: int = 160) -> str:
+    """
+    Короткое человеческое представление данных инструмента.
+
+    Правила: список — количеством, словарь — счётчиками и короткими
+    значениями, вложенные структуры — количеством, а не свалкой ключей.
+    Строка обрезается: служебный ответ не место для полотна.
+    """
     if isinstance(data, list):
-        if not data:
-            return "ничего не найдено"
-        return f"найдено {len(data)}"
+        return f"найдено {len(data)}" if data else "ничего не найдено"
     if isinstance(data, dict):
-        return ", ".join(f"{key}={value}" for key, value in list(data.items())[:4])
+        if not data:
+            return "пусто"
+        parts: List[str] = []
+        for key, value in data.items():
+            if isinstance(value, dict):
+                #: Так выглядит состояние формы: важно «сколько заполнено»,
+                #: а не перечень всех полей со значениями.
+                if "filled_count" in value:
+                    parts.append(f"{key}: заполнено "
+                                 f"{value.get('filled_count')}, "
+                                 f"пусто {value.get('empty_count')}")
+                continue
+            if isinstance(value, (list, tuple)):
+                parts.append(f"{key}: {len(value)}")
+                continue
+            text = _short_value(value)
+            if text:
+                parts.append(f"{key}={text}")
+            if len(parts) >= 4:
+                break
+        return "; ".join(parts) or "пусто"
     text = "" if data is None else str(data)
-    return text if len(text) <= limit else text[:limit] + "…"
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _short_value(value: Any, limit: int = 60) -> str:
+    """Короткое значение поля для служебного ответа."""
+    if value is None or isinstance(value, bool):
+        return ""
+    text = " ".join(str(value).split())
+    if not text:
+        return ""
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _cap(text: str, limit: int) -> str:
+    """Ограничивает длину служебного ответа (обрезает по строкам)."""
+    if len(text) <= limit:
+        return text
+    lines: List[str] = []
+    size = 0
+    for line in text.split("\n"):
+        if size + len(line) + 1 > limit:
+            break
+        lines.append(line)
+        size += len(line) + 1
+    return "\n".join(lines)
 
 
 __all__ = [
