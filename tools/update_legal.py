@@ -92,8 +92,6 @@ def main(argv=None) -> int:
     )
     documents = summary["found_documents"]
     show_documents(documents, "Новые документы")
-    for document in documents:
-        parser._save(document)
 
     downloaded = summary["downloaded"]
     unavailable = summary["unavailable"]
@@ -106,7 +104,8 @@ def main(argv=None) -> int:
     print(f"Найдено: {len(documents)} | скачано: {downloaded} | "
           f"без источника: {unavailable} | ошибок: {errors} | время: {time.time() - started:.1f} с")
     if not args.download:
-        print("Файлы не скачивались: добавьте --download.")
+        print("Найденное только показано: в правовую базу оно не записано. "
+              "Добавьте --download, чтобы скачать и сохранить.")
     return 1 if errors else 0
 
 

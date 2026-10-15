@@ -156,7 +156,7 @@ def main(argv=None) -> int:
         )
 
     print()
-    ok = [item for item in results if item.ok]
+    ok = [item for item in results if item.ok and not item.skipped]
     skipped = [item for item in results if item.skipped]
     unavailable = [item for item in results if item.unavailable]
     failed = [item for item in results if item.failed]

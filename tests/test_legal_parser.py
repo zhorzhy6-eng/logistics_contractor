@@ -943,6 +943,31 @@ def test_update_summary(legal_db, sources_file, tmp_path):
     assert legal_metadata.get_meta("last_update_check")
 
 
+def test_update_without_download_does_not_touch_registry(legal_db, sources_file, tmp_path):
+    """Проверка обновлений — чтение: без --download база не пополняется."""
+    items = [api_item("0001202610140033", "1344", "Свежий акт", "2026-10-14")]
+    routes = [("api/Documents", FakeResponse(payload={"items": items})),
+              ("file/pdf/", FakeResponse(content=b"%PDF-1.4 mock"))]
+    parser = build_parser(sources_file, tmp_path, routes=routes)
+    summary = parser.update(days=30, query="перевозка", download=False)
+    assert summary["found"] >= 1
+    assert summary["downloaded"] == 0
+    assert summary["download_enabled"] is False
+    assert legal_metadata.get_document("eo:0001202610140033") is None
+    assert parser.documents() == [], "реестр правовой базы должен остаться пустым"
+
+
+def test_update_with_download_saves_to_registry(legal_db, sources_file, tmp_path):
+    """С ключом --download найденное попадает и в реестр, и в отчёт."""
+    items = [api_item("0001202610140033", "1344", "Свежий акт", "2026-10-14")]
+    routes = [("api/Documents", FakeResponse(payload={"items": items})),
+              ("file/pdf/", FakeResponse(content=b"%PDF-1.4 mock"))]
+    parser = build_parser(sources_file, tmp_path, routes=routes)
+    summary = parser.update(days=30, query="перевозка", download=True)
+    assert summary["download_enabled"] is True
+    assert len(parser.documents()) == 1
+
+
 def test_stats_reports_directories(legal_db, sources_file, tmp_path):
     """Сводка парсера показывает каталоги и объёмы."""
     parser = build_parser(sources_file, tmp_path, routes=[])

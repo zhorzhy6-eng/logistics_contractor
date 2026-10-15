@@ -1639,8 +1639,13 @@ class LegalParser:
         for document in found.values():
             if category:
                 document.category = category
+            if not download:
+                # Проверка обновлений — это ЧТЕНИЕ. Найденное показывается
+                # в отчёте, но в реестр правовой базы не пишется: иначе база
+                # забивалась бы сотнями чужих актов, которые никто не качал.
+                continue
             self._save(document)
-            if not download or self._existing_file(document):
+            if self._existing_file(document):
                 continue
             try:
                 downloaded.append(self.download_document(document))
