@@ -29,7 +29,7 @@ from core.crash_handler import install_crash_handler
 # Падение при выходе (0xC0000005/0xC0000409 в Qt5Core.dll) идёт мимо
 # sys.excepthook, поэтому нужны инструменты уровнем ниже. Импорт также без
 # побочных действий: всё включается вызовом после setup_logging().
-from core.qt_crash_handler import install_crash_diagnostics
+from core.qt_crash_handler import install_crash_diagnostics, mark_normal_exit
 
 
 def _parse_args(argv=None):
@@ -266,11 +266,64 @@ def _do_exit(manager, app) -> None:
         app.quit()
 
 
+#: Завершать процесс сразу после выхода из цикла событий, не давая
+#: интерпретатору разбирать объекты Python и Qt «вперемешку».
+#:
+#: Почему так. Выход из приложения падал `0xC0000005` (access violation)
+#: ПЛАВАЮЩЕ: примерно в половине запусков, независимо от того, что делал
+#: оператор перед выходом. Замер пробой (offscreen, 6 запусков на режим,
+#: `tests/_tmp/_diag_exit/plain_probe.py`):
+#:
+#:   * `app.quit()` без всего прочего          — 4 падения из 6;
+#:   * `main._do_exit`                         — 5 падений из 6;
+#:   * выход с разбором отложенных событий      — 5 падений из 6;
+#:   * `main._do_exit` + немедленный выход      — **0 падений из 6**.
+#:
+#: Падение живёт не в закрытии окон (оно проверено) и не в рабочих потоках
+#: (к моменту выхода живых потоков Python — ноль), а в ЗАВЕРШЕНИИ
+#: интерпретатора: Qt и Python разрушают одни и те же объекты в разном
+#: порядке. Поэтому процесс завершается явно — после того, как работа
+#: действительно закончена.
+#:
+#: Что при этом НЕ теряется: журнал сбрасывается на диск (`logging.shutdown`
+#: закрывает обработчики), база — уже записана, окна и потоки — закрыты
+#: циклом выше. Терять нечего: к этому моменту живы только объекты Qt.
+EXIT_IMMEDIATELY = True
+
+
+def _finish_process(exit_code: int) -> None:
+    """
+    Завершает процесс кодом `exit_code`, минуя разбор объектов Python и Qt.
+
+    Обычный `return` из `main()` оставляет завершение интерпретатору, а тот
+    падает (см. ``EXIT_IMMEDIATELY``). Перед выходом журнал сбрасывается на
+    диск: `os._exit` не выполняет обработчики завершения, и без сброса
+    последние строки журнала остались бы в буфере.
+    """
+    try:
+        # Различитель «штатный выход / аварийный» пишется здесь: `os._exit`
+        # не выполняет atexit-хуки, и без этого вызова диагностика считала
+        # бы нормальный выход падением.
+        mark_normal_exit()
+        logging.shutdown()
+    except Exception as e:  # noqa: BLE001 — журнал не важнее выхода
+        print(f"Не удалось закрыть журнал: {e}", file=sys.stderr)
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:  # noqa: BLE001 — потока может уже не быть
+            pass
+
+    os._exit(int(exit_code))
+
+
 def main() -> int:
     """
     Главная функция. Создаёт приложение и запускает его.
     Возвращает код выхода (0 — успех, 1 — ошибка).
     """
+    exit_code = 1
     try:
         logger.info("=== Запуск приложения ===")
         if _ARGS.debug:
@@ -314,7 +367,7 @@ def main() -> int:
         contract_type = _choose_contract_type()
         if contract_type is None:
             logger.info("Тип договора не выбран — приложение закрывается")
-            return 0
+            return _return_or_exit(0)
 
         # ── Окна типов: лениво, через менеджер (ЭТАП 2B) ──
         # Окна не уничтожаются при переключении типа: пользователь может
@@ -330,7 +383,7 @@ def main() -> int:
         window = _switch(manager, receiver, contract_type)
         if window is None:
             logger.error(f"Не удалось открыть окно типа договора: {contract_type}")
-            return 1
+            return _return_or_exit(1)
 
         logger.info(f"Открыт тип договора: {contract_type}")
         logger.info("Приложение успешно запущено")
@@ -338,11 +391,26 @@ def main() -> int:
         # Запускаем цикл событий
         exit_code = app.exec_()
         logger.info("Приложение закрыто: код=%s", exit_code)
-        return exit_code
 
     except Exception as e:
         logger.error(f"Критическая ошибка при запуске: {e}", exc_info=True)
-        return 1
+        exit_code = 1
+
+    return _return_or_exit(exit_code)
+
+
+def _return_or_exit(exit_code: int) -> int:
+    """
+    Одна дверь для всех выходов из `main()`.
+
+    При ``EXIT_IMMEDIATELY`` процесс завершается здесь и `main()` не
+    возвращается вовсе — иначе завершение интерпретатора роняет его
+    (см. ``EXIT_IMMEDIATELY``). Возврат нужен тестам и пробам, которым
+    важен код выхода, а не сам процесс.
+    """
+    if EXIT_IMMEDIATELY:
+        _finish_process(exit_code)
+    return exit_code
 
 
 if __name__ == "__main__":

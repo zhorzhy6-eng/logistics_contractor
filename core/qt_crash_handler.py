@@ -419,6 +419,23 @@ def _log_normal_exit() -> None:
         pass
 
 
+def mark_normal_exit() -> None:
+    """
+    Записывает в журнал «приложение завершается нормально» ДО выхода.
+
+    Нужна там, где процесс завершается явно (`os._exit` в `main.py`): такой
+    выход не выполняет atexit-хуки, и без этого вызова в журнале не было бы
+    различителя «штатный выход / аварийный» — диагностика считала бы
+    нормальный выход падением.
+
+    Идемпотентна: повторный вызов (в том числе из atexit) ничего не ломает.
+    """
+    if _state.get("normal_exit_logged"):
+        return
+    _state["normal_exit_logged"] = True
+    _log_normal_exit()
+
+
 def install_exit_marker() -> None:
     """Ставит atexit-хук с записью «приложение завершается нормально»."""
     with _lock:
@@ -479,6 +496,7 @@ def reset_for_tests() -> None:
         _state["started_at"] = None
         _state["qt_levels"] = None
         _state["qt_handler_error_logged"] = False
+        _state["normal_exit_logged"] = False
 
 
 __all__ = [
@@ -493,6 +511,7 @@ __all__ = [
     "install_exit_marker",
     "install_faulthandler",
     "install_qt_message_handler",
+    "mark_normal_exit",
     "reset_for_tests",
     "uninstall_qt_message_handler",
 ]

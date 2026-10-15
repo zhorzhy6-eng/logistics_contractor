@@ -18,6 +18,14 @@ GigaChat) и вкладки — свои (поиск в DaData). Пул — Qt-�
 QThreadPool (access violation на выходе)». В самом приложении такого ожидания
 не было — здесь оно и появилось.
 
+Отдельно — рабочие ПОТОКИ (`QThread`). Кроме пулов, окно держит потоки,
+которые живут всю программу: у Максимилиана это поток запроса к модели
+(`ui/agent_widget.py::AgentWidget._ensure_worker`). Он не входит в пул, и
+`waitForDone` его не касается. Тот же корень и та же беда: поток,
+доживший до разрушения QT-родителя, роняет процесс (`0xC0000005`).
+Поэтому здесь есть вторая дверь — `wait_for_threads`, устроенная так же,
+как первая.
+
 Решение осознанное:
 
   * ждём ПЕРЕД закрытием окна, а не после: после `close()`/`deleteLater()`
@@ -26,12 +34,15 @@ QThreadPool (access violation на выходе)». В самом приложе
     ожидание на выходе хуже, чем предупреждение в журнале. Если время вышло,
     пишем WARNING с числом активных потоков — это след для разбора;
   * чужие пулы (глобальный QThreadPool.instance() и пулы других окон) не
-    трогаем: ждём только своих детей.
+    трогаем: ждём только своих детей;
+  * потокам, которые умеют останавливаться сами (`AgentWidget.shutdown`
+    зовёт `quit()` и `wait()`), здесь ничего объяснять не нужно: ожидание
+    только подтверждает, что они уже встали.
 """
 
 import logging
 
-from PyQt5.QtCore import QThreadPool
+from PyQt5.QtCore import QThread, QThreadPool
 
 logger = logging.getLogger("ui.qt_shutdown")
 
@@ -83,6 +94,63 @@ def wait_for_thread_pools(root, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> int:
     return waited
 
 
+def threads_of(root) -> list:
+    """Все QThread внутри root (рекурсивно по дереву объектов Qt)."""
+    if root is None or not hasattr(root, "findChildren"):
+        return []
+    return list(root.findChildren(QThread))
+
+
+def wait_for_threads(root, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> int:
+    """
+    Просит рабочие ПОТОКИ внутри root остановиться и ждёт их.
+
+    Вторая дверь того же выхода, что и ``wait_for_thread_pools``: пул —
+    не единственный способ увести работу в сторону. Поток запроса к модели
+    (Максимилиан) живёт вне пулов, и `waitForDone` его не касается.
+
+    Что делает по шагам: ``quit()`` (просьба выйти из цикла событий) →
+    ``wait(timeout_ms)``. Порядок именно такой: без просьбы поток с циклом
+    событий не остановится никогда, и ожидание всегда упиралось бы в
+    таймаут.
+
+    Возвращает число потоков, которых пришлось ждать (0 — ждать было
+    нечего). Уже остановленные потоки пропускаются. Превышение таймаута не
+    исключение: пишем WARNING и идём дальше — выход из приложения не должен
+    падать из-за диагностики.
+
+    Почему ``quit()`` здесь безопасен: он не прерывает выполняющуюся работу,
+    а только просит цикл событий завершиться ПОСЛЕ текущего слота. Поток без
+    цикла событий (свой ``run``) на просьбу не отреагирует — его остановит
+    владелец, а таймаут не даст выходу повиснуть.
+    """
+    waited = 0
+    for thread in threads_of(root):
+        try:
+            running = thread.isRunning()
+        except RuntimeError:
+            # Поток уже разрушен (C++ объект удалён) — ждать нечего.
+            continue
+        if not running:
+            continue
+
+        waited += 1
+        name = thread.objectName() or type(thread).__name__
+        logger.info("Закрытие окна: останавливаем рабочий поток %r", name)
+        try:
+            thread.quit()
+            finished = thread.wait(timeout_ms)
+        except RuntimeError:
+            continue
+        if not finished:
+            logger.warning(
+                "Закрытие окна: поток %r не завершился за %s мс — "
+                "закрываем без ожидания",
+                name, timeout_ms,
+            )
+    return waited
+
+
 def cancel_running_tasks(task_holder, attribute: str) -> int:
     """
     Помечает задачи отменёнными перед ожиданием пула.
@@ -107,5 +175,7 @@ __all__ = [
     "DEFAULT_TIMEOUT_MS",
     "cancel_running_tasks",
     "thread_pools_of",
+    "threads_of",
     "wait_for_thread_pools",
+    "wait_for_threads",
 ]

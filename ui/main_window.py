@@ -56,7 +56,7 @@ from ui.db_manager_dialog import DbManagerDialog
 from ui.diagnostics_menu import DiagnosticsMenuMixin
 from ui.settings_dialog import SettingsDialog
 from ui.navigation import SideNav
-from ui.qt_shutdown import cancel_running_tasks, wait_for_thread_pools
+from ui.qt_shutdown import cancel_running_tasks, wait_for_thread_pools, wait_for_threads
 from ui.widgets.table_helpers import save_all_column_widths
 
 logger = logging.getLogger(__name__)
@@ -2058,6 +2058,12 @@ class MainWindow(DiagnosticsMenuMixin, QMainWindow):
         self._save_all_column_widths()
 
         wait_for_thread_pools(self)
+        # Потоки (не пулы) ждут отдельно: поток запроса к модели у
+        # Максимилиана вне пула, и `waitForDone` его не касается —
+        # см. ui/qt_shutdown.py::wait_for_threads. К этому месту
+        # agent_widget.shutdown() уже остановил его; ожидание подтверждает,
+        # что поток встал, и ловит чужие потоки, если они появятся.
+        wait_for_threads(self)
 
         self._force_close = True
         self.close()

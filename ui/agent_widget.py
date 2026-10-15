@@ -1706,13 +1706,24 @@ class AgentWidget(QObject):
         Поток живёт до выхода из программы: создавать его на каждый вопрос
         незачем (запросы идут по одному), а останавливать и ждать его надо
         явно — это и делает shutdown().
+
+        РОДИТЕЛЬ ПОТОКА — САМ ВИДЖЕТ, и это не украшение. Бесхозный
+        ``QThread()`` держится только ссылкой Python: как только виджет
+        (или окно) уничтожается — в том числе сборщиком мусора, — Qt
+        разрушает поток и объект ``AgentWorker``, пока тот ещё работает.
+        Это и есть плавающее падение при выходе после запроса к агенту
+        (`0xC0000005` в `sip`/`Qt5Core`); проверено A/B-пробой
+        `tools/agent_exit_check/exit_with_agent.py`: без удержания ссылки на
+        окно процесс падал, с удержанием — выходил чисто. С родителем время
+        жизни потока равно времени жизни виджета, а `findChildren(QThread)`
+        видит его при закрытии окна (`ui/qt_shutdown.py::wait_for_threads`).
         """
         if self._thread is not None:
             return
 
         from PyQt5.QtCore import QThread
 
-        self._thread = QThread()
+        self._thread = QThread(self)
         self._thread.setObjectName("agentThread")
         self._worker = AgentWorker()
         self._worker.moveToThread(self._thread)
@@ -2039,13 +2050,22 @@ class AgentWidget(QObject):
 
         if self._thread is not None:
             logger.info("Максимилиан: останавливаю рабочий поток")
+            thread = self._thread
             try:
-                self._thread.quit()
-                if not self._thread.wait(5000):
+                thread.quit()
+                if not thread.wait(5000):
                     logger.warning(
                         "Максимилиан: поток не завершился за 5 с — ждём дальше"
                     )
-                    self._thread.wait()
+                    thread.wait()
+                # Обработчик возвращается в поток интерфейса. Он живёт в
+                # рабочем потоке (`moveToThread`), и Qt запрещает удалять
+                # QObject из чужого потока: без переноса объект разрушался
+                # бы после выхода, когда поток уже остановлен, — это и есть
+                # плавающее падение `0xC0000005` в конце работы программы
+                # (проба tools/agent_exit_check/exit_with_agent.py).
+                if self._worker is not None:
+                    self._worker.moveToThread(QThread.currentThread())
             except RuntimeError:
                 # Поток уже разрушен вместе с окном — ждать нечего.
                 pass

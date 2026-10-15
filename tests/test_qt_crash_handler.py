@@ -362,7 +362,40 @@ def test_reset_for_tests_returns_clean_state(logs_dir):
         "exit_marker_installed": False,
         "started_at": None,
         "qt_levels": None,
+        "normal_exit_logged": False,
     }
+
+
+def test_mark_normal_exit_writes_the_marker(logs_dir):
+    """
+    mark_normal_exit пишет ту же строку, что atexit-хук.
+
+    Нужна там, где процесс завершается явно (`os._exit` в main.py): такой
+    выход atexit-хуки не выполняет, и без этой записи нормальный выход
+    выглядел бы в журнале аварийным. Проверка — по файлу журнала: запись
+    идёт при снятых консольных обработчиках (см. `_console_detached`),
+    поэтому caplog её не видит.
+    """
+    logging_config.setup_logging(log_dir=str(logs_dir))
+    qt_handler.install_exit_marker()
+
+    qt_handler.mark_normal_exit()
+
+    app_log = _read(logs_dir / logging_config.APP_LOG_FILENAME)
+    assert "Приложение завершается нормально" in app_log
+    assert qt_handler._state["normal_exit_logged"] is True
+
+
+def test_mark_normal_exit_is_idempotent(logs_dir):
+    """Повторный вызов (в том числе из atexit) второй строки не пишет."""
+    logging_config.setup_logging(log_dir=str(logs_dir))
+    qt_handler.install_exit_marker()
+
+    qt_handler.mark_normal_exit()
+    qt_handler.mark_normal_exit()
+
+    app_log = _read(logs_dir / logging_config.APP_LOG_FILENAME)
+    assert app_log.count("Приложение завершается нормально") == 1
 
 
 # ─────────────────────────────────────────────────────────────

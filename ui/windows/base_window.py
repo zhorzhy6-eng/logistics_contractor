@@ -54,7 +54,7 @@ from ui.controls.contract_type_selector import ContractTypeSelector
 from ui.diagnostics_menu import DiagnosticsMenuMixin
 from ui.icons import action_icon, tab_icon
 from ui.navigation import SideNav
-from ui.qt_shutdown import cancel_running_tasks, wait_for_thread_pools
+from ui.qt_shutdown import cancel_running_tasks, wait_for_thread_pools, wait_for_threads
 
 logger = logging.getLogger("ui.windows.base_window")
 
@@ -803,6 +803,9 @@ class BaseContractWindow(DiagnosticsMenuMixin, QMainWindow):
         self._close_floating_cat()
 
         wait_for_thread_pools(self)
+        # Потоки ждут отдельно от пулов: поток запроса к модели у
+        # Максимилиана живёт вне пула (см. ui/qt_shutdown.py::wait_for_threads).
+        wait_for_threads(self)
 
         self._force_close = True
         self.blockSignals(True)
