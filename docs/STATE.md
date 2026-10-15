@@ -4,31 +4,32 @@
 > шага. Архитектура — в [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **Обновлено:** 2026-10-15
-**HEAD:** `c3bdab7` — «Максимилиан: живые пробы лимита шагов перенесены в tools
-(tests/_tmp исчезает) + STATE.md».
+**HEAD:** `5401968` — «Задача 5: объект есть - вызывай инструмент, объекта нет -
+уточняй (промпт) + STATE.md». После него в той же сессии закрыты задачи 3 и 6
+(«Задача 3: перетаскивание строк ТС в Аренде, клиентском типе A и клиентских типах C + STATE.md»,
+«Задача 6: серо-полосатый neutral, замороженные часы в тестах путей, акты до
+2011 (НК, КоАП, УАТ) + STATE.md»).
 Актуальный HEAD всегда `git rev-parse HEAD`; свой собственный хеш внутри
 файла стоять не может (`AGENTS.md` § 5.3), поэтому строка выше указывает на
 коммит, на который опирается текущий шаг.
-**Тестов:** полный прогон одним процессом
-(`pytest -q -o addopts="" --basetemp=tests/_tmp/_pt_steps20_full`) —
-**8382 passed, 5 skipped, 6 failed** (1 ч 12 мин 3 с). Прошлый полный прогон
-давал 8293 passed и 5 failed, то есть **+89 тестов**. Все шесть падений —
-известные средовые или порядкозависимые, к правкам шага не относятся:
+**Тестов:** прогон задачами 1–6 идёт ЧАСТЯМИ (полный одним процессом даёт
+MemoryError, см. `AGENTS.md` § 5.4). Перед коммитом задачи 6:
 
-- `test_agent_context_tools` (три теста: `test_open_tabs_lists_window_and_
-  tabs`, `test_open_tabs_without_window_explains_itself`,
-  `test_recent_actions_without_journal_is_empty`) — видят чужие
-  верхнеуровневые окна в общем прогоне; файл отдельным прогоном даёт
-  **27 passed**;
-- `test_exit_clean::test_exit_while_recognition_runs_is_clean` — прежний
-  регресс выхода, открыт с шага «Максимилиан v1»;
-- два теста `test_make_text_scenarios` — рабочая база оператора выросла
-  (проверка совпадений с ней и воспроизведение файла сессий).
+- выход и перетаскивание (`-k "shutdown or row_reorder or exit_clean"`) —
+  **139 passed**;
+- маска, пути, правовая база (`test_pseudonymizer*`, `test_paths`,
+  `test_legal_docs_pre2011`, `test_legal_parser`, `test_legal_indexer`,
+  `test_rag`) — **411 passed**;
+- весь агент (`-k agent`) — **1325 passed, 1 skipped**;
+- окна типов, вкладки, данные (12 файлов трёх типов + `no_lambda` + состав
+  колонок + аудит таблиц) — **1154 passed, 3 skipped**.
 
-Новые наборы шага: **31 тест** в `tests/test_agent_limits_safeguards.py`,
-плюс правки в `tests/test_agent_step_limit_answer.py` и
-`tests/test_agent_settings.py`. Регрессия агента отдельным прогоном:
-**1102 passed**.
+Прошлый полный прогон (до этих задач) давал **8382 passed, 5 skipped,
+6 failed**; шесть падений были известными средовыми
+(`test_agent_context_tools`, `test_exit_clean`,
+`test_make_text_scenarios`). **`test_exit_clean` теперь проходит** — регресс
+выхода закрыт задачей 1. Новых наборов за задачи 1–6: **+178 тестов**
+(13 + 12 + 46 + 58 + 16 + 11 + 22).
 **Upstream:** `## main...origin/main` (синхронизировано)
 
 ---
