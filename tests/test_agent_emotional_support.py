@@ -71,6 +71,34 @@ class RecordingChat:
         return {"role": "assistant", "content": self.answer}
 
 
+@pytest.fixture(autouse=True)
+def clean_history():
+    """
+    Чистит историю диалога агента до и после каждого теста.
+
+    История живёт в таблице `agent_history` (общая база), а сессия — одна на
+    процесс: без уборки сообщения из этих тестов всплывали в чужой панели —
+    `tests/test_agent_widget.py::test_messages_appear_in_history` видел
+    10 пузырей вместо 2 (найдено общим прогоном).
+    """
+    from core.agent import memory as agent_memory
+    from db.crud import agent_history
+
+    def sweep() -> None:
+        """Стирает историю текущей сессии и меняет ID сессии."""
+        try:
+            session = agent_memory.current_session_id()
+            agent_history.clear_session(session)
+            agent_history.purge_other_sessions(session)
+        except Exception:  # noqa: BLE001 — уборка не должна ронять тест
+            pass
+        agent_memory.reset_session_id()
+
+    sweep()
+    yield
+    sweep()
+
+
 # ─────────────────────────────────────────────────────────────
 # D.1. Триггеры распознаются
 # ─────────────────────────────────────────────────────────────

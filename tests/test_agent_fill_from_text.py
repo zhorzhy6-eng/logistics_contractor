@@ -120,11 +120,44 @@ class StubWindow:
 
 @pytest.fixture
 def window():
-    """Окно-заглушка, подставленное инструментам как «открытая форма»."""
+    """
+    Окно-заглушка, подставленное инструментам как «открытая форма».
+
+    Подстановка снимается на выходе: без этого следующий тест в общем
+    прогоне получил бы ЧУЖОЕ окно и увидел бы в форме данные предыдущего.
+    """
     win = StubWindow()
     previous = set_context_window(win)
     yield win
     set_context_window(previous)
+
+
+@pytest.fixture(autouse=True)
+def clean_agent_state():
+    """
+    Чистит состояние агента после каждого теста этого файла.
+
+    Прогон идёт одним процессом: сессия диалога (`current_session_id`) и
+    таблица истории — общие, поэтому сообщения, записанные агентом в одном
+    тесте, видны в другом (это и ловит общий прогон: с новыми тестами
+    «чужие» сообщения всплывали в tests/test_agent_widget.py). После теста
+    история и сессия сбрасываются.
+    """
+    from core.agent import memory as agent_memory
+    from db.crud import agent_history
+
+    yield
+    try:
+        #: История диалога живёт в таблице agent_history и привязана к
+        #: сессии процесса. Своего «очистить всё» у неё нет — чистим сессию
+        #: и чужие сессии, а затем меняем ID сессии, чтобы следующий тест
+        #: начинал с пустой истории.
+        session = agent_memory.current_session_id()
+        agent_history.clear_session(session)
+        agent_history.purge_other_sessions(session)
+    except Exception:  # noqa: BLE001 — уборка не должна ронять тест
+        pass
+    agent_memory.reset_session_id()
 
 
 @pytest.fixture
