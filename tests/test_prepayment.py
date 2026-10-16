@@ -50,7 +50,12 @@ from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from ui.tabs.contract_tab import ContractTab  # noqa: E402
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Корень проекта ищется по маркеру (pytest.ini), а не по числу parents:
+# после Этапа 7 тесты лежат в tests/<слой>/<группа>/, и глубина разная.
+PROJECT_ROOT = next(
+    _path for _path in Path(__file__).resolve().parents
+    if (_path / "pytest.ini").is_file()
+)
 TEMPLATES = PROJECT_ROOT / "templates"
 
 #: Бланки перевозки: в них стоит условный пункт оплаты.

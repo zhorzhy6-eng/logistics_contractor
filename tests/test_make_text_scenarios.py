@@ -36,7 +36,12 @@ from tools.make_text_scenarios import (
 )
 from tools.synthetic_stress import score
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Корень проекта ищется по маркеру (pytest.ini), а не по числу parents:
+# после Этапа 7 тесты лежат в tests/<слой>/<группа>/, и глубина разная.
+PROJECT_ROOT = next(
+    _path for _path in Path(__file__).resolve().parents
+    if (_path / "pytest.ini").is_file()
+)
 
 #: Сколько сценариев брать в проверки с обезличиванием: один вызов
 #: Pseudonymizer — около 90 мс, тысяча заняла бы полторы минуты.

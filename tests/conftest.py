@@ -20,7 +20,12 @@ from typing import Any, Dict
 import pytest
 
 # ── Корень проекта в sys.path, чтобы работали импорты core/db/ui ──
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Корень проекта ищется по маркеру (pytest.ini), а не по числу parents:
+# после Этапа 7 тесты лежат в tests/<слой>/<группа>/, и глубина разная.
+PROJECT_ROOT = next(
+    _path for _path in Path(__file__).resolve().parents
+    if (_path / "pytest.ini").is_file()
+)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

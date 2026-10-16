@@ -38,7 +38,12 @@ from tools.fix_ooo_template_vat_free import (
 )
 from tools.make_golden import strip_embedded_fonts
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Корень проекта ищется по маркеру (pytest.ini), а не по числу parents:
+# после Этапа 7 тесты лежат в tests/<слой>/<группа>/, и глубина разная.
+PROJECT_ROOT = next(
+    _path for _path in Path(__file__).resolve().parents
+    if (_path / "pytest.ini").is_file()
+)
 TEMPLATES = PROJECT_ROOT / "templates"
 
 OOO_TEMPLATE = TEMPLATES / "shablon_ooo.docx"

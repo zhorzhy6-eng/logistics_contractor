@@ -44,7 +44,12 @@ from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Корень проекта ищется по маркеру (pytest.ini), а не по числу parents:
+# после Этапа 7 тесты лежат в tests/<слой>/<группа>/, и глубина разная.
+PROJECT_ROOT = next(
+    _path for _path in Path(__file__).resolve().parents
+    if (_path / "pytest.ini").is_file()
+)
 AGENT_OLD = PROJECT_ROOT / "core" / "agent"
 AGENT_NEW = PROJECT_ROOT / "services" / "agent"
 AGENT_CORE = AGENT_NEW / "core"

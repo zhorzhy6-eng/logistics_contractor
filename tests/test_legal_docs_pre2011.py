@@ -45,9 +45,20 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-)
+# Корень проекта ищется по маркеру (pytest.ini), а не по числу «..»:
+# после Этапа 7 тесты лежат в tests/<слой>/<группа>/, и глубина разная.
+def _project_root() -> str:
+    """Поднимается от файла вверх до папки с pytest.ini."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    while not os.path.isfile(os.path.join(here, "pytest.ini")):
+        parent = os.path.dirname(here)
+        if parent == here:
+            raise RuntimeError("не найден корень проекта (нет pytest.ini)")
+        here = parent
+    return here
+
+
+PROJECT_ROOT = _project_root()
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 

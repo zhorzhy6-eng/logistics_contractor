@@ -38,7 +38,12 @@ import pytest
 import config.logging_config as logging_config
 import core.qt_crash_handler as qt_handler
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# Корень проекта ищется по маркеру (pytest.ini), а не по числу parents:
+# после Этапа 7 тесты лежат в tests/<слой>/<группа>/, и глубина разная.
+PROJECT_ROOT = next(
+    _path for _path in Path(__file__).resolve().parents
+    if (_path / "pytest.ini").is_file()
+)
 
 #: Соответствие типа сообщения Qt уровню logging (см. _QT_LEVELS_BY_NAME).
 QT_TYPES = [

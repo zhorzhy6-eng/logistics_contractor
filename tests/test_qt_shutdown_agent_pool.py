@@ -52,7 +52,20 @@ from PyQt5.QtWidgets import QApplication, QWidget
 
 from ui.qt_shutdown import threads_of, wait_for_threads
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Корень проекта ищется по маркеру (pytest.ini), а не по числу «..»:
+# после Этапа 7 тесты лежат в tests/<слой>/<группа>/, и глубина разная.
+def _project_root() -> str:
+    """Поднимается от файла вверх до папки с pytest.ini."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    while not os.path.isfile(os.path.join(here, "pytest.ini")):
+        parent = os.path.dirname(here)
+        if parent == here:
+            raise RuntimeError("не найден корень проекта (нет pytest.ini)")
+        here = parent
+    return here
+
+
+PROJECT_ROOT = _project_root()
 
 
 # ─────────────────────────────────────────────────────────────
