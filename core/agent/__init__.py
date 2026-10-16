@@ -17,30 +17,39 @@ Shim: ``core.agent`` → ``services.agent`` (Этап 5, 16.10.2026).
 служебных слов: её читают и агент, и ``core/pseudonymizer.py`` файлом по
 пути ``core/agent/words.py`` — переезд увёл бы её из-под загрузчика).
 
-ПОЧЕМУ ИМПОРТОВ ЗДЕСЬ НЕТ. Статический реэкспорт
-(``from core.agent.agent import Agent``) в момент ПЕРВОГО импорта
-``services.agent.*`` упирается в цикл: `services.agent.tools.registry`
-импортирует ``core.agent.words`` → выполняется ЭТОТ файл → он просит
-``core.agent.agent``, которого по старому пути уже нет. Поэтому имена
-отдаются ЛЕНИВО, через module-level ``__getattr__``: он срабатывает
-только на обращение к атрибуту (``core.agent.Agent`` и
-``from core.agent import Agent``), а импорт ПОДМОДУЛЯ
-(``from core.agent.memory import AgentMemory``) обслуживают алиасы
-``sys.modules``, зарегистрированные в ``core/__init__.py``.
+КАК ЭТО РАБОТАЕТ. Три разных написания импорта обслуживают три разных
+механизма, и путать их нельзя:
+
+  * ``from core.agent import Agent`` — модульный ``__getattr__`` ниже:
+    он берёт имя из ``services.agent``;
+  * ``from core.agent.memory import AgentMemory`` и
+    ``import core.agent.memory`` — алиасы ``sys.modules``, которые ставит
+    ``_resolve_module`` через ``core.private_path.register_module_alias``
+    (ДВЕ регистрации: имя в ``sys.modules`` и атрибут пакета — одного
+    ``sys.modules`` мало, на этом спотыкались Этапы 3–5);
+  * ``import core.agent.words`` — модуль живёт здесь же, алиас не нужен.
+
+ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ. Статического реэкспорта
+(``from core.agent.agent import Agent``) нет намеренно. Он запускает
+``services.agent.*`` в момент, когда ``core`` может быть загружен лишь
+ЧАСТИЧНО (так и происходит: ``services.agent.tools.registry`` импортирует
+``core.agent.words`` → выполняется этот файл → он просит
+``services.agent.tools.registry``, который ещё не догружен). Ленивое
+взятие имён убирает цикл целиком.
 
 ``__path__`` пакета сохраняется и ДОПОЛНЯЕТСЯ приватной папкой: у
 ``core.agent`` есть приватный сосед ``core/agent/labels.py``
 (названия клиентских типов и обязательные поля), он лежит в приватной
-части проекта. Без этого дополнения ``from core.agent.labels import …``
-в ``services/agent/tools/context.py`` и ``proactivity.py`` перестал бы
-находиться. Ошибка тихая: приватные типы просто выпали бы из подсказок.
+части проекта. Основной механизм — ``core.agent`` в ``PACKAGE_BOOTSTRAP``
+(``core/private_path.py``): ``attach_private_root()`` находит пакет в
+``sys.modules`` и дополняет путь. Здесь — страховка на обратный порядок,
+когда пакет загрузился РАНЬШЕ подключения приватной части.
 """
 
 # ── Приватный сосед: core/agent/labels.py из приватной части проекта ──
-# Импорт `core.private_path` внутри try: при ПЕРВОМ импорте
-# `services.agent.*` пакет `core` уже начал загружаться (см. пояснение
-# выше), и падать из-за этого shim не должен — приватные названия типов
-# нужны подсказкам, а не работе агента.
+# Импорт `core.private_path` держим в try: если приватной части нет или
+# `core` ещё не готов, shim падать не должен — без названий клиентских
+# типов агент работает в режиме ядра (только «Экспедиторство»).
 try:
     from core.private_path import private_dir_for as _private_dir_for
 
@@ -56,17 +65,18 @@ def __getattr__(name):
     Ленивый реэкспорт имён агента из ``services.agent``.
 
     Вызывается только на доступ к АТРИБУТУ пакета (``core.agent.Agent``)
-    или на ``from core.agent import Agent``. Импорт подмодулей идёт мимо:
-    его обслуживают алиасы ``sys.modules`` из ``core/__init__.py``.
+    или на ``from core.agent import Agent``. Имена МОДУЛЕЙ агента
+    (``core.agent.memory``) идут сюда же — ``_resolve_module`` поднимает
+    модуль и ставит алиас, после чего работает обычный механизм импорта.
     """
     from services import agent as _services_agent
 
-    try:
+    if name in _services_agent.__all__:
         return getattr(_services_agent, name)
-    except AttributeError:
-        raise AttributeError(
-            f"module 'core.agent' has no attribute {name!r}"
-        ) from None
+
+    from core import _resolve_agent_module
+
+    return _resolve_agent_module(name)
 
 
 __all__ = [

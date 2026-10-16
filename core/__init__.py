@@ -341,6 +341,114 @@ _sys.modules.setdefault("core.contracts.base_generator", _contracts_base)
 setattr(_sys.modules["core.contracts"], "base_generator", _contracts_base)
 
 
+# ── Агент Максимилиан (Этап 5, 16.10.2026) ──
+# Пакет `core/agent/` разбит на три группы в `services/agent/`:
+#
+#   * `services/agent/core/`    — ядро: agent, llm, memory, long_memory,
+#     prompt (+ `prompts/maximilian.txt`);
+#   * `services/agent/tools/`   — инструменты: registry (был `tools.py`),
+#     analytics, dadata, legal, rag, context, proactivity,
+#     proactivity_tools, fill_parser, tutorial, tutorial_hints;
+#   * `services/agent/persona/` — личность: personas, emotional.
+#
+# В `core/agent/` остались ДВА файла: `__init__.py` (shim, отдаёт имена из
+# `services.agent`) и `words.py` (общая таблица служебных слов — её читает
+# и агент, и `core/pseudonymizer.py` ФАЙЛОМ по пути `core/agent/words.py`;
+# переезд увёл бы её из-под загрузчика, поэтому `core.agent.words`
+# намеренно НЕ алиасится — модуль живёт там же).
+#
+# РЕГИСТРАЦИЙ ДВЕ, и обе обязательны — та же грабля, что в Этапах 3 и 4,
+# и ровно её закрывает общая функция `register_module_alias`:
+#
+#   * `sys.modules["core.agent.llm"]` — чтобы работал импорт ПОДМОДУЛЯ
+#     (`from core.agent.llm import SafeChat` и `import core.agent.llm`);
+#   * атрибут `llm` у пакета `core.agent` — чтобы работало обращение
+#     `core.agent.llm` после загрузки. Одного `sys.modules` МАЛО: инструкция
+#     `import a.b.c` читает последнее имя как АТРИБУТ родителя и падает с
+#     `AttributeError: module 'core.agent' has no attribute 'llm'`.
+#
+# ПОРЯДОК — от зависимостей к зависимым, как в блоке инфраструктуры:
+# `services/agent/core/agent.py` тянет llm, persona, memory, long_memory,
+# prompt и `tools/registry`, а `tools/registry` — `fill_parser`, `context`,
+# `dadata`, `legal` (они, в свою очередь, — `rag`).
+#
+# ЧЕГО ЗДЕСЬ НЕТ. `core.agent.diagnostics` — модуля `diagnostics.py` в
+# пакете агента НЕ БЫЛО и нет; этот адрес ведёт к `core.diagnostics` (так
+# его и понимал старый код: `from core.agent import diagnostics` → пакет
+# агента без такого модуля → ImportError → ветка «диагностика недоступна»).
+#
+# ПОЧЕМУ НЕ ПЕРЕХВАТЧИК ИМПОРТА. Проверялся и отброшен: `sys.meta_path`-
+# finder для этих имён порождал ВТОРОЙ объект модуля —
+# `sys.modules["core.agent.tutorial_hints"]` и
+# `sys.modules["services.agent.tools.tutorial_hints"]` оказывались разными
+# объектами. Ломалось тихо ровно то, ради чего алиасы и делаются:
+# `monkeypatch.setattr(core.agent.tutorial_hints, …)` перестаёт быть виден
+# коду, который импортирует тот же модуль по новому пути (поймано тестом
+# `tests/test_agent_tutorial_ui.py`). Прямая регистрация даёт ОДИН объект.
+#
+# ЦЕНА: `core.agent` и `services.agent.*` поднимаются при импорте `core`
+# (как и было до Этапа 5, когда агент жил в `core/agent/`). Приватный сосед
+# `core/agent/labels.py` при этом не теряется: пакет `core.agent` лежит в
+# `PACKAGE_BOOTSTRAP` (`core/private_path.py`), и `attach_private_root()`
+# дополняет его `__path__` приватной папкой — плюс та же страховка стоит в
+# самом shim (`core/agent/__init__.py`).
+_AGENT_ALIASES = {
+    "core.agent.agent": "services.agent.core.agent",
+    "core.agent.llm": "services.agent.core.llm",
+    "core.agent.memory": "services.agent.core.memory",
+    "core.agent.long_memory": "services.agent.core.long_memory",
+    "core.agent.prompt": "services.agent.core.prompt",
+    "core.agent.personas": "services.agent.persona.personas",
+    "core.agent.emotional": "services.agent.persona.emotional",
+    "core.agent.tools": "services.agent.tools.registry",
+    "core.agent.analytics_tools": "services.agent.tools.analytics",
+    "core.agent.dadata_tools": "services.agent.tools.dadata",
+    "core.agent.legal_tools": "services.agent.tools.legal",
+    "core.agent.rag": "services.agent.tools.rag",
+    "core.agent.context_tools": "services.agent.tools.context",
+    "core.agent.proactivity": "services.agent.tools.proactivity",
+    "core.agent.proactivity_tools": "services.agent.tools.proactivity_tools",
+    "core.agent.fill_parser": "services.agent.tools.fill_parser",
+    "core.agent.tutorial": "services.agent.tools.tutorial",
+    "core.agent.tutorial_hints": "services.agent.tools.tutorial_hints",
+    "core.agent.diagnostics": "core.diagnostics",
+}
+
+
+def _register_agent_aliases():
+    """
+    Регистрирует старые имена модулей агента (`core.agent.*`).
+
+    Регистраций ДВЕ на каждое имя, и обе делает `register_module_alias`
+    (см. пояснение выше). `setdefault`, как у алиасов Этапов 1–3: живой
+    модуль по старому имени не затирается — важно для `words.py`, который
+    остался в `core/agent/`, и на случай, если приватная часть положит
+    свой модуль по старому пути.
+    """
+    import importlib
+
+    from core.private_path import register_module_alias
+
+    for old_name, new_name in _AGENT_ALIASES.items():
+        if old_name in _sys.modules:
+            continue
+        module = importlib.import_module(new_name)
+        register_module_alias(old_name, module)
+
+
+try:
+    _register_agent_aliases()
+except Exception:  # noqa: BLE001 — алиасы нужны для совместимости,
+    # а не для работы: новый код идёт через `services.agent.*` напрямую.
+    # Молчать нельзя: без алиасов старые пути падают с ModuleNotFoundError
+    # (в общем прогоне pytest этого не видно — там пакет агента поднимает
+    # `conftest.py` через `ui/`), и причина должна быть видна в логе.
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "Алиасы core.agent не зарегистрированы", exc_info=True
+    )
+
+
 # ── Реэкспорт ИМЁН инфраструктуры (для `from core import GigaChatClient`) ──
 # Делается ЛЕНИВО, через module-level `__getattr__`, а не статическим
 # импортом: на момент выполнения `core/__init__.py` модули infrastructure
@@ -382,6 +490,11 @@ def __getattr__(name):
     import importlib as _importlib
 
     return getattr(_importlib.import_module(target[0]), target[1])
+
+
+def __dir__():
+    """Имена, которые видны в `dir(core)`: свои плюс ленивые (Этап 3)."""
+    return sorted(set(globals()) | set(_INFRASTRUCTURE_NAMES))
 
 
 __all__ = [

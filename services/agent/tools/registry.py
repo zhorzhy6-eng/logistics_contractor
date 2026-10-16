@@ -14,7 +14,7 @@
   * никакого SQL: работа с базой — только через db/crud/*;
   * чтение формы — только чтение (ContractData API не меняется);
   * опасные действия (заполнение формы) помечены requires_confirmation=True:
-    агент спрашивает оператора перед вызовом (core/agent/agent.py);
+    агент спрашивает оператора перед вызовом (services/agent/core/agent.py);
   * удаления, создания договоров и работы с деньгами нет вовсе.
 
 Инструменты не знают про Qt: «окно» — это объект с вкладками (get_data /
@@ -1500,7 +1500,7 @@ def _fill_parsed(context: AgentContext, text: str = "",
     """
     Автозаполнение формы из текста оператора (задание, часть 1, A.5).
 
-    Разбор делает ``core/agent/fill_parser.py`` (ядро без Qt и базы), здесь —
+    Разбор делает ``services/agent/tools/fill_parser.py`` (ядро без Qt и базы), здесь —
     раскладка по существующим механизмам формы:
 
       * поля договора, перевозчика, заказчика, водителя и машины —
@@ -1659,7 +1659,7 @@ def _parse_and_fill(context: AgentContext, text: str = "",
 
     Отдельный инструмент-разбор (без записи в форму) не нужен: превью
     строит сам диалог по аргументу ``text``, а разбор — чистая функция
-    ``core/agent/fill_parser.py::parse_text``.
+    ``services/agent/tools/fill_parser.py::parse_text``.
 
     :param items: правки оператора из превью (``[{section, field, value}]``).
         Добавляются диалогом к аргументам вызова, модель их не заполняет.
@@ -1687,12 +1687,17 @@ def _diagnose(context: AgentContext, checks: Any = None,
     По дороге к GigaChat он обрезался до 4 000 символов с многоточием,
     оборванный JSON GigaChat не принимает, и запрос падал целиком:
     «422 INVALID_PARAMS: invalid function result for function diagnose»
-    (причина и защита — ``core/json_text.py``, ``core/agent/memory.py``).
+    (причина и защита — ``core/utils/json_text.py``, ``services/agent/core/memory.py``).
 
     :param checks: какие проверки выполнить (пусто — все);
     :param live_network: проверять ли сервисы сетевыми запросами.
     """
-    from services.agent.tools import diagnostics_agent as diagnostics
+    # Самодиагностика живёт в ЯДРЕ (core/diagnostics.py), а не в пакете
+    # агента: модуля `diagnostics.py` у агента не было и нет. Старый код
+    # писал `from core.agent import diagnostics` — пакет агента такого
+    # модуля не имел, и ветка «диагностика недоступна» срабатывала всегда.
+    # Здесь импорт идёт по-настоящему, и инструмент работает.
+    from core import diagnostics
 
     if checks is None or checks == "":
         keys = list(diagnostics.CHECK_ORDER)
@@ -2430,7 +2435,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     ))
 
     # ── 1. Контекст: что открыто и что делал оператор (Часть 1) ──
-    # Все пять — только чтение. Реализация в core/agent/context_tools.py:
+    # Все пять — только чтение. Реализация в services/agent/tools/context.py:
     # они смотрят в интерфейс, а не в базу, и это другая ответственность.
     #
     # Функции объявлены обычными def, а не lambda: в проекте lambda
@@ -2540,7 +2545,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     # Наружу уходят только публичные данные (ЕГРЮЛ): ИНН, ОГРН, название,
     # адрес. Проверка ИНН внутри инструментов не даёт отправить в DaData
     # ничего другого — ФИО и паспорта водителей сюда попасть не могут.
-    # Ответы кэшируются на час: см. core/agent/dadata_tools.py.
+    # Ответы кэшируются на час: см. services/agent/tools/dadata.py.
     from services.agent.tools.dadata import (  # локальный импорт: без цикла модулей
         check_address_dadata as dadata_address,
         check_inn_dadata as dadata_inn,
@@ -2650,10 +2655,10 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     # ── 3. Аналитика: сводки, сравнения, топы, качество данных (Часть 3) ──
     # Пять инструментов этой части считают ЧИСЛА, а не ищут записи: SQL
     # живёт в db/crud/analytics.py (правило проекта), разбор русских
-    # названий полей и операций — в core/agent/analytics_tools.py.
+    # названий полей и операций — в services/agent/tools/analytics.py.
     # Описания инструментов берутся из analytics_tools.tool_specs(): один
     # источник и для реестра, и для тестов.
-    from services.agent.tools import analytics  # локальный импорт: без цикла модулей
+    from services.agent.tools import analytics as analytics_tools  # локальный импорт: без цикла модулей
 
     def aggregate_contracts(counterparty: str = "", period: str = "",
                             field: str = "amount", operation: str = "sum",
@@ -2718,7 +2723,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
 
     # ── 4. Проактивность: что дальше (Часть 4) ──
     # Тоже только чтение: подсказка — предложение, а не действие. Логика
-    # «что обязательно и что дальше» живёт в core/agent/proactivity.py,
+    # «что обязательно и что дальше» живёт в services/agent/tools/proactivity.py,
     # сроки берутся из db/crud/*.
     from services.agent.tools import proactivity_tools  # локальный импорт: без цикла
 
@@ -2796,10 +2801,10 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     ))
 
     # ── 5. Правовая база: нормы со ссылкой на источник (Часть 3) ──
-    # Логика живёт в core/agent/legal_tools.py: там RAG, портал
+    # Логика живёт в services/agent/tools/legal.py: там RAG, портал
     # опубликования и правило «источник обязателен». Здесь — только
     # регистрация, как у инструментов DaData.
-    from services.agent.tools import legal  # локальный импорт: без цикла модулей
+    from services.agent.tools import legal as legal_tools  # локальный импорт: без цикла модулей
 
     def search_legal(query: str = "", top_k: int = 0, **_):
         """Поиск нормы в правовой базе (RAG) с указанием источника."""
@@ -2865,7 +2870,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     ))
 
     # ── 6. Обучение: инструкции по заполнению (база знаний) ──
-    # Логика живёт в core/agent/tutorial.py: чтение файлов и поиск по ним.
+    # Логика живёт в services/agent/tools/tutorial.py: чтение файлов и поиск по ним.
     # Здесь — только регистрация, как у правовой базы и DaData.
     from services.agent.tools import tutorial  # локальный импорт: без цикла модулей
 

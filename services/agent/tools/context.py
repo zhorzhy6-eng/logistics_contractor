@@ -21,7 +21,7 @@
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 logger = logging.getLogger("core.agent.context_tools")
 
@@ -32,12 +32,77 @@ TYPE_TITLES: Dict[str, str] = {
     "perevozka": "Экспедиторство",
 }
 
-try:  # приватная часть проекта: названия клиентских типов
-    from core.agent.labels import TYPE_TITLES as _PRIVATE_TYPE_TITLES
-except ImportError:  # режим ядра
-    _PRIVATE_TYPE_TITLES = {}
+#: Загружены ли уже названия типов из приватной части. Флаг есть потому,
+#: что `core.agent.labels` может стать доступен НЕ сразу: при импорте `core`
+#: алиасы агента поднимают этот модуль раньше, чем `attach_private_root()`
+#: дополнит `__path__` пакета `core.agent` приватной папкой. Флаг ставится
+#: только при УДАЧНОЙ загрузке, поэтому повтор возможен. Без этого повтора
+#: клиентские типы молча выпадали бы из подсказок агента (Этап 5).
+_private_titles_loaded = False
 
-TYPE_TITLES.update(_PRIVATE_TYPE_TITLES)
+
+def _load_private_titles() -> None:
+    """Домешивает названия клиентских типов из приватной части (один раз)."""
+    global _private_titles_loaded
+    if _private_titles_loaded:
+        return
+
+    try:  # приватная часть проекта: названия клиентских типов
+        from core.agent.labels import TYPE_TITLES as _PRIVATE_TYPE_TITLES
+    except ImportError:  # режим ядра — клиентских типов нет
+        return
+
+    TYPE_TITLES.update(_PRIVATE_TYPE_TITLES)
+    _private_titles_loaded = True
+
+
+class _LazyTitles(dict):
+    """
+    Тот же `TYPE_TITLES`, но с добором приватных названий при обращении.
+
+    Вид словаря сохранён намеренно: `TYPE_TITLES` читают и тесты, и другие
+    инструменты (`TYPE_TITLES.get(...)`, перебор, `in`). Наследник `dict`
+    ведёт себя как обычный словарь, а перед ответом один раз домешивает
+    приватные названия — если к этому моменту приватная часть подключена.
+    """
+
+    def _ensure(self) -> None:
+        _load_private_titles()
+
+    def get(self, key, default=None):
+        self._ensure()
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        self._ensure()
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self._ensure()
+        return super().__contains__(key)
+
+    def __iter__(self) -> Iterator:
+        self._ensure()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._ensure()
+        return super().__len__()
+
+    def items(self):
+        self._ensure()
+        return super().items()
+
+    def keys(self):
+        self._ensure()
+        return super().keys()
+
+    def values(self):
+        self._ensure()
+        return super().values()
+
+
+TYPE_TITLES = _LazyTitles(TYPE_TITLES)
 
 #: Русские названия разделов формы (те же, что в подсказках инструментов).
 SECTION_TITLES: Dict[str, str] = {

@@ -84,12 +84,76 @@ REQUIRED: Dict[str, Dict[str, Tuple[Tuple[str, str], ...]]] = {
     "perevozka": dict(_REQUIRED_BASE),
 }
 
-try:  # приватная часть проекта: обязательные поля клиентских типов
-    from core.agent.labels import REQUIRED_EXTRA as _PRIVATE_REQUIRED
-except ImportError:  # режим ядра
-    _PRIVATE_REQUIRED = {}
+#: Загружены ли уже обязательные поля клиентских типов. Флаг есть потому,
+#: что `core.agent.labels` может стать доступен НЕ сразу: при импорте `core`
+#: алиасы агента поднимают этот модуль раньше, чем `attach_private_root()`
+#: дополнит `__path__` пакета `core.agent` приватной папкой. Флаг ставится
+#: только при УДАЧНОЙ загрузке, поэтому повтор возможен. Без повтора
+#: клиентские типы молча выпадали бы из проверки обязательных полей (Этап 5).
+_private_required_loaded = False
 
-REQUIRED.update(_PRIVATE_REQUIRED)
+
+def _load_private_required() -> None:
+    """Домешивает обязательные поля клиентских типов из приватной части."""
+    global _private_required_loaded
+    if _private_required_loaded:
+        return
+
+    try:  # приватная часть проекта: обязательные поля клиентских типов
+        from core.agent.labels import REQUIRED_EXTRA as _PRIVATE_REQUIRED
+    except ImportError:  # режим ядра — клиентских типов нет
+        return
+
+    REQUIRED.update(_PRIVATE_REQUIRED)
+    _private_required_loaded = True
+
+
+class _LazyRequired(dict):
+    """
+    Тот же `REQUIRED`, но с добором приватных полей при обращении.
+
+    Вид словаря сохранён намеренно: `REQUIRED` читают и тесты, и инструменты
+    (`REQUIRED.get(...)`, перебор, `in`). Наследник `dict` ведёт себя как
+    обычный словарь, а перед ответом один раз домешивает клиентские типы.
+    """
+
+    def _ensure(self) -> None:
+        _load_private_required()
+
+    def get(self, key, default=None):
+        self._ensure()
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        self._ensure()
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self._ensure()
+        return super().__contains__(key)
+
+    def __iter__(self):
+        self._ensure()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._ensure()
+        return super().__len__()
+
+    def items(self):
+        self._ensure()
+        return super().items()
+
+    def keys(self):
+        self._ensure()
+        return super().keys()
+
+    def values(self):
+        self._ensure()
+        return super().values()
+
+
+REQUIRED = _LazyRequired(REQUIRED)
 
 #: Порядок заполнения формы: что за чем логично вводить. Порядок общий для
 #: всех типов — он про работу оператора, а не про конкретный бланк.
