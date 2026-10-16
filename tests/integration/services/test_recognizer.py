@@ -496,15 +496,28 @@ def test_city_for_document_title_case():
 
 
 def test_extract_city_on_real_addresses(real_db_path):
-    """Проверка на реальных адресах из contracts.db (если база есть)."""
+    """
+    Проверка на реальных адресах из contracts.db (если база есть).
+
+    «База есть» — это не только «файл существует»: в свежем checkout (CI)
+    файл может появиться пустым (его создаёт первый же `init_database`), и
+    тогда таблицы `address_book` в нём нет. Пустая база — тоже повод
+    пропустить проверку, а не упасть на `no such table`.
+    """
     if not real_db_path.exists():
         pytest.skip("contracts.db отсутствует — проверка на реальных данных пропущена")
 
     conn = sqlite3.connect(f"file:{real_db_path}?mode=ro", uri=True)
     try:
-        rows = conn.execute("SELECT address, city FROM address_book").fetchall()
+        try:
+            rows = conn.execute("SELECT address, city FROM address_book").fetchall()
+        except sqlite3.OperationalError:
+            pytest.skip("в contracts.db нет справочника адресов — проверка пропущена")
     finally:
         conn.close()
+
+    if not rows:
+        pytest.skip("справочник адресов пуст — проверка на реальных данных пропущена")
 
     assert rows, "в справочнике нет адресов"
 

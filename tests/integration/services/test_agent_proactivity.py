@@ -116,8 +116,16 @@ def test_required_fields_perevozka_has_carrier_and_driver():
     assert "full_name" in names
 
 
+@pytest.mark.needs_private
 def test_required_fields_are_per_contract_type():
-    """У аренды свои обязательные разделы (арендодатель, экипаж)."""
+    """
+    У аренды свои обязательные разделы (арендодатель, экипаж).
+
+    Тест про КЛИЕНТСКИЙ тип: набор обязательных полей приходит из приватного
+    `core/agent/labels.py`. Без приватной части у этого типа нет ни одного
+    обязательного раздела, и проверять тут нечего — маркер `needs_private`
+    (в CI тест пропускается, на машине оператора идёт).
+    """
     fields = proactivity.required_fields("arenda_ts")
     assert "lessor_tab" in fields
     assert "crew_tab" in fields

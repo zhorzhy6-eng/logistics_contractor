@@ -667,8 +667,15 @@ def test_resolve_field_unknown_returns_as_is():
     ("sum", "sum"), ("сумма", "sum"), ("средняя", "avg"),
     ("количество", "count"), ("сколько", "count"), ("максимум", "max"),
 ])
-def test_resolve_operation_aliases(text, expected):
-    """Русские названия операций переводятся в ключи."""
+def test_resolve_operation_aliases(text, expected, analytics_db):
+    """
+    Русские названия операций переводятся в ключи.
+
+    Фикстура `analytics_db` — изолированная база: без неё проверка уходила
+    в РАБОЧУЮ `contracts.db`, которой в свежем checkout (CI) нет, и тест
+    падал на `sqlite3.OperationalError: no such table: contracts` — хотя
+    проверяет он перевод слова, а не данные.
+    """
     assert analytics.aggregate("contracts", "amount", expected)["ok"] is True
     assert analytics.resolve_operation(text) == expected
 

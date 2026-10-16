@@ -50,6 +50,12 @@ if (Test-Path $outputPath) {
     if ($failedLines.Count -gt 0) {
         Write-Annotation "${Layer}: отказы (из вывода pytest)" ($failedLines -join "`n")
     }
+
+    # Хвост вывода — аннотацией, а не только в журнал: если прогон ОБОРВАЛСЯ
+    # нативно, сводки и списка отказов нет вообще, и единственный след —
+    # последние строки. С `-v` в них видно имя теста, на котором процесс умер.
+    $tailLines = @($tail | Select-Object -Last 20)
+    Write-Annotation "${Layer}: хвост вывода" ($tailLines -join "`n")
 } else {
     Write-Output "Вывод pytest не сохранён: $outputPath"
     Write-Annotation "${Layer}: вывод pytest" "файл $outputPath не найден"

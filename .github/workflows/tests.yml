@@ -155,7 +155,11 @@ jobs:
       - name: Run UI tests
         shell: pwsh
         run: |
-          python -m pytest tests/ui/ -o addopts="" -q -rf --tb=line --basetemp=tests/_tmp/_ci `
+          # `-v`, а не `-q`: UI-слой однажды ОБОРВАЛСЯ нативно (junit пустой,
+          # сводки нет). По точкам видно только «сколько успело пройти», а по
+          # строкам `-v` в хвосте вывода видно, НА КАКОМ тесте процесс умер —
+          # хвост печатает шаг «Publish failures».
+          python -m pytest tests/ui/ -o addopts="" -v -rf --tb=line --basetemp=tests/_tmp/_ci `
             --junitxml=tests/_tmp/junit-ui.xml 2>&1 |
             Tee-Object -FilePath tests/_tmp/ui-output.txt
           $code = $LASTEXITCODE
