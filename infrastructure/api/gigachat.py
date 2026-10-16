@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Optional, Sequence
 import requests
 
 from core.import_cancel import interruptible_sleep
-from core.json_text import shorten_json_text
 from core.pseudonymizer import Pseudonymizer
+from core.utils.json_text import shorten_json_text
 from infrastructure.api.tls import describe_tls, resolve_ca_bundle, ssl_error_hint
 from infrastructure.secrets.store import MISSING_KEY_MESSAGE, get_gigachat_key
 
