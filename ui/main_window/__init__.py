@@ -40,6 +40,9 @@ from ui.main_window.save import SaveMixin  # noqa: F401
 # ── Загрузка из базы (подэтап 1.F) ──
 from ui.main_window.load import LoadMixin  # noqa: F401
 
+# ── Создание договора (подэтап 1.G) ──
+from ui.main_window.contract import ContractMixin  # noqa: F401
+
 # ── ВРЕМЕННО (до 1.N): каркас пока берётся из прежнего файла ──
 # Пока миксины наполняются по одному (1.C–1.L), класс MainWindow живёт в
 # `ui/main_window/_legacy.py` — так окно и 30+ UI-тестов работают на каждом
@@ -68,4 +71,5 @@ __all__ = [
     "DriverMatchMixin",
     "SaveMixin",
     "LoadMixin",
+    "ContractMixin",
 ]
