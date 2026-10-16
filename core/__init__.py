@@ -72,6 +72,12 @@ from core.utils.text_normalize import (  # noqa: F401
     normalize_organization_fields,
     normalize_position,
 )
+from core.utils import address_utils as _address_utils
+from core.utils.address_utils import (  # noqa: F401
+    city_for_document,
+    clean_address_from_index,
+    extract_city,
+)
 
 # ── Старые имена модулей: алиасы для `from core.<старое_имя> import ...` ──
 # Ключ — имя модуля ДО переезда, значение — модуль на новом месте.
@@ -79,6 +85,7 @@ _MOVED_MODULES = {
     "dates": _dates,
     "fuzzy": _fuzzy,
     "text_normalize": _text_normalize,
+    "address_utils": _address_utils,
 }
 for _old_name, _module in _MOVED_MODULES.items():
     _sys.modules.setdefault(__name__ + "." + _old_name, _module)
@@ -97,4 +104,5 @@ __all__ = [
     "ABBREVIATION_MAX_LENGTH", "SHORT_VALUE_MAX_LENGTH", "SERVICE_WORDS",
     "is_abbreviation", "is_all_caps", "normalize_caps_phrase",
     "normalize_organization_fields", "normalize_position",
+    "city_for_document", "clean_address_from_index", "extract_city",
 ]
