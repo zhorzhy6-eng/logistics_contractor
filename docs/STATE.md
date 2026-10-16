@@ -4,56 +4,49 @@
 > шага. Архитектура — в [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **Обновлено:** 2026-10-16
-**HEAD:** `984e053` — «1.L: STATE.md — Этап 4 завершён +
-tools/run_tests_in_parts.py» (последний коммит Этапа 4). Это HEAD
+**HEAD:** `11203c9` — «1.H: tests/test_agent_layout.py — раскладка
+services/agent/ (152 теста)» (последний коммит кода Этапа 5). Это HEAD
 ПРЕДЫДУЩЕГО коммита; свой собственный хеш внутри файла стоять не может
 (`AGENTS.md` § 5.3).
 **Тестов (публичная часть):** полный прогон 16.10.2026 ЧАСТЯМИ — семь
-процессов по 23 файла (одним процессом MemoryError), у каждого свой
-`--basetemp` — **4587 passed, 3 skipped, 11 failed, 0 error**; собрано 4601
-тесто. Разбор — скриптом `tools/run_tests_in_parts.py` (он же печатает список
-упавших). Было до Этапа 4 — **4478 passed, 3 skipped, 11 failed** (4492
-собрано); Этап 4 добавил **109** тестов `tests/test_contracts_base_layout.py`
-и **не изменил ни одного падения**: те же самые 11 отказов, что и до него, ни
-одного нового. 4478 + 109 = 4587.
+процессов по 21 файла (одним процессом MemoryError), у каждого свой
+`--basetemp` — **4749 passed, 3 skipped, 10 failed, 0 error**; собрано 4762
+теста. Разбор — скриптом `tools/run_tests_in_parts.py` (он же печатает список
+упавших). Было до Этапа 5 — **4587 passed, 3 skipped, 11 failed** (4601
+собрано); Этап 5 добавил **153** теста `tests/test_agent_layout.py` и **снял
+одно прежнее падение** (порядкозависимый
+`tests/test_agent_context_tools.py::test_recent_actions_without_journal_is_empty`
+в этом прогоне прошёл): 4587 + 153 = 4740, плюс 9 тестов, которые раньше
+падали в наборе, — 4749. **Новых падений — ноль**: те же самые отказы, что и
+до Этапа 5.
 ⚠️ **Строку сводки нельзя разбирать свободным поиском «N failed / N error»
 по всему выводу pytest:** он печатает ещё и блоки логов захвата
 (`ERROR core.mirror:mirror.py:342 …`), и наивный разбор считает их тестами —
-первый заход этого прогона дал из-за этого «7 failed, 3 error» вместо
+первый заход прогона Этапа 4 дал из-за этого «7 failed, 3 error» вместо
 «11 failed, 0 error». Сводка берётся только из итоговой строки процесса.
-**Этап 3 дал ровно одно падение сверх прежних десяти, и оно не его.**
-Одиннадцать отказов = десять прежних + `tests/test_agent_context_tools.py::
-test_recent_actions_without_journal_is_empty`. Этот тест порядкозависимый (в
-изоляции и в своём файле — 27 passed) и на коде ДО Этапа 3 с ТЕМ ЖЕ списком
-файлов падает так же (проверено рабочей копией `git worktree` на `0c72bd4`,
-тот же прогон: 1 failed, 561 passed, 1 skipped). Причина видна в отчёте:
-`result["data"]` содержит чужие окна — `{'action': 'QPushButton', 'window':
-'QDialog'}`; тест видит верхнеуровневые окна, оставленные другими наборами в
-том же процессе. Разбиение на части в этом прогоне другое, чем в прошлом,
-поэтому набор соседей по процессу изменился.
-Десять прежних отказов не двигались ни на один (все воспроизводятся на коде
+Десять отказов не двигались ни на один (все воспроизводятся на коде
 ДО рефакторинга, проверено worktree на `0b4ccde`):
   * 4 — `tests/test_genitive_fio.py`: примеры написаны для несклоняемой
     фамилии на «-ян», а в тексте стоит «Иванов» (склоняется); `test_one_word_
-    only_male` вдобавок противоречит сам себе. Воспроизводятся на `0b4ccde`
-    — **8 падений из 8 подтверждены**;
+    only_male` вдобавок противоречит сам себе;
   * 4 — `tests/test_ui_base_window.py` (3) и
     `tests/test_ui_placeholder_window.py` (1): ждут подписи «клиентский
-    тип A» / «клиентский тип C» из публичного репозитория ДО разделения.
-    Тоже воспроизводятся на `0b4ccde`;
+    тип A» / «клиентский тип C» из публичного репозитория ДО разделения;
   * 2 — `tests/test_make_text_scenarios.py`: сиды считаются от содержимого
     РАБОЧЕЙ `contracts.db` (897 КБ, с данными оператора), а в свежем
     worktree база пустая (4 КБ) — там те же два теста проходят. Средовые.
-Приватная часть (отдельный репозиторий): полный прогон 15.10.2026 —
-**4263 passed** (см. её README). После Этапа 2 проверены её импорты
-`core.recognizer` (ими пользуются четыре окна типов: `formika`,
-`havaly`, `logistiks_rus`, `arenda_ts`) — работают через алиасы,
-`core.recognizer is services.recognition.recognizer` → `True`.
-После Этапа 3 проверены её импорты `core.gigachat_client`,
-`core.dadata_client`, `core.secrets_store` (четыре окна типов, две вкладки
-Аренды ТС, три файла тестов — 18 строк импорта) — работают через алиасы,
-`core.gigachat_client is infrastructure.api.gigachat` → `True`. Правок в
-приватном репозитории не потребовалось, он не менялся.
+Приватная часть (отдельный репозиторий): полный прогон 16.10.2026 —
+**4297 passed, 4 skipped, 1 failed** (было до Этапа 5: 4290 passed, 4 skipped,
+1 failed). Единственный отказ — `tests/test_gigachat3_switch.py::
+test_404_hint_does_not_promise_gigachat2`, и он **пре-существующий**: тест
+читает файл `core/gigachat_client.py`, который переехал ещё в Этапе 3
+(`infrastructure/api/gigachat.py`). Проверено worktree на `1334971` (коммит
+ДО Этапа 5, с ТЕМ ЖЕ публичным кодом): тест падает так же — `1 failed,
+12 passed, 1 skipped`. **Правок в приватной части Этап 5 не потребовал: 0.**
+Проверены её импорты `core.agent.*` (16 строк в 4 файлах: два файла тестов,
+`test_diagnostics.py`, `tools/migration/restore_public_edits.py`) — работают
+через алиасы, `core.agent.tools is services.agent.tools.registry` → `True`;
+приватные названия типов (`core.agent.labels`) находятся — 5 типов вместо 1.
 
 
 История прогонов задачи 1–6 (до разделения, ЧАСТЯМИ — полный одним
@@ -85,6 +78,182 @@ test_recent_actions_without_journal_is_empty`. Этот тест порядко�
 ---
 
 ## Что сделано
+
+### ЭТАП 5: РАЗБИЕНИЕ `core/agent/` → `services/agent/` (16.10.2026)
+
+**ЭТАП ЗАВЕРШЁН.** `core/agent/` (19 модулей + `prompts/maximilian.txt` в одной
+папке) разбит на три группы в `services/agent/`: **ядро**, **инструменты**,
+**личность**. **Логика методов не менялась — только переезд и правка
+импортов.** Публичный API (`Agent`, `AgentContext`, `AgentReply`, `ToolCall`,
+`Tool`, `ToolRegistry`, `build_registry`, `build_system_prompt`, `AgentMemory`,
+`Message`, `PERSONAS`, `Persona`, `persona`, `DEFAULT_PERSONA`, `SafeChat`,
+`emotional_block`) не изменился: старые пути `core.agent.*` работают через
+алиасы и ведут к ТОМУ ЖЕ объекту модуля.
+
+- ✅ **Переездов: 20 файлов** (19 модулей + промпт). Раскладка:
+
+  | Группа | Файлы | Строк |
+  |---|---|---|
+  | `services/agent/core/` | `agent`, `llm`, `memory`, `long_memory`, `prompt` (+ `prompts/maximilian.txt`) | 2 492 + промпт 464 |
+  | `services/agent/tools/` | `registry` (был `tools.py`), `analytics` (был `analytics_tools`), `dadata` (был `dadata_tools`), `legal` (был `legal_tools`), `rag`, `context` (был `context_tools`), `proactivity`, `proactivity_tools`, `fill_parser`, `tutorial`, `tutorial_hints` | 7 818 |
+  | `services/agent/persona/` | `personas`, `emotional` | 358 |
+
+  В `core/agent/` осталось **2 файла**: `__init__.py` (shim) и `words.py`
+  (210 строк).
+
+- ✅ **Правок в приватной части: 0.** Проверено `git grep` ДО работы (1.1–1.6:
+  16 строк импорта `core.agent.*` в 4 файлах — `tests/test_agent_all_windows.py`,
+  `tests/test_agent_tutorial.py`, `tests/test_diagnostics.py`,
+  `tools/migration/restore_public_edits.py`) и подтверждено прогоном её тестов
+  после. Алиасы покрывают все 16 импортов, включая внутренние модули
+  (`core.agent.tools`, `core.agent.memory`, `core.agent.context_tools`,
+  `core.agent.prompt`, `core.agent.long_memory`, `core.agent.tutorial`).
+- ⚠️ **Классификация риска: СРЕДНИЙ** (не высокий). Приватная часть
+  импортирует ВНУТРЕННИЕ модули агента (не только публичные имена), но НЕ
+  наследуется от классов агента and НЕ расширяет `__path__` агента. Правок
+  не потребовалось.
+- ⚠️ **`words.py` НЕ переезжал — и это часть решения.** `core/pseudonymizer.py`
+  читает таблицу служебных слов ФАЙЛОМ по пути `core/agent/words.py`
+  (`_WORDS_MODULE = "core.agent.words"`): обычный импорт пакета агента дал бы
+  «partially initialized module». Переезд увёл бы файл из-под загрузчика,
+  поэтому `core.agent.words` алиаса НЕ имеет — модуль живёт там же.
+  Закреплено тестом.
+- ⚠️ **`services/agent/persona` — подпакет, но `services.agent.persona` —
+  ФУНКЦИЯ.** Функция `persona` объявлена в `personas.py` и входит в публичный
+  API, поэтому в `__init__.py` она привязывается к имени пакета. Проверено
+  минимальным примером на ВРЕМЕННОМ пакете: имя из `__init__.py` затеняет
+  одноимённый подпакет и в обычном Python. Импорт подпакета работает
+  (`from services.agent.persona.personas import …`), а вот
+  `services.agent.persona.personas` как ЦЕПОЧКА АТРИБУТОВ — нет. Это
+  зафиксировано отдельным тестом.
+- ⚠️ **Перехватчик импорта для алиасов ОТБРОШЕН — и это главная находка
+  этапа.** Первый заход сделал `sys.meta_path`-finder, чтобы алиасы стали
+  ленивыми (импорт `services.agent.*` поднимал `core.agent` раньше
+  `attach_private_root()`, и приватный сосед `labels.py` не находился).
+  Finder дал **ДВА объекта модуля**: `sys.modules["core.agent.tutorial_hints"]`
+  и `sys.modules["services.agent.tools.tutorial_hints"]` оказались разными
+  объектами с одинаковым `__name__`. Сломалось тихо ровно то, ради чего
+  алиасы делаются: `monkeypatch.setattr` по старому пути перестал быть виден
+  коду по новому. Поймано тестом `tests/test_agent_tutorial_ui.py`
+  (`test_tutorial_hint_appears_in_panel`). Решение — прямая регистрация
+  алиасов при импорте `core` (как в Этапах 3–4): ОДИН объект.
+- ⚠️ **Приватный сосед `core/agent/labels.py` — две страховки.** Приватные
+  названия клиентских типов и обязательные поля лежат в приватной части по
+  СТАРОМУ пути (`logistics_contractor_private/core/agent/labels.py`).
+  Механизмы: (1) `core.agent` остался в `PACKAGE_BOOTSTRAP`, и
+  `attach_private_root()` дополняет его `__path__` приватной папкой;
+  (2) `services`/`services.agent` добавлены в `PACKAGE_BOOTSTRAP` — на случай,
+  если приватная часть повторит раскладку публичной; (3) та же страховка
+  стоит в самом shim. В `services/agent/tools/context.py` и `proactivity.py`
+  приватные названия читаются ЛЕНИВО (`_LazyTitles` / `_LazyRequired`):
+  при импорте `core` алиасы поднимают эти модули РАНЬШЕ
+  `attach_private_root()`, и разовая проверка `len(TYPE_TITLES) > 1`
+  показывала потерю клиентских типов. Проверено в обоих режимах: с приватной
+  частью — 5 типов, без неё — 1 («Экспедиторство»).
+- ⚠️ **Цикл `agent.py → tools/registry → core.agent.words → core/__init__`
+  разорван порядком.** `core/__init__.py` регистрирует алиасы агента ПОСЛЕ
+  алиасов Этапов 1–4 (там уже есть `core.diagnostics`, `core.dates`,
+  `core.validation.validator`): импорт `services.agent.*` загружает `core`
+  частично, и ранний порядок дал бы `ModuleNotFoundError` на этих именах.
+- ⚠️ **`registry.py` собирал инструменты через локальные импорты — их
+  пришлось править руками.** Внутри `build_registry` лежали
+  `from core.agent import analytics_tools` и подобные; две ссылки
+  (`analytics_tools.tool_specs()`, `legal_tools.search_legal`) использовали
+  короткое имя модуля, которого после переезда в области видимости не стало
+  (`NameError` на 40 тестах). Приведено к `from services.agent.tools import
+  analytics as analytics_tools` — локальные имена сохранены.
+- ⚠️ **`core.agent.diagnostics` — модуля НЕ БЫЛО и нет.** Адрес
+  `from core.agent import diagnostics` в старом коде всегда уходил в
+  `ImportError` → ветку «диагностика недоступна». Инструмент `diagnose`
+  теперь импортирует `core.diagnostics` ПО-НАСТОЯЩЕМУ и работает.
+  Алиас `core.agent.diagnostics` ведёт к `core.diagnostics` (обратная
+  совместимость старого написания).
+- ⚠️ **`tutorial.project_root()` считает корень проекта от `__file__`.**
+  Файл переехал на уровень глубже (`core/agent/` → `services/agent/tools/`),
+  потребовался четвёртый `dirname`. Ошибка была бы тихой: список папок
+  инструкций просто оказался бы пустым. Закреплено тестом.
+- ⚠️ **Имена логгеров СОЗНАТЕЛЬНО не менялись** — все 17 объявлены явно
+  (`core.agent.tools`, `core.agent.fill_parser`, …). Логи читаются настройкой
+  (`APP_LOGGERS` = дерево `core`): имя `services.agent.*` выпало бы из неё.
+  Закреплено параметризованным тестом на 17 модулей.
+- ✅ **Тесты: 153** — новый `tests/test_agent_layout.py`: в `core/agent/`
+  остались ровно два файла, 20 новых файлов на месте, каждый старый путь даёт
+  ТОТ ЖЕ объект модуля (18 параметров), старое имя лежит в `sys.modules` И
+  атрибутом пакета, публичный API (14 имён) из обоих путей, `words.py` на
+  месте и читается загрузчиком `pseudonymizer`, приватный сосед находится,
+  промпт читается НАСТОЯЩИЙ (не запасной), имена логгеров не изменились,
+  `tutorial.project_root()` — корень проекта, оба порядка импорта и все старые
+  пути — отдельными СВЕЖИМИ процессами. **Тест проверен НА БАГЕ: с выключенной
+  регистрацией одного алиаса краснеют 7 из 153; с выключенным `setattr`
+  (атрибут пакета) — 1 из 153, и ещё 2 из 8 в
+  `tests/test_private_path_alias.py`.**
+- ✅ **Проба `tools/check_stage5_aliases.py`** — два режима (`old`/`new`),
+  проверяет 19 алиасов, один объект модуля, `sys.modules` и атрибуты пакета,
+  публичный API (14 имён), `words.py`, приватного соседа и настоящий промпт.
+  Оба режима — код `0`. Пробы Этапов 2–4 после переезда прогнаны заново:
+  все шесть режимов — код `0`.
+- ✅ **Приложение поднимается.** `python main.py` offscreen живёт 25 с без
+  падений; проба выхода — **6 запусков из 6** кодом `0` (`exit_min.py`,
+  `exit_with_agent.py`). Рабочая цепочка `ui.main_window` → `ui.agent_widget` →
+  `core.agent.tools` → `services.agent.tools.registry` импортируется,
+  реестр собирает **40 инструментов**.
+- ✅ **Коммиты:** восемь в Этапе 5 — `b607bee` (1.B, структура), `e694758`
+  (1.C, persona), `d1be9f8` (1.D, tools), `01b2d33` (1.E, core+registry),
+  `6a70582` (1.F, реэкспорт), `22c170c` (1.G, алиасы), `11203c9` (1.H, тесты
+  раскладки), плюс Часть 0: `554c65d` (`register_module_alias`), `1334971`
+  (STATE.md — мини-фиксы Этапа 4). Все запушены.
+- ⚠️ **Часть подэтапов 1.C–1.E намеренно шла красной.** Файлы переезжали
+  раньше, чем появлялись алиасы (они в 1.G), поэтому `pytest` между этими
+  коммитами падал с `ModuleNotFoundError` — так предписано заданием и так же
+  было в Этапах 2 и 3. Зелёным дерево стало на 1.G.
+
+**Цель.** `core/agent/` (19 модулей в одной папке) разбивается на
+`services/agent/` с тремя группами: `core/` (ядро), `tools/` (инструменты),
+`persona/` (личность). **Логика методов не меняется, публичный API агента не
+меняется, потребители не правятся.**
+
+**Проверка приватной части (1.1–1.6) — ДО начала работы.**
+
+| Часть | Файлов | Строк импорта `core.agent.*` |
+|---|---|---|
+| Публичная | 53 | 222 (из них 19 — внутри самого `core/agent/`) |
+| Приватная | 4 | 16 |
+
+Приватная часть импортирует ВНУТРЕННИЕ модули: `long_memory`, `memory`,
+`context_tools`, `tools`, `tutorial`, `prompt`. Наследования от классов
+агента нет, `PACKAGE_BOOTSTRAP` приватная часть не трогает.
+**Классификация: СРЕДНИЙ** — правки в приватной части вероятны, но не
+обязательны; по факту не потребовались.
+
+**Карта «файл → куда едет»** (Часть 1.A; `→` — модуль остаётся на месте).
+
+| Группа | Модуль до | Модуль после |
+|---|---|---|
+| Ядро | `core/agent/agent.py` | `services/agent/core/agent.py` |
+| Ядро | `core/agent/llm.py` | `services/agent/core/llm.py` |
+| Ядро | `core/agent/memory.py` | `services/agent/core/memory.py` |
+| Ядро | `core/agent/long_memory.py` | `services/agent/core/long_memory.py` |
+| Ядро | `core/agent/prompt.py` + `prompts/` | `services/agent/core/prompt.py` + `core/prompts/` |
+| Инструменты | `core/agent/tools.py` | `services/agent/tools/registry.py` |
+| Инструменты | `core/agent/analytics_tools.py` | `services/agent/tools/analytics.py` |
+| Инструменты | `core/agent/dadata_tools.py` | `services/agent/tools/dadata.py` |
+| Инструменты | `core/agent/legal_tools.py` | `services/agent/tools/legal.py` |
+| Инструменты | `core/agent/rag.py` | `services/agent/tools/rag.py` |
+| Инструменты | `core/agent/context_tools.py` | `services/agent/tools/context.py` |
+| Инструменты | `core/agent/proactivity.py` | `services/agent/tools/proactivity.py` |
+| Инструменты | `core/agent/proactivity_tools.py` | `services/agent/tools/proactivity_tools.py` |
+| Инструменты | `core/agent/fill_parser.py` | `services/agent/tools/fill_parser.py` |
+| Инструменты | `core/agent/tutorial.py` | `services/agent/tools/tutorial.py` |
+| Инструменты | `core/agent/tutorial_hints.py` | `services/agent/tools/tutorial_hints.py` |
+| Личность | `core/agent/personas.py` | `services/agent/persona/personas.py` |
+| Личность | `core/agent/emotional.py` | `services/agent/persona/emotional.py` |
+| → | `core/agent/words.py` | остаётся (читается файлом из `pseudonymizer`) |
+| → | `core/agent/__init__.py` | остаётся (shim на `services.agent`) |
+| — | `core/agent/diagnostics.py` | **не существует** (инструмент берёт `core.diagnostics`) |
+
+**Порядок работы** (каждый шаг — отдельный коммит): 1.B структура → 1.C
+`persona/` → 1.D `tools/` → 1.E `core/` + `registry` → 1.F реэкспорт →
+1.G алиасы → 1.H тесты раскладки → 1.I финальная проверка.
 
 ### Мини-фиксы Этапа 4 (16.10.2026)
 
@@ -6322,8 +6491,13 @@ precision_core 0.9376 → 0.9697, правила 0.5266 → 0.5068. По пол�
   (16.10.2026).** Файл разбит на пакет `core/contracts/base/` (семь модулей),
   публичный API не менялся, подклассы не правились. Разбор — в «Что сделано»,
   карта «метод → куда едет» — там же.
-- ⬜ **Этап 5: `services/agent`.** Следующий шаг рефакторинга (см. «Следующий
-  шаг»).
+- ✅ **Этап 5: `services/agent` — СДЕЛАНО (16.10.2026).** `core/agent/`
+  (19 модулей + промпт) разбит на `services/agent/` с тремя группами
+  (`core/`, `tools/`, `persona/`), 20 переездов, публичный API не менялся,
+  приватная часть не правилась. Разбор — в «Что сделано».
+- ⬜ **Этап 6: разбиение `ui/main_window.py`** (≈2000 строк, 12
+  ответственностей) на 9 миксинов — следующий шаг рефакторинга (см.
+  «Следующий шаг»).
 - ⬜ **`core/import_cancel.py` и `core/trace.py` остались в корне.** Оба
   нужны слою распознавания (`services/recognition/*` импортирует их по
   старому пути), а `core/import_cancel.py` — ещё и
@@ -6332,7 +6506,9 @@ precision_core 0.9376 → 0.9697, правила 0.5266 → 0.5068. По пол�
   `infrastructure/api/`.
 - ⬜ **`core/pseudonymizer.py` тоже остался в корне** и импортируется из
   `infrastructure/api/gigachat.py` по старому пути (это допустимо: `core`
-  грузится первым и держит алиасы, — но путь помечен deprecated).
+  грузится первым и держит алиасы, — но путь помечен deprecated). Он же
+  читает ФАЙЛОМ таблицу слов `core/agent/words.py` — при её переезде
+  придётся править загрузчик (см. «Известные расхождения»).
 - ⬜ **Массовая миграция импортов на новые пути.** После Этапа 3 к 227 адресам
   Этапов 1–2 добавились 68 адресов инфраструктуры (50 публичных + 18
   приватных). Не обязательна: старые пути работают через алиасы, но помечены
@@ -6739,6 +6915,29 @@ precision_core 0.9376 → 0.9697, правила 0.5266 → 0.5068. По пол�
 
 ## Следующий шаг
 
+**ЭТАП 5 РЕФАКТОРИНГА ЗАКРЫТ: разбиение `core/agent/` → `services/agent/`**
+(16.10.2026). 20 переездов (19 модулей + `prompts/maximilian.txt`), три группы:
+`core/` (ядро: `agent`, `llm`, `memory`, `long_memory`, `prompt`), `tools/`
+(`registry` — был `tools.py`, `analytics`, `dadata`, `legal`, `rag`, `context`,
+`proactivity`, `proactivity_tools`, `fill_parser`, `tutorial`, `tutorial_hints`),
+`persona/` (`personas`, `emotional`). В `core/agent/` осталось **2 файла**:
+shim `__init__.py` и `words.py`. **Логика методов не менялась, публичный API не
+менялся, правок в приватной части — 0** (16 строк её импортов работают через
+алиасы). Восемь коммитов (`b607bee`…`11203c9`) плюс Часть 0 (`554c65d`,
+`1334971`), новых тестов **153** (`tests/test_agent_layout.py`, проверены на
+баге: 7 из 153 краснеют без алиаса, 1 из 153 — без атрибута пакета). Проба
+`tools/check_stage5_aliases.py` в двух режимах — код `0`.
+
+**Следующий шаг — ЭТАП 6: разбиение `ui/main_window.py`** (≈2000 строк,
+12 ответственностей) на 9 миксинов. Грабли те же и уже известные: оба порядка
+импорта (проба с двумя режимами — `tools/check_stage*_aliases.py`), имена
+логгеров (`APP_LOGGERS` знает `core`, `ui`, `db`, `config`, `main`, `qt`),
+`lambda` в `connect` запрещены (цикл ссылок → 0xC0000005), алиасы на старых
+путях — в `sys.modules` И как атрибуты пакета (проще всего сразу через
+`core.private_path.register_module_alias`). У `ui` есть приватные соседи
+(`ui/windows/<тип>/`), поэтому `ui/__init__.py` и `PACKAGE_BOOTSTRAP` трогать
+так же аккуратно, как `core/agent`.
+
 **ЭТАП 4 РЕФАКТОРИНГА ЗАКРЫТ: разбиение `base_generator.py`** (16.10.2026).
 `core/contracts/base_generator.py` (1128 строк) разбит на пакет
 `core/contracts/base/` из семи модулей: `generator` (каркас и делегаты),
@@ -6752,17 +6951,6 @@ precision_core 0.9376 → 0.9697, правила 0.5266 → 0.5068. По пол�
 новых тестов **109** (`tests/test_contracts_base_layout.py`, проверены на баге:
 14 из 109 краснеют без алиасов, 3 из 109 — без атрибута пакета). Золотые
 тесты — 5 passed.
-
-**Следующий шаг — ЭТАП 5: `services/agent`.** Грабли прежние и уже
-известные: оба порядка импорта (для проверки — проба с двумя режимами, как
-`tools/check_stage2_aliases.py`, `check_stage3_aliases.py` и
-`check_stage4_aliases.py`), имена логгеров (в `APP_LOGGERS` есть только
-`core`, `ui`, `db`, `config`, `main`, `qt`) и алиасы на старых путях — в
-`sys.modules` И как атрибуты пакета. Отдельная осторожность: у `core.agent`
-уже есть приватный сосед (`core/agent/labels.py` в приватной части), поэтому
-`core/agent/__init__.py` трогать так же аккуратно, как `core/contracts`;
-`core.agent` — обычный пакет с `__init__.py`, и его `__path__` расширяется
-через `PACKAGE_BOOTSTRAP` в `core/private_path.py`.
 
 **ЧАСТЬ 0 ЭТАПА 4 ЗАКРЫТА: четыре вопроса Этапа 3** (16.10.2026, коммит
 `cf6040c`). `docs/adr/` — пункт снят (ADR в одиночном проекте не нужны);
@@ -7327,6 +7515,40 @@ _days_to_words_genitive` («45 (сорока пяти)»); он же тепер�
     нет нигде: с подключённой приватной частью подпись рабочая («Формика»,
     «Хавалы»), без неё — ключ типа (`formika`). Сверять надо через
     `picker_label(...)`, а не жёсткой строкой.
+- **Перехватчик импорта (`sys.meta_path`) для алиасов порождает ВТОРОЙ объект
+  модуля (16.10.2026, Этап 5 — дороже всего обошедшаяся находка).** Первый
+  заход Этапа 5 сделал `_AgentAliasFinder`, чтобы алиасы `core.agent.*` стали
+  ленивыми (импорт `services.agent.*` поднимал `core.agent` раньше
+  `attach_private_root()`, и приватный сосед `core/agent/labels.py` не
+  находился). Finder отдавал `spec_from_loader` с загрузчиком, чей
+  `create_module` возвращает уже загруженный модуль; на выходе
+  `sys.modules["core.agent.tutorial_hints"]` и
+  `sys.modules["services.agent.tools.tutorial_hints"]` оказались РАЗНЫМИ
+  объектами с одинаковым `__name__` и `__file__`. Ломалось тихо ровно то,
+  ради чего алиасы и делаются: `monkeypatch.setattr(core.agent.tutorial_hints,
+  …)` переставал быть виден коду, который берёт тот же модуль по новому пути
+  (поймал `tests/test_agent_tutorial_ui.py::test_tutorial_hint_appears_in_panel`).
+  **Правило: алиасы модулей делать ПРЯМОЙ регистрацией (`sys.modules` +
+  атрибут пакета, `core.private_path.register_module_alias`), а не
+  перехватчиком импорта.** Цена — модули поднимаются при импорте `core`;
+  приватные имена при этом домешивать ЛЕНИВО (см. ниже).
+- **Приватные названия, домешанные при импорте, теряются, если приватная часть
+  подключается позже (16.10.2026, Этап 5).** `services/agent/tools/context.py`
+  и `proactivity.py` при импорте домешивали приватные названия типов и
+  обязательные поля из `core.agent.labels`. Если модуль загрузился ДО
+  `attach_private_root()` (а при импорте `core` алиасы агента его как раз и
+  загружают), приватная часть молча терялась: `TYPE_TITLES` оставался с одним
+  «Экспедиторством». Решение — ленивые словари `_LazyTitles` / `_LazyRequired`
+  (наследники `dict`, домешивают при первом обращении, флаг ставится только
+  при УДАЧНОЙ загрузке). **Проверка при переезде: любое `try: from
+  core.agent.labels … except ImportError` на уровне модуля — красный флаг.**
+- **`persona` — имя И ФУНКЦИИ, И ПОДПАКЕТА (16.10.2026, Этап 5).** Функция
+  `persona` входит в публичный API агента, поэтому в `services/agent/__init__.py`
+  она затеняет одноимённый подпакет: `services.agent.persona` — функция,
+  `importlib.import_module("services.agent.persona")` — пакет. Это поведение
+  Python (проверено минимальным примером на временном пакете), не ошибка
+  переезда. Импорт `from services.agent.persona.personas import …` работает;
+  цепочка АТРИБУТОВ `services.agent.persona.personas` — нет.
 - **Имя логгера — часть контракта, а не деталь реализации (16.10.2026).**
   `services/recognition/import_service.py` брал имя из `__name__`; после
   переезда это дало бы `services.recognition.import_service`, и логи выпали
