@@ -1,0 +1,46 @@
+# Метаданные проекта и настройки инструментов.
+#
+# ВАЖНО: это НЕ замена requirements.txt.
+#   * requirements.txt — единственный источник правды по зависимостям;
+#     приложение ставится командой `pip install -r requirements.txt`.
+#   * pyproject.toml — метаданные (имя, версия, автор, состав пакетов)
+#     и место для настроек инструментов.
+#   * Секция [tool.pytest.ini_options] здесь НАМЕРЕННО отсутствует:
+#     pytest.ini остаётся источником правды для pytest, иначе pytest
+#     выберет один из двух файлов и поведение может измениться.
+#   * Настройки ruff — в .ruff.toml (см. 1.F), здесь не дублируются.
+
+[project]
+name = "logistics-contractor"
+version = "1.4.0"
+description = "Подготовка договоров перевозки, аренды и заявок"
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "Proprietary" }
+authors = [
+    { name = "Сергей", email = "" },
+]
+
+# Зависимости — источник правды в requirements.txt.
+# Здесь только для справки, не дублировать полностью.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.6.0",
+]
+
+[project.urls]
+Repository = "https://github.com/zhorzhy6-eng/logistics_contractor"
+
+[build-system]
+requires = ["setuptools<81"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["core*", "db*", "ui*", "services*", "infrastructure*", "config*"]
+exclude = ["tests*", "tools*", "_tmp*"]
