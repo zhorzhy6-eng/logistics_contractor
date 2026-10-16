@@ -81,6 +81,23 @@ jobs:
           Write-Output "pytest вернул: $code"
           exit $code
 
+      # Отчёт печатается В ЛОГ, а не только кладётся артефактом: артефакт
+      # доступен лишь владельцу репозитория, а лог читается и без входа.
+      - name: Show failures
+        if: always()
+        shell: pwsh
+        run: |
+          $file = "tests/_tmp/junit-unit.xml"
+          if (-not (Test-Path $file)) { Write-Output "отчёта нет"; exit 0 }
+          [xml]$x = Get-Content $file -Encoding utf8
+          $fail = $x.testsuites.testsuite | ForEach-Object { $_.testcase } |
+                  Where-Object { $_.failure -or $_.error }
+          Write-Output "ОТКАЗОВ В СЛОЕ unit: $(@($fail).Count)"
+          $fail | ForEach-Object {
+            Write-Output "  FAIL: $($_.classname)::$($_.name)"
+            Write-Output "        $(($_.failure.message -split "`n")[0])"
+          }
+
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4
