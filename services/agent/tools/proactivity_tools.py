@@ -28,8 +28,8 @@ SQL здесь нет: сроки берутся из ``db/crud/drivers.py`` и
 import logging
 from typing import Any, Dict, List, Optional, Sequence
 
-from core.agent import proactivity
-from core.agent.proactivity import (
+from services.agent.tools import proactivity
+from services.agent.tools.proactivity import (
     DEFAULT_WARNING_DAYS, SuggestionEngine, habits,
 )
 
@@ -52,7 +52,7 @@ def _error(message: str, **extra: Any) -> Dict[str, Any]:
 
 def _form_sections(context: Any) -> Dict[str, Any]:
     """Данные открытой формы разделами (пусто — формы нет)."""
-    from core.agent.tools import collect_form_data
+    from services.agent.tools.registry import collect_form_data
 
     window = context.current_window() if context is not None else None
     if window is None:
@@ -118,7 +118,7 @@ def check_required(context: Any = None, section: str = "", **_) -> Dict[str, Any
     only: Optional[Sequence[str]] = None
     wanted = str(section or "").strip()
     if wanted:
-        from core.agent.tools import _section_alias
+        from services.agent.tools.registry import _section_alias
 
         key = wanted if wanted in sections else _section_alias(wanted, sections)
         if not key:

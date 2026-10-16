@@ -49,7 +49,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from core.dates import to_display as _date_display
 from core.dates import to_iso
-from core.recognizer import DataMapper, _VIN_SOURCE_RE
+from services.recognition.recognizer import DataMapper, _VIN_SOURCE_RE
 
 logger = logging.getLogger("core.agent.fill_parser")
 
@@ -893,7 +893,7 @@ def resolve_organization(name: str, is_carrier: bool = True,
         return None, []
 
     try:
-        from core.agent.tools import _clean_term, looks_like_command_or_noise
+        from services.agent.tools.registry import _clean_term, looks_like_command_or_noise
         from db.crud.organizations import search_organizations
 
         cleaned = _clean_term(term) or term
@@ -1008,7 +1008,7 @@ def clean_address(address: str) -> Tuple[str, str]:
         return "", ""
 
     try:
-        from core.agent.dadata_tools import check_address_dadata
+        from services.agent.tools.dadata import check_address_dadata
 
         result = check_address_dadata(address=text)
     except Exception as e:  # noqa: BLE001 — DaData не обязательна

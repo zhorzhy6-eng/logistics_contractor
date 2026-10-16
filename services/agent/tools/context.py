@@ -297,7 +297,7 @@ def get_current_window(context: Any, **_) -> Dict[str, Any]:
     #: способом, что и в get_form_state, чтобы ответы не расходились.
     subject = ""
     try:
-        from core.agent.tools import collect_form_data
+        from services.agent.tools.registry import collect_form_data
 
         sections = collect_form_data(window)
         if key in sections:
@@ -351,7 +351,7 @@ def get_form_state(context: Any, section: str = "", only_empty: bool = False,
     «Перевозчик». Пустая строка в ``current_subject`` — поле не заполнено,
     и так и надо сказать оператору.
     """
-    from core.agent.tools import collect_form_data
+    from services.agent.tools.registry import collect_form_data
 
     window = context.current_window() if context is not None else None
     if window is None:
@@ -365,7 +365,7 @@ def get_form_state(context: Any, section: str = "", only_empty: bool = False,
 
     wanted = str(section or "").strip()
     if wanted:
-        from core.agent.tools import _section_alias  # локальный импорт: общий код
+        from services.agent.tools.registry import _section_alias  # локальный импорт: общий код
 
         key = wanted if wanted in sections else _section_alias(wanted, sections)
         if not key:

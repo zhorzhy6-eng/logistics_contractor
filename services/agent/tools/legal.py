@@ -89,7 +89,7 @@ def get_legal_rag() -> Any:
     """RAG правовой базы (создаётся при первом обращении)."""
     global _rag
     if _rag is None:
-        from core.agent.rag import RAG
+        from services.agent.tools.rag import RAG
 
         _rag = RAG()
     return _rag

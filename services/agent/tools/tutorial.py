@@ -84,9 +84,17 @@ _cache: Optional[List[Dict[str, Any]]] = None
 # ─────────────────────────────────────────────────────────────
 
 def project_root() -> str:
-    """Корень проекта: core/agent/tutorial.py → 3 уровня вверх."""
+    """Корень проекта: services/agent/tools/tutorial.py → 4 уровня вверх.
+
+    ⚠️ Этап 5: файл лежал в `core/agent/` (три уровня до корня) и переехал
+    на уровень глубже. Без правки корнем считалась бы папка `services/`,
+    и публичные инструкции оператора перестали бы находиться — ошибка
+    тихая: список папок просто оказался бы пустым.
+    """
     return os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
     )
 
 

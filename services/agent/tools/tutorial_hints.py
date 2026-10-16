@@ -27,7 +27,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from core.agent import proactivity
+from services.agent.tools import proactivity
 
 logger = logging.getLogger("core.agent.tutorial_hints")
 
@@ -41,7 +41,7 @@ PULLABLE_SECTIONS = {
 
 def _form_sections(context: Any) -> Dict[str, Any]:
     """Данные открытой формы разделами (пусто — формы нет)."""
-    from core.agent.tools import collect_form_data
+    from services.agent.tools.registry import collect_form_data
 
     window = context.current_window() if context is not None else None
     if window is None:

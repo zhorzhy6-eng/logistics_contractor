@@ -153,7 +153,7 @@ def _client():
     Исключения не глушатся: инструмент превращает их в понятный текст,
     чтобы модель сказала оператору «нужен ключ», а не «ошибка».
     """
-    from core.dadata_client import DadataClient
+    from infrastructure.api.dadata import DadataClient
 
     return DadataClient()
 
@@ -422,7 +422,7 @@ def _resolve_entity_id(query: str, is_carrier: bool) -> Tuple[int, str]:
     """
     from db.crud.organizations import search_organizations
 
-    from core.agent.long_memory import search_terms
+    from services.agent.core.long_memory import search_terms
     from core.agent.words import search_terms as words_search_terms
 
     wanted = _short(query, 200)
