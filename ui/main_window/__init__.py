@@ -55,6 +55,9 @@ from ui.main_window.settings import (  # noqa: F401
 # ── Тема, watcher системы, иконки (подэтап 1.J) ──
 from ui.main_window.theme import ThemeMixin  # noqa: F401
 
+# ── Раскладка окна (подэтап 1.K) ──
+from ui.main_window.layout import LayoutMixin  # noqa: F401
+
 # ── ВРЕМЕННО (до 1.N): каркас пока берётся из прежнего файла ──
 # Пока миксины наполняются по одному (1.C–1.L), класс MainWindow живёт в
 # `ui/main_window/_legacy.py` — так окно и 30+ UI-тестов работают на каждом
@@ -87,4 +90,5 @@ __all__ = [
     "DataMixin",
     "SettingsMixin",
     "ThemeMixin",
+    "LayoutMixin",
 ]
