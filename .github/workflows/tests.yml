@@ -9,26 +9,24 @@
 # новее для win32-x64), поэтому стоит 3.14. Если когда-нибудь станет
 # недоступен — замена одна строка: '3.12' (проект совместим).
 #
+# Слои идут ВСЕ и целиком: список «известных отказов» (`.ci/known_failures.txt`)
+# больше не нужен — оба оставшихся теста читали РАБОЧИЙ `config/settings.json`
+# и теперь честно пропускаются, когда файла нет (он локальный, у каждого
+# оператора свой; в репозитории лежит только образец `settings.example.json`).
+# Файл удалён вместе со ссылками на него здесь — как и было записано в его
+# шапке.
+#
 # ─────────────────────────────────────────────────────────────
-# ИЗВЕСТНЫЕ ОТКАЗЫ: почему CI красный, и что с этим делать
+# ПОЧЕМУ ОТКАЗЫ ПЕЧАТАЮТСЯ АННОТАЦИЯМИ (шаг «Publish failures»)
 # ─────────────────────────────────────────────────────────────
-# В наборе есть 10 отказов, которые НЕ являются регрессом: они
-# воспроизводятся на коде ДО рефакторинга (проверено worktree на `0b4ccde`).
-# Разбор каждого — в `docs/STATE.md`, «Известные расхождения».
-# Чинить их — отдельная задача (в «Следующем шаге» она стоит пунктом 6),
-# и этот этап их НЕ трогает: Этап 8 — обвязка.
-#
-# Поэтому прогон устроен так: **тесты идут ВСЕ**, а известные отказы
-# названы поимённо. Список лежит ФАЙЛОМ — `.ci/known_failures.txt`
-# (в нём же объяснение по каждой группе). Файл, а не строка в YAML,
-# потому что в ID теста есть кириллица и квадратные скобки, и разбор
-# строки на аргументы ломается на пробелах внутри ID.
-#
-# Читается так: одна строка файла = один аргумент командной строки;
-# строки с `#` и пустые пропускаются.
-#
-# КОГДА ЭТИ ОТКАЗЫ ПОЧИНЯТ — `.ci/known_failures.txt` удаляется целиком,
-# вместе со ссылками на него здесь.
+# Логи GitHub Actions отдаёт ТОЛЬКО владельцу репозитория: `/actions/jobs/
+# <id>/logs` отвечает 403 без входа, артефакты — 401. А вот аннотации
+# check-run читаются публично:
+#     https://api.github.com/repos/<owner>/<repo>/check-runs/<job_id>/annotations
+# Поэтому имена упавших тестов, итоговая строка pytest и размер отчёта
+# печатаются workflow-командами `::error::` (`.ci/publish_failures.ps1`) —
+# GitHub превращает их в аннотации. Шаг выполняется ВСЕГДА (`if: always()`)
+# и никогда не роняет работу.
 #
 # Что НЕ делается в CI:
 #   * приватная часть (`logistics_contractor_private`) — отдельный
@@ -36,10 +34,9 @@
 #     в этих слоях не собираются;
 #   * Tesseract OCR не ставится: тесты офлайн-OCR при его отсутствии
 #     пропускаются (`skip`), а не падают;
-#   * `config/settings.json` не создаётся: файл локальный (у каждого
-#     оператора свой) и в репозитории его нет намеренно — есть
-#     `settings.example.json`. Два теста, которые читают РАБОЧИЙ файл,
-#     перечислены в `.ci/known_failures.txt`;
+#   * `config/settings.json` не создаётся: файл локальный и в репозитории
+#     его нет намеренно — есть `settings.example.json`. Тесты, которые
+#     читают рабочий файл, пропускаются по `skipif`;
 #   * два теста сверки с рабочей `contracts.db` в CI не падают, а
 #     пропускаются: в свежем checkout базы оператора нет.
 
@@ -50,6 +47,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+
+env:
+  #: Qt без экрана: UI-тесты идут в offscreen-режиме во всех слоях.
+  QT_QPA_PLATFORM: offscreen
 
 jobs:
   test-unit:
@@ -72,31 +73,18 @@ jobs:
       - name: Run unit tests
         shell: pwsh
         run: |
-          $skip = @(Get-Content .ci/known_failures.txt -Encoding utf8 |
-                    Where-Object { $_.Trim() -ne "" -and -not $_.TrimStart().StartsWith("#") } |
-                    ForEach-Object { $_.Trim() })
           python -m pytest tests/unit/ -o addopts="" -q -rf --tb=line --basetemp=tests/_tmp/_ci `
-            --junitxml=tests/_tmp/junit-unit.xml @skip
+            --junitxml=tests/_tmp/junit-unit.xml 2>&1 |
+            Tee-Object -FilePath tests/_tmp/unit-output.txt
           $code = $LASTEXITCODE
           Write-Output "pytest вернул: $code"
           exit $code
 
-      # Отчёт печатается В ЛОГ, а не только кладётся артефактом: артефакт
-      # доступен лишь владельцу репозитория, а лог читается и без входа.
-      - name: Show failures
+      - name: Publish failures
         if: always()
         shell: pwsh
         run: |
-          $file = "tests/_tmp/junit-unit.xml"
-          if (-not (Test-Path $file)) { Write-Output "отчёта нет"; exit 0 }
-          [xml]$x = Get-Content $file -Encoding utf8
-          $fail = $x.testsuites.testsuite | ForEach-Object { $_.testcase } |
-                  Where-Object { $_.failure -or $_.error }
-          Write-Output "ОТКАЗОВ В СЛОЕ unit: $(@($fail).Count)"
-          $fail | ForEach-Object {
-            Write-Output "  FAIL: $($_.classname)::$($_.name)"
-            Write-Output "        $(($_.failure.message -split "`n")[0])"
-          }
+          . ./.ci/publish_failures.ps1 -Layer unit
 
       - name: Upload test report
         if: always()
@@ -126,14 +114,18 @@ jobs:
       - name: Run integration tests
         shell: pwsh
         run: |
-          $skip = @(Get-Content .ci/known_failures.txt -Encoding utf8 |
-                    Where-Object { $_.Trim() -ne "" -and -not $_.TrimStart().StartsWith("#") } |
-                    ForEach-Object { $_.Trim() })
           python -m pytest tests/integration/ -o addopts="" -q -rf --tb=line --basetemp=tests/_tmp/_ci `
-            --junitxml=tests/_tmp/junit-integration.xml @skip
+            --junitxml=tests/_tmp/junit-integration.xml 2>&1 |
+            Tee-Object -FilePath tests/_tmp/integration-output.txt
           $code = $LASTEXITCODE
           Write-Output "pytest вернул: $code"
           exit $code
+
+      - name: Publish failures
+        if: always()
+        shell: pwsh
+        run: |
+          . ./.ci/publish_failures.ps1 -Layer integration
 
       - name: Upload test report
         if: always()
@@ -162,17 +154,19 @@ jobs:
 
       - name: Run UI tests
         shell: pwsh
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: |
-          $skip = @(Get-Content .ci/known_failures.txt -Encoding utf8 |
-                    Where-Object { $_.Trim() -ne "" -and -not $_.TrimStart().StartsWith("#") } |
-                    ForEach-Object { $_.Trim() })
           python -m pytest tests/ui/ -o addopts="" -q -rf --tb=line --basetemp=tests/_tmp/_ci `
-            --junitxml=tests/_tmp/junit-ui.xml @skip
+            --junitxml=tests/_tmp/junit-ui.xml 2>&1 |
+            Tee-Object -FilePath tests/_tmp/ui-output.txt
           $code = $LASTEXITCODE
           Write-Output "pytest вернул: $code"
           exit $code
+
+      - name: Publish failures
+        if: always()
+        shell: pwsh
+        run: |
+          . ./.ci/publish_failures.ps1 -Layer ui
 
       - name: Upload test report
         if: always()
@@ -198,5 +192,3 @@ jobs:
 
       - name: Run ruff
         run: ruff check .
-
-

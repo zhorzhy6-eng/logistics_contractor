@@ -168,8 +168,18 @@ def test_agent_uses_twenty_steps_by_default():
     assert "лимит исчерпан" in reply.text
 
 
+@pytest.mark.skipif(
+    not (PROJECT_ROOT / "config" / "settings.json").is_file(),
+    reason="нет рабочего config/settings.json (локальный файл оператора)",
+)
 def test_project_settings_file_asks_for_twenty_steps():
-    """Рабочий файл настроек проекта: max_tool_steps = 20."""
+    """Рабочий файл настроек проекта: max_tool_steps = 20.
+
+    Файл локальный: в репозитории его нет намеренно (есть образец
+    `settings.example.json`, его проверяет тест ниже). Без файла проверка
+    пропускается — иначе свежий checkout (CI) краснел бы из-за того, чего
+    в репозитории и не должно быть.
+    """
     data = json.loads((PROJECT_ROOT / "config" / "settings.json")
                       .read_text(encoding="utf-8"))
     assert data["agent"]["max_tool_steps"] == 20

@@ -40,7 +40,9 @@ REQUIRED_GROUPS = {
 }
 
 #: Сколько файлов легло в каждый слой (карта подэтапа 1.A, docs/STATE.md).
-EXPECTED_FILES = {"unit": 57, "integration": 25, "ui": 60}
+#: unit: 57 → 58 в ЧАСТИ 3 пост-рефакторинга — добавлен
+#: `tests/unit/core/test_checksums.py` (общий модуль контрольных сумм).
+EXPECTED_FILES = {"unit": 58, "integration": 25, "ui": 60}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -153,9 +155,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 142 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 143 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 142, f"тестовых файлов {len(found)}, ожидается 142"
+    assert len(found) == 143, f"тестовых файлов {len(found)}, ожидается 143"
 
 
 def test_no_test_module_name_collision():

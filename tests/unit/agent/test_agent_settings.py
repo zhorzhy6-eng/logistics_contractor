@@ -279,6 +279,21 @@ def test_broken_file_uses_defaults(settings_path):
 # 5. Живой файл проекта
 # ─────────────────────────────────────────────────────────────
 
+#: Рабочий файл настроек ОПЕРАТОРА. В репозитории его нет намеренно:
+#: у каждого он свой, а образец для нового пользователя —
+#: `config/settings.example.json` (он в репозитории и проверяется отдельно).
+PROJECT_SETTINGS = PROJECT_ROOT / "config" / "settings.json"
+
+#: Проверки по рабочему файлу — локальная сверка, а не проверка кода:
+#: без файла они пропускаются с причиной, а не падают. Так один и тот же
+#: набор зелёный и на машине оператора, и в свежем checkout (CI).
+needs_project_settings = pytest.mark.skipif(
+    not PROJECT_SETTINGS.is_file(),
+    reason="нет рабочего config/settings.json (локальный файл оператора)",
+)
+
+
+@needs_project_settings
 def test_project_settings_file_has_agent_section():
     """
     В config/settings.json раздел agent есть, полон и читается (часть E.1).
@@ -292,8 +307,7 @@ def test_project_settings_file_has_agent_section():
     from core.agent.personas import persona_keys
     from core.settings_service import AGENT_MODES
 
-    project_settings = PROJECT_ROOT / "config" / "settings.json"
-    data = json.loads(project_settings.read_text(encoding="utf-8"))
+    data = json.loads(PROJECT_SETTINGS.read_text(encoding="utf-8"))
     assert "agent" in data, "раздел agent должен быть в рабочем файле настроек"
 
     agent = data["agent"]
