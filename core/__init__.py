@@ -20,8 +20,16 @@
   * services/recognition/import_service.py  (был
     core/document_import_service.py).
 
-Чтобы не менять импорты по всему проекту (их 122: 87 в публичной части,
-35 в приватной и в тестах), этот файл делает ДВЕ вещи:
+Этап 3 (16.10.2026) — инфраструктура: внешние API, секреты, TLS:
+  * infrastructure/api/gigachat.py          (был core/gigachat_client.py);
+  * infrastructure/api/dadata.py            (был core/dadata_client.py);
+  * infrastructure/api/tls.py               (был core/tls_config.py);
+  * infrastructure/secrets/store.py         (был core/secrets_store.py);
+  * core/utils/json_text.py                 (был core/json_text.py).
+
+Чтобы не менять импорты по всему проекту (Этапы 1–2 — 227 адресов,
+Этап 3 — ещё 68: 50 в публичной части и 18 в приватной), этот файл делает
+ДВЕ вещи:
 
 1. РЕЭКСПОРТИРУЕТ имена из новых мест — работает `from core import parse_date`.
 2. РЕГИСТРИРУЕТ СТАРЫЕ ИМЕНА МОДУЛЕЙ в `sys.modules` — работает
@@ -37,9 +45,12 @@
     from core.data.contract_data import ContractData
     from core.validation.validator import Validator
     from services.recognition.reader import read_document
+    from infrastructure.api.gigachat import GigaChatClient
+    from infrastructure.secrets.store import get_gigachat_key
 
 Старые пути помечены как deprecated: они работают, но новый код должен идти
-через подпапки (ядро) и через `services/` (слой распознавания).
+через подпапки (ядро), через `services/` (слой распознавания) и через
+`infrastructure/` (внешние API и секреты).
 
 ЧЕГО ЗДЕСЬ НЕТ
 --------------
@@ -48,11 +59,14 @@
 договоров), и его импортируют генератор Экспедиторства и четыре набора
 тестов. Переезд этого модуля — отдельное решение (см. `docs/STATE.md`).
 
-`core/import_cancel.py` и `core/trace.py` остались в корне: их Этап 2
-не трогал, и `services/recognition/*` импортирует их по старому пути.
+`core/import_cancel.py`, `core/pseudonymizer.py` и `core/trace.py` остались
+в корне: их импортируют и `services/recognition/*`, и `infrastructure/api/*`
+по старому пути.
 
-Проверка совместимости — `tests/test_core_layout.py` и
-`tests/test_services_layout.py`.
+Проверка совместимости — `tests/test_core_layout.py`,
+`tests/test_services_layout.py` и `tests/test_infrastructure_layout.py`.
+Пробы обоих порядков импорта — `tools/check_stage2_aliases.py` и
+`tools/check_stage3_aliases.py`.
 """
 
 import sys as _sys
@@ -203,6 +217,133 @@ for _old_name, _module in _MOVED_TO_SERVICES.items():
     setattr(_sys.modules[__name__], _old_name, _module)
 del _old_name, _module
 
+# ── Инфраструктура: GigaChat, DaData, секреты, TLS (Этап 3, 16.10.2026) ──
+# Пять модулей переехали в `infrastructure/` и `core/utils/`. Для обратной
+# совместимости регистрируем их в `sys.modules` под старыми именами — тем же
+# приёмом `setdefault`, что и в Этапах 1–2.
+#
+# ПОРЯДОК РЕГИСТРАЦИИ — ЧАСТЬ РЕШЕНИЯ, а не вкусовщина. `infrastructure/*`
+# импортирует `core.*` на уровне модуля (`store` → `core.audit`, `gigachat` →
+# `core.import_cancel` и `core.pseudonymizer`), поэтому связь двусторонняя:
+# `core` → `gigachat` → `core`. Разрывается она только порядком:
+#
+#   1. `core.utils.json_text` — его подтягивает `gigachat` на уровне модуля
+#      (`from core.utils.json_text import shorten_json_text`). Файла
+#      `core/json_text.py` больше нет, и без алиаса это ModuleNotFoundError,
+#      поэтому утилита регистрируется ПЕРВОЙ;
+#   2. `core.secrets_store` — от него на уровне модуля зависят и `gigachat`,
+#      и `dadata`;
+#   3. `core.tls_config` — от него на уровне модуля зависит `gigachat`;
+#   4. `core.gigachat_client` и `core.dadata_client` — листья, их черёд
+#      последний.
+#
+# ОБРАТНЫЙ ПОРЯДОК (инфраструктура импортируется ПЕРВОЙ, когда `core` ещё не
+# загружен) в общем прогоне pytest не виден: `core` там уже поднят
+# `tests/conftest.py`. Его проверяет проба `tools/check_stage3_aliases.py`
+# с двумя режимами — так же, как `check_stage2_aliases.py` для Этапа 2.
+def _register_infrastructure_aliases():
+    """
+    Регистрирует старые имена модулей `infrastructure` в `sys.modules`
+    и как атрибуты пакета `core`.
+
+    Регистраций ДВЕ на каждый модуль, и обе обязательны — ровно как в
+    Этапах 1–2:
+
+      * `sys.modules["core.gigachat_client"]` — чтобы работал импорт
+        ПОДМОДУЛЯ (`from core.gigachat_client import GigaChatClient`);
+      * атрибут `core.gigachat_client` — чтобы работало `core.gigachat_client`
+        после `import core`. Одного `sys.modules` мало: `import core.X` для
+        уже загруженного модуля родительский атрибут не выставляет, и
+        обращение к нему падало бы с AttributeError (проверено на живой
+        пробе — первая версия Этапа 3 регистрировала только `sys.modules`).
+
+    Объект модуля при этом ОДИН: не копия и не обёртка, поэтому `isinstance`,
+    пикинг и сравнение классов ведут себя как раньше.
+    """
+    # Порядок — от зависимостей к зависимым (см. пояснение выше).
+    from core.utils import json_text as _json_text
+    _sys.modules.setdefault(__name__ + ".json_text", _json_text)
+
+    from infrastructure.secrets import store as _store
+    _sys.modules.setdefault(__name__ + ".secrets_store", _store)
+
+    from infrastructure.api import tls as _tls
+    _sys.modules.setdefault(__name__ + ".tls_config", _tls)
+
+    from infrastructure.api import gigachat as _gigachat
+    _sys.modules.setdefault(__name__ + ".gigachat_client", _gigachat)
+
+    from infrastructure.api import dadata as _dadata
+    _sys.modules.setdefault(__name__ + ".dadata_client", _dadata)
+
+    # Атрибуты пакета — ПОСЛЕ всех импортов: к этому моменту объекты модулей
+    # уже получены, и порядок присваивания ни на что не влияет.
+    _package = _sys.modules[__name__]
+    for _old_name, _module in (
+        ("json_text", _json_text),
+        ("secrets_store", _store),
+        ("tls_config", _tls),
+        ("gigachat_client", _gigachat),
+        ("dadata_client", _dadata),
+    ):
+        setattr(_package, _old_name, _module)
+
+
+try:
+    _register_infrastructure_aliases()
+except Exception:  # noqa: BLE001 — алиасы нужны для совместимости,
+    # а не для работы: новый код идёт через `infrastructure.*` напрямую.
+    # Молчать нельзя: без алиасов старые пути падают с ModuleNotFoundError,
+    # и причина должна быть видна в логе.
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "Алиасы infrastructure не зарегистрированы", exc_info=True
+    )
+
+
+# ── Реэкспорт ИМЁН инфраструктуры (для `from core import GigaChatClient`) ──
+# Делается ЛЕНИВО, через module-level `__getattr__`, а не статическим
+# импортом: на момент выполнения `core/__init__.py` модули infrastructure
+# могут быть ещё не готовы (обратный порядок импорта), и статический импорт
+# поймал бы ImportError на частичном модуле.
+#
+#: Имя в пакете `core` → (модуль на новом месте, имя в нём).
+_INFRASTRUCTURE_NAMES = {
+    # Клиенты внешних сервисов
+    "GigaChatClient": ("infrastructure.api.gigachat", "GigaChatClient"),
+    "DadataClient": ("infrastructure.api.dadata", "DadataClient"),
+    # Секреты (Windows Credential Manager)
+    "MISSING_KEY_MESSAGE": ("infrastructure.secrets.store", "MISSING_KEY_MESSAGE"),
+    "get_gigachat_key": ("infrastructure.secrets.store", "get_gigachat_key"),
+    "set_gigachat_key": ("infrastructure.secrets.store", "set_gigachat_key"),
+    "has_gigachat_key": ("infrastructure.secrets.store", "has_gigachat_key"),
+    "delete_gigachat_key": ("infrastructure.secrets.store", "delete_gigachat_key"),
+    # TLS
+    "describe_tls": ("infrastructure.api.tls", "describe_tls"),
+    "resolve_ca_bundle": ("infrastructure.api.tls", "resolve_ca_bundle"),
+    "ssl_error_hint": ("infrastructure.api.tls", "ssl_error_hint"),
+    # Утилита ядра
+    "shorten_json_text": ("core.utils.json_text", "shorten_json_text"),
+}
+
+
+def __getattr__(name):
+    """
+    Ленивый реэкспорт имён Этапа 3 через пакет `core`.
+
+    Вызывается только на доступ к АТРИБУТУ пакета (`core.GigaChatClient`) или
+    на `from core import GigaChatClient`. Импорт ПОДМОДУЛЯ
+    (`from core.gigachat_client import GigaChatClient`) идёт мимо: его
+    обслуживает регистрация в `sys.modules` выше.
+    """
+    target = _INFRASTRUCTURE_NAMES.get(name)
+    if target is None:
+        raise AttributeError(f"module 'core' has no attribute {name!r}")
+    import importlib as _importlib
+
+    return getattr(_importlib.import_module(target[0]), target[1])
+
+
 __all__ = [
     # Утилиты
     "DATE_FORMATS", "parse_date", "to_iso", "to_display", "to_day_month",
@@ -226,4 +367,10 @@ __all__ = [
     "split_carrier_type", "normalize_entity_type",
     # Валидация
     "Validator", "ValidationReport",
+    # Инфраструктура (Этап 3) — резолвятся лениво через __getattr__
+    "GigaChatClient", "DadataClient",
+    "MISSING_KEY_MESSAGE", "get_gigachat_key", "set_gigachat_key",
+    "has_gigachat_key", "delete_gigachat_key",
+    "describe_tls", "resolve_ca_bundle", "ssl_error_hint",
+    "shorten_json_text",
 ]

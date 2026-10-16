@@ -21,9 +21,8 @@
 """
 
 import logging
+import sys as _sys
 from typing import Optional
-
-from core import audit
 
 logger = logging.getLogger("core.secrets_store")
 
@@ -54,6 +53,46 @@ KEYRING_UNAVAILABLE_MESSAGE = (
     "Windows Credential Manager недоступен: системное хранилище секретов "
     "не отвечает. Ключ не сохранён — в файлы проекта он не записывается."
 )
+
+
+def __getattr__(name):
+    """
+    Ленивый доступ к модулю `core.audit` как к атрибуту `audit`.
+
+    Имя обязано читаться как атрибут модуля: тесты подменяют его через
+    `monkeypatch.setattr(secrets_store.audit, "log_event", …)`, а такая
+    подмена работает именно с атрибутом. При этом импортировать `core` на
+    уровне модуля нельзя — это замыкает цикл (см. докстроку `_log_audit`).
+    """
+    if name == "audit":
+        from core import audit
+        return audit
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _log_audit(event: str) -> None:
+    """
+    Запись события аудита (без значения ключа — только факт действия).
+
+    Импорт `core.audit` здесь ЛОКАЛЬНЫЙ, а не на уровне модуля, и это
+    осознанное решение, а не стилистика. Пакет `core` при импорте поднимает
+    `core/__init__.py`, который регистрирует алиасы Этапа 3 и потому сам
+    импортирует `infrastructure.*`. Модульный импорт замыкал бы цикл
+
+        store → core/__init__ → infrastructure.api.gigachat → store
+
+    и ронял бы `import infrastructure.secrets.store` первым:
+    `ImportError: cannot import name 'MISSING_KEY_MESSAGE' from partially
+    initialized module`. Разрыв цикла — в том модуле, который его создаёт
+    (тот же приём, что в `services/recognition/import_service.py`, Этап 2).
+
+    Берём `audit` через `getattr` по модулю, а НЕ глобальным именем:
+    модульный `__getattr__` обслуживает только доступ к АТРИБУТУ, внутри
+    модуля имя `audit` не резолвится (грабля записана в `docs/STATE.md`).
+    Заодно это единственный способ увидеть подмену
+    `monkeypatch.setattr(secrets_store.audit, "log_event", …)`.
+    """
+    getattr(_sys.modules[__name__], "audit").log_event(event, source="keyring")
 
 
 def _keyring_module():
@@ -129,7 +168,7 @@ def set_gigachat_key(key: str) -> bool:
         return False
 
     logger.info(f"Ключ GigaChat сохранён в хранилище ({backend_name()})")
-    audit.log_event("gigachat_key_saved", source="keyring")
+    _log_audit("gigachat_key_saved")
     return True
 
 
@@ -142,7 +181,7 @@ def delete_gigachat_key() -> bool:
     try:
         kr.delete_password(SERVICE_NAME, GIGACHAT_KEY_NAME)
         logger.info("Ключ GigaChat удалён из хранилища")
-        audit.log_event("gigachat_key_deleted", source="keyring")
+        _log_audit("gigachat_key_deleted")
         return True
     except Exception as e:
         # Частая ситуация: записи просто нет
@@ -233,7 +272,7 @@ def _write_secret(username: str, key: str, title: str, event: str) -> bool:
         return False
 
     logger.info(f"{_title_case(title)} сохранён в хранилище ({backend_name()})")
-    audit.log_event(event, source="keyring")
+    _log_audit(event)
     return True
 
 
@@ -246,7 +285,7 @@ def _erase_secret(username: str, title: str, event: str) -> bool:
     try:
         kr.delete_password(SERVICE_NAME, username)
         logger.info(f"{_title_case(title)} удалён из хранилища")
-        audit.log_event(event, source="keyring")
+        _log_audit(event)
         return True
     except Exception as e:
         # Частая ситуация: записи просто нет
