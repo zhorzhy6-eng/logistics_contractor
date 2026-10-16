@@ -75,7 +75,7 @@ jobs:
           $skip = @(Get-Content .ci/known_failures.txt -Encoding utf8 |
                     Where-Object { $_.Trim() -ne "" -and -not $_.TrimStart().StartsWith("#") } |
                     ForEach-Object { $_.Trim() })
-          python -m pytest tests/unit/ -o addopts="" -q --basetemp=tests/_tmp/_ci `
+          python -m pytest tests/unit/ -o addopts="" -q -rf --tb=line --basetemp=tests/_tmp/_ci `
             --junitxml=tests/_tmp/junit-unit.xml @skip
           $code = $LASTEXITCODE
           Write-Output "pytest вернул: $code"
@@ -129,7 +129,7 @@ jobs:
           $skip = @(Get-Content .ci/known_failures.txt -Encoding utf8 |
                     Where-Object { $_.Trim() -ne "" -and -not $_.TrimStart().StartsWith("#") } |
                     ForEach-Object { $_.Trim() })
-          python -m pytest tests/integration/ -o addopts="" -q --basetemp=tests/_tmp/_ci `
+          python -m pytest tests/integration/ -o addopts="" -q -rf --tb=line --basetemp=tests/_tmp/_ci `
             --junitxml=tests/_tmp/junit-integration.xml @skip
           $code = $LASTEXITCODE
           Write-Output "pytest вернул: $code"
@@ -168,7 +168,7 @@ jobs:
           $skip = @(Get-Content .ci/known_failures.txt -Encoding utf8 |
                     Where-Object { $_.Trim() -ne "" -and -not $_.TrimStart().StartsWith("#") } |
                     ForEach-Object { $_.Trim() })
-          python -m pytest tests/ui/ -o addopts="" -q --basetemp=tests/_tmp/_ci `
+          python -m pytest tests/ui/ -o addopts="" -q -rf --tb=line --basetemp=tests/_tmp/_ci `
             --junitxml=tests/_tmp/junit-ui.xml @skip
           $code = $LASTEXITCODE
           Write-Output "pytest вернул: $code"
