@@ -318,12 +318,12 @@ tools/_run_selection_in_parts.py». Это последний коммит, ко
 - ✅ **Правок в приватной части: две, обе — по одной строке в
   `tests/test_gigachat3_switch.py`.** Первая сделана ещё в ЧАСТИ 0 (коммит
   `d668284`): тест читал `core/gigachat_client.py` — файла нет с Этапа 3.
-  Вторая — здесь, в 1.P: в списке `DEFAULT_MODEL_SOURCES` стоял путь
-  `ui/main_window.py`, а он стал пакетом, и дефолт модели уехал в
-  `_init_gigachat_client` внутри `ui/main_window/settings.py`; после правки
-  файл даёт 14 passed, 0 failed. Остальные её обращения правок не
-  потребовали: шесть файлов импортируют `MainWindow` по
-  прежнему пути, а `tests/test_diagnostics.py` патчит
+  Вторая — здесь, в 1.P (приватный коммит `faf365e`): в списке
+  `DEFAULT_MODEL_SOURCES` стоял путь `ui/main_window.py`, а он стал пакетом,
+  и дефолт модели уехал в `_init_gigachat_client` внутри
+  `ui/main_window/settings.py`; после правки файл даёт 14 passed, 0 failed.
+  Остальные её обращения правок не потребовали: шесть файлов импортируют
+  `MainWindow` по прежнему пути, а `tests/test_diagnostics.py` патчит
   `_init_gigachat_client` по КЛАССУ (`monkeypatch.setattr(MainWindow, …)`) —
   это работает через MRO.
 - ✅ **`install_agent_safely(self)` остался ПРЯМО В ТЕЛЕ
