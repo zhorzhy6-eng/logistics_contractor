@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Sequence, Tuple
 
-from core.contract_data import ContractData
+from core.data.contract_data import ContractData
 
 logger = logging.getLogger("core.validator")
 

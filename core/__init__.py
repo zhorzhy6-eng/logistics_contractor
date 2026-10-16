@@ -102,6 +102,13 @@ from core.data.vat import (  # noqa: F401
     vat_rate_number,
 )
 
+# ── Валидация (core/validation/) ──
+from core.validation import validator as _validator
+from core.validation.validator import (  # noqa: F401
+    ValidationReport,
+    Validator,
+)
+
 # ── Старые имена модулей: алиасы для `from core.<старое_имя> import ...` ──
 # Ключ — имя модуля ДО переезда, значение — модуль на новом месте.
 _MOVED_MODULES = {
@@ -111,6 +118,7 @@ _MOVED_MODULES = {
     "address_utils": _address_utils,
     "contract_data": _contract_data,
     "vat": _vat,
+    "validator": _validator,
 }
 for _old_name, _module in _MOVED_MODULES.items():
     _sys.modules.setdefault(__name__ + "." + _old_name, _module)
@@ -138,4 +146,6 @@ __all__ = [
     "normalize_vat_rate", "vat_factor", "base_from_total",
     "total_from_base", "compute_vat", "compute_carrier_type",
     "split_carrier_type", "normalize_entity_type",
+    # Валидация
+    "Validator", "ValidationReport",
 ]
