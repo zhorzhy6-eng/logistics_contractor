@@ -387,6 +387,26 @@ integration 1242, ui 1687, раскладка 323; собрано 5322). Был�
   вроде `test_hint_arenda_starts_with_lessor` оставались зелёными. Здесь
   режим «без приватной части» задавался явно:
   `LOGISTICS_PRIVATE_ROOT` на несуществующий путь.
+- 🔎 **Прогон №12 (коммит `4ceb0cf`) — ОДИН отказ вместо восьми:**
+  `1 failed, 2051 passed, 18 skipped` (в отчёте те же 2070 тестов). Шесть
+  проб и подсказка Аренды починены. Остались два:
+  * `test_synthetic_docs_regression::test_pipeline_on_sample_of_ideal_documents`
+    — `RuntimeError: Локальный OCR недоступен: не найден Tesseract OCR`.
+    Тест РЕАЛЬНО вызывает движок (`recognize_image`), а Tesseract — не пакет
+    pip: в CI он не ставится. Введён маркер **`needs_tesseract`**
+    (`pytest.ini` + `conftest.pytest_collection_modifyitems`, тем же
+    механизмом, что `needs_private`): нет движка — тест пропускается с
+    причиной. Проверено ОБОИМИ режимами: с Tesseract тест идёт (89 passed),
+    с PATH без него — «32 passed, 3 skipped», и в причине пропуска ровно
+    «нет движка Tesseract OCR (tesseract.exe не найден в PATH)».
+    ⚠️ Комментарий в workflow «тесты офлайн-OCR при отсутствии Tesseract
+    пропускаются» был НАДЕЖДОЙ, а не фактом: до этой правки тест падал.
+  * `test_dates::test_formatters_do_not_log_warnings` — отказ остался, а в
+    junit у него ПУСТОЕ сообщение. Чтобы не гадать, в
+    `publish_failures.ps1` добавлено два источника: запасной — ВНУТРЕННИЙ
+    текст элемента `<failure>` (там traceback), и отдельная аннотация со
+    строками отказов из вывода pytest (`-rf --tb=line` печатает
+    «FAILED <тест> - <ошибка>»). Причина — в следующем прогоне.
 
 ### ЭТАП 8: ОБВЯЗКА ПРОЕКТА (17.10.2026)
 

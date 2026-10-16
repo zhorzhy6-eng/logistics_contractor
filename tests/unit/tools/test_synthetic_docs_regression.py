@@ -338,6 +338,7 @@ def sample_ideal(seeds):
     return chosen
 
 
+@pytest.mark.needs_tesseract
 def test_pipeline_on_sample_of_ideal_documents(seeds, sample_ideal, tmp_path):
     """
     Идеальный рендер → локальный OCR → поля → метрика.
@@ -350,6 +351,11 @@ def test_pipeline_on_sample_of_ideal_documents(seeds, sample_ideal, tmp_path):
     Порог низкий (0.4) намеренно: тест про ПОЛОМКУ, а не про качество
     (качество измеряет baseline и повторный прогон по 1000 сценариев).
     Фактическое значение на этих сценариях — около 0,6.
+
+    Помечен `needs_tesseract`: тест РЕАЛЬНО вызывает движок Tesseract
+    (`recognize_image`), а в CI движок не ставится — это отдельная программа,
+    а не пакет pip. Без пометки тест падал в CI с «Локальный OCR недоступен:
+    не найден Tesseract OCR (tesseract.exe)».
     """
     import random
     import threading

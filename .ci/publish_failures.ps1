@@ -41,6 +41,15 @@ if (Test-Path $outputPath) {
     }
     Write-Output "── последние строки вывода ──"
     $tail | Select-Object -Last 15 | ForEach-Object { Write-Output $_ }
+
+    # `-rf` печатает по строке на отказ: в ней есть и имя теста, и текст
+    # ошибки. Junit иногда отдаёт пустое сообщение (тогда причина видна
+    # ТОЛЬКО здесь), поэтому эти строки тоже уходят в аннотацию.
+    $failedLines = @($tail | Where-Object { $_ -match '^(FAILED|ERROR)\s' } |
+                     Select-Object -First $MaxAnnotations)
+    if ($failedLines.Count -gt 0) {
+        Write-Annotation "${Layer}: отказы (из вывода pytest)" ($failedLines -join "`n")
+    }
 } else {
     Write-Output "Вывод pytest не сохранён: $outputPath"
     Write-Annotation "${Layer}: вывод pytest" "файл $outputPath не найден"
@@ -87,7 +96,18 @@ foreach ($case in ($failures | Select-Object -First $MaxAnnotations)) {
         Where-Object { $_.Trim() -ne "" } |
         Select-Object -First 12
     )
-    if ($messageLines.Count -eq 0) { $messageLines = @("(сообщение пустое)") }
+    if ($messageLines.Count -eq 0) {
+        # Сообщения нет — берём ВНУТРЕННИЙ текст элемента: там traceback.
+        $inner = ""
+        if ($case.failure) { $inner = [string]$case.failure.'#text' }
+        elseif ($case.error) { $inner = [string]$case.error.'#text' }
+        $messageLines = @(
+            $inner -split "`r?`n" |
+            Where-Object { $_.Trim() -ne "" } |
+            Select-Object -First 12
+        )
+    }
+    if ($messageLines.Count -eq 0) { $messageLines = @("(сообщение и traceback пусты)") }
 
     $name = "$($case.classname)::$($case.name)"
     Write-Output "  FAIL: $name"

@@ -62,31 +62,64 @@ collect_ignore_glob = ["_tmp/*"]
 
 
 def pytest_configure(config):
-    """Регистрирует маркер «нужна приватная часть» (иначе PytestUnknownMark)."""
+    """Регистрирует маркеры, которых нет в pytest.ini (иначе PytestUnknownMark)."""
     config.addinivalue_line(
         "markers",
         "needs_private: тест требует приватной части проекта "
         "(клиентские типы договоров)",
     )
+    config.addinivalue_line(
+        "markers",
+        "needs_tesseract: тест требует движка Tesseract OCR "
+        "(tesseract.exe в PATH)",
+    )
+
+
+# ── Движок Tesseract OCR ──
+# Офлайн-OCR требует НЕ пакета pytesseract (он в requirements.txt), а самого
+# движка `tesseract.exe` в PATH. В CI движок не ставится — это отдельная
+# программа, а не пакет pip, — поэтому тесты, которые реально распознают
+# картинку, обязаны ПРОПУСКАТЬСЯ, а не падать. Проверка одна на весь прогон.
+def tesseract_available() -> bool:
+    """Есть ли движок Tesseract OCR (не только пакет pytesseract)."""
+    try:
+        import pytesseract
+    except ImportError:
+        return False
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception:  # noqa: BLE001 — любая беда с движком значит «OCR нет»
+        return False
+    return True
+
+
+TESSERACT_AVAILABLE = tesseract_available()
 
 
 def pytest_collection_modifyitems(config, items):
     """
-    Пропускает тесты, которым нужна приватная часть, если её нет.
+    Пропускает тесты, которым нужна приватная часть или движок Tesseract.
 
     Публичный репозиторий самодостаточен: без клиентских типов тесты ядра
-    обязаны проходить, а тесты, которым нужен клиентский тип, — честно
-    пропускаться с причиной, а не падать на импорте.
+    обязаны проходить, а тесты, которым нужен клиентский тип или движок
+    OCR, — честно пропускаться с причиной, а не падать на импорте или на
+    вызове внешней программы.
     """
-    if is_private_available():
-        return
+    if not is_private_available():
+        skip_private = pytest.mark.skip(
+            reason="нет приватной части проекта (клиентские типы договоров)"
+        )
+        for item in items:
+            if "needs_private" in item.keywords:
+                item.add_marker(skip_private)
 
-    skip = pytest.mark.skip(
-        reason="нет приватной части проекта (клиентские типы договоров)"
-    )
-    for item in items:
-        if "needs_private" in item.keywords:
-            item.add_marker(skip)
+    if not TESSERACT_AVAILABLE:
+        skip_tesseract = pytest.mark.skip(
+            reason="нет движка Tesseract OCR (tesseract.exe не найден в PATH)"
+        )
+        for item in items:
+            if "needs_tesseract" in item.keywords:
+                item.add_marker(skip_tesseract)
 
 
 # ─────────────────────────────────────────────────────────────
