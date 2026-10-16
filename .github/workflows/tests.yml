@@ -73,6 +73,7 @@ jobs:
       - name: Run unit tests
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path tests/_tmp | Out-Null
           python -m pytest tests/unit/ -o addopts="" -q -rf --tb=line --basetemp=tests/_tmp/_ci `
             --junitxml=tests/_tmp/junit-unit.xml 2>&1 |
             Tee-Object -FilePath tests/_tmp/unit-output.txt
@@ -114,6 +115,7 @@ jobs:
       - name: Run integration tests
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path tests/_tmp | Out-Null
           python -m pytest tests/integration/ -o addopts="" -q -rf --tb=line --basetemp=tests/_tmp/_ci `
             --junitxml=tests/_tmp/junit-integration.xml 2>&1 |
             Tee-Object -FilePath tests/_tmp/integration-output.txt
@@ -155,6 +157,10 @@ jobs:
       - name: Run UI tests
         shell: pwsh
         run: |
+          # `tests/_tmp` создаётся ЗАРАНЕЕ: иначе `Tee-Object` не может открыть
+          # файл, конвейер рвётся, и pytest падает «internal error» на записи
+          # в закрытый stdout — именно это случилось в прогоне №14.
+          New-Item -ItemType Directory -Force -Path tests/_tmp | Out-Null
           # `-v`, а не `-q`: UI-слой однажды ОБОРВАЛСЯ нативно (junit пустой,
           # сводки нет). По точкам видно только «сколько успело пройти», а по
           # строкам `-v` в хвосте вывода видно, НА КАКОМ тесте процесс умер —

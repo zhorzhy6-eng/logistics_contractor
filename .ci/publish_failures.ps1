@@ -4,8 +4,15 @@
 # (`/actions/jobs/<id>/logs` → 403 без входа), а аннотации check-run
 # читаются публично:
 #     https://api.github.com/repos/<owner>/<repo>/check-runs/<job_id>/annotations
-# Поэтому имена упавших тестов и итоговая строка pytest печатаются
-# workflow-командами `::error::` — GitHub превращает их в аннотации.
+# Поэтому итоговая строка pytest, имена упавших тестов, первые строки ошибок,
+# размер junit-отчёта и ХВОСТ вывода печатаются workflow-командами:
+#   * `::error::`  — только когда отказы ЕСТЬ;
+#   * `::notice::` — информационные (итог, хвост, размер отчёта), чтобы
+#     зелёный прогон не выглядел красным в списке аннотаций.
+#
+# Хвост вывода — не роскошь: если прогон оборвался НАТИВНО (0xC0000409),
+# junit пустой и списка отказов нет вообще, и единственный след — последние
+# строки вывода (поэтому UI-слой в CI идёт с `-v`: в строках видно имя теста).
 #
 # Скрипт НИКОГДА не роняет работу: он про диагностику, а не про проверку.
 # Вызывается из workflow так (dot-source, чтобы не плодить процессы):
@@ -24,44 +31,31 @@ function Get-Escaped([string]$text) {
     return $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
 }
 
-function Write-Annotation([string]$title, [string]$message) {
-    Write-Output ("::error title={0}::{1}" -f (Get-Escaped $title), (Get-Escaped $message))
+function Write-Annotation([string]$title, [string]$message,
+                          [string]$Level = "notice") {
+    Write-Output ("::{0} title={1}::{2}" -f $Level, (Get-Escaped $title),
+                  (Get-Escaped $message))
 }
 
 $junitPath = "tests/_tmp/junit-$Layer.xml"
 $outputPath = "tests/_tmp/$Layer-output.txt"
 
-# ── 1. Итоговая строка pytest и хвост вывода ──
+# ── 1. Вывод pytest: итоговая строка, отказы, хвост ──
+$tail = @()
 if (Test-Path $outputPath) {
     $tail = @(Get-Content $outputPath -Encoding utf8 | Where-Object { $_.Trim() -ne "" })
-    if ($tail.Count -gt 0) {
-        $last = [string]$tail[-1]
-        Write-Output "ИТОГ pytest (${Layer}): $last"
-        Write-Annotation "${Layer}: итог pytest" $last
-    }
-    Write-Output "── последние строки вывода ──"
-    $tail | Select-Object -Last 15 | ForEach-Object { Write-Output $_ }
-
-    # `-rf` печатает по строке на отказ: в ней есть и имя теста, и текст
-    # ошибки. Junit иногда отдаёт пустое сообщение (тогда причина видна
-    # ТОЛЬКО здесь), поэтому эти строки тоже уходят в аннотацию.
-    $failedLines = @($tail | Where-Object { $_ -match '^(FAILED|ERROR)\s' } |
-                     Select-Object -First $MaxAnnotations)
-    if ($failedLines.Count -gt 0) {
-        Write-Annotation "${Layer}: отказы (из вывода pytest)" ($failedLines -join "`n")
-    }
-
-    # Хвост вывода — аннотацией, а не только в журнал: если прогон ОБОРВАЛСЯ
-    # нативно, сводки и списка отказов нет вообще, и единственный след —
-    # последние строки. С `-v` в них видно имя теста, на котором процесс умер.
-    $tailLines = @($tail | Select-Object -Last 20)
-    Write-Annotation "${Layer}: хвост вывода" ($tailLines -join "`n")
 } else {
     Write-Output "Вывод pytest не сохранён: $outputPath"
-    Write-Annotation "${Layer}: вывод pytest" "файл $outputPath не найден"
 }
 
-# ── 2. Отказы поимённо и размер отчёта ──
+$summary = if ($tail.Count -gt 0) { [string]$tail[-1] } else { "" }
+
+# `-rf` печатает по строке на отказ: в ней есть и имя теста, и текст ошибки.
+# Junit иногда отдаёт пустое сообщение — тогда причина видна ТОЛЬКО здесь.
+$failedLines = @($tail | Where-Object { $_ -match '^(FAILED|ERROR)\s' } |
+                 Select-Object -First $MaxAnnotations)
+
+# ── 2. Junit: отказы поимённо и размер отчёта ──
 $cases = @()
 $failures = @()
 if (Test-Path $junitPath) {
@@ -76,17 +70,17 @@ if (Test-Path $junitPath) {
     Write-Output "junit-отчёта нет: $junitPath"
 }
 
-# Число тестов в отчёте — признак обрыва прогона: если оно сильно меньше
-# ожидаемого, процесс упал нативно (0xC0000409), и отчёт частичный.
-Write-Output "тестов в junit-отчёте: $($cases.Count); отказов: $($failures.Count)"
-Write-Annotation "${Layer}: размер отчёта" "тестов в отчёте $($cases.Count), отказов $($failures.Count)"
+$hasFailures = ($failures.Count -gt 0)
+$level = if ($hasFailures) { "error" } else { "notice" }
 
-# Последний тест в отчёте — то место, где прогон оборвался, если он оборвался.
-if ($cases.Count -gt 0) {
-    $lastCase = $cases[-1]
-    $lastName = "$($lastCase.classname)::$($lastCase.name)"
-    Write-Output "последний тест в отчёте: $lastName"
-    Write-Annotation "${Layer}: последний тест в отчёте" $lastName
+# ── 3. Аннотации ──
+if ($summary) {
+    Write-Output "ИТОГ pytest (${Layer}): $summary"
+    Write-Annotation "${Layer}: итог pytest" $summary $level
+}
+
+if ($failedLines.Count -gt 0) {
+    Write-Annotation "${Layer}: отказы (из вывода pytest)" ($failedLines -join "`n") "error"
 }
 
 foreach ($case in ($failures | Select-Object -First $MaxAnnotations)) {
@@ -95,8 +89,7 @@ foreach ($case in ($failures | Select-Object -First $MaxAnnotations)) {
     elseif ($case.error) { $detail = [string]$case.error.message }
 
     # В сообщении junit лежит всё: и суть отказа, и вывод подпроцесса-пробы,
-    # поэтому в аннотацию идут первые строки, а не одна. Иначе по аннотации
-    # видно только «проба упала», а почему — нет.
+    # поэтому в аннотацию идут первые строки, а не одна.
     $messageLines = @(
         [string]$detail -split "`r?`n" |
         Where-Object { $_.Trim() -ne "" } |
@@ -119,15 +112,33 @@ foreach ($case in ($failures | Select-Object -First $MaxAnnotations)) {
     Write-Output "  FAIL: $name"
     foreach ($line in $messageLines) { Write-Output "        $line" }
 
-    Write-Annotation "FAIL $Layer" ("$name`n" + ($messageLines -join "`n"))
+    Write-Annotation "FAIL $Layer" ("$name`n" + ($messageLines -join "`n")) "error"
 }
 
-# ── 3. Сводка шага (видна на странице прогона) ──
+# Число тестов в отчёте — признак обрыва прогона: если оно сильно меньше
+# ожидаемого, процесс упал нативно и отчёт частичный.
+Write-Output "тестов в junit-отчёте: $($cases.Count); отказов: $($failures.Count)"
+Write-Annotation "${Layer}: размер отчёта" `
+    "тестов в отчёте $($cases.Count), отказов $($failures.Count)" $level
+
+if ($cases.Count -gt 0) {
+    $lastCase = $cases[-1]
+    $lastName = "$($lastCase.classname)::$($lastCase.name)"
+    Write-Output "последний тест в отчёте: $lastName"
+    Write-Annotation "${Layer}: последний тест в отчёте" $lastName $level
+}
+
+if ($tail.Count -gt 0) {
+    $tailLines = @($tail | Select-Object -Last 20)
+    Write-Output "── последние строки вывода ──"
+    $tailLines | ForEach-Object { Write-Output $_ }
+    Write-Annotation "${Layer}: хвост вывода" ($tailLines -join "`n") $level
+}
+
+# ── 4. Сводка шага (видна на странице прогона) ──
 if ($env:GITHUB_STEP_SUMMARY) {
     $body = @("## Слой $Layer", "")
-    if ($tail.Count -gt 0) {
-        $body += @('```', [string]$tail[-1], '```', "")
-    }
+    if ($summary) { $body += @('```', $summary, '```', "") }
     $body += "Тестов в отчёте: $($cases.Count); отказов: $($failures.Count)"
     if ($failures.Count -gt 0) {
         $body += ""
