@@ -19,32 +19,29 @@
                        и слоты прогресса
     close.py         — закрытие окна (скрытие, force_close)
 
-Публичный API не изменился: `from ui.main_window import MainWindow`
-работает по-прежнему и ведёт к ТОМУ ЖЕ классу.
-
-ЧАСТЬ 0 (16.10.2026) — совместимость на время разбиения:
-    пока модули миксинов наполняются по одному (1.C–1.L), `MainWindow`
-    берётся из прежнего файла `ui/_main_window_legacy.py`. В 1.N этот
-    модуль удаляется, и остаётся единственная строка
-    `from ui.main_window.window import MainWindow`.
+Публичный API не изменился: `from ui.main_window import MainWindow` работает
+по-прежнему и ведёт к ТОМУ ЖЕ классу.
 """
 
-# Импорты добавятся в 1.N (и временная подстановка — в 1.B).
-#
-# ВРЕМЕННО (до 1.N): класс берётся из прежнего файла, чтобы окно и все
-# 30+ UI-тестов продолжали работать, пока миксины наполняются по одному.
-from ui._main_window_legacy import (  # noqa: F401
+# ── Распознавание: классы задачи уже переехали (подэтап 1.C) ──
+from ui.main_window.recognition import (  # noqa: F401
     BulkPasteDialog,
-    MainWindow,
+    RecognitionMixin,
     RecognitionSignals,
     RecognitionTask,
-    logger,
 )
+
+# ── ВРЕМЕННО (до 1.N): каркас пока берётся из прежнего файла ──
+# Пока миксины наполняются по одному (1.C–1.L), класс MainWindow живёт в
+# `ui/_main_window_legacy.py` — так окно и 30+ UI-тестов работают на каждом
+# шаге. В 1.N этот импорт заменяется на `ui.main_window.window`, а сам файл
+# удаляется.
+from ui._main_window_legacy import MainWindow  # noqa: F401
 
 __all__ = [
     "MainWindow",
     "RecognitionTask",
     "RecognitionSignals",
     "BulkPasteDialog",
+    "RecognitionMixin",
 ]
-
