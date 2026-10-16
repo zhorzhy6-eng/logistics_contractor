@@ -31,6 +31,9 @@ from ui.main_window.recognition import (  # noqa: F401
     RecognitionTask,
 )
 
+# ── Привязка водителя к перевозчику (подэтап 1.D) ──
+from ui.main_window.driver_match import DriverMatchMixin  # noqa: F401
+
 # ── ВРЕМЕННО (до 1.N): каркас пока берётся из прежнего файла ──
 # Пока миксины наполняются по одному (1.C–1.L), класс MainWindow живёт в
 # `ui/_main_window_legacy.py` — так окно и 30+ UI-тестов работают на каждом
@@ -44,4 +47,5 @@ __all__ = [
     "RecognitionSignals",
     "BulkPasteDialog",
     "RecognitionMixin",
+    "DriverMatchMixin",
 ]
