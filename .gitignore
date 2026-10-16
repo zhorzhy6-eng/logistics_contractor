@@ -148,3 +148,31 @@ demo_route_tables.py
 
 # Временные архивы анализа (создаются вручную, не для git)
 _analysis_*.zip
+
+# ─────────────────────────────────────────────────────────────
+# Обвязка проекта (Этап 8). Только ДОПОЛНЕНИЕ к разделам выше.
+# Уже бывшие в файле маски НЕ дублируются: __pycache__/, *.py[cod],
+# *$py.class, *.egg-info/, .pytest_cache/, .ruff_cache/, .mypy_cache/,
+# .venv/, venv/, env/, ENV/, build/, dist/, *.spec, .coverage, .coverage.*,
+# htmlcov/, config/settings.json, logs/, *.log, *.db, *.db-wal, *.db-shm,
+# backup/, output/, tests/_tmp/*, _analysis_*.zip, private/ — они выше.
+# ─────────────────────────────────────────────────────────────
+
+# Python: яйца и сборка пакетов
+.eggs/
+eggs/
+*.egg
+
+# Инструменты (остальное — выше: .pytest_cache/, .ruff_cache/, .mypy_cache/,
+# .coverage, htmlcov/)
+.tox/
+.nox/
+
+# IDE и редакторы
+.idea/
+.vscode/
+*.swp
+*.swo
+.pydevproject
+.spyderproject
+.spyproject
