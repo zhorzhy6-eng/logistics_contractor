@@ -5,13 +5,23 @@
 
 РЕЭКСПОРТ ДЛЯ ОБРАТНОЙ СОВМЕСТИМОСТИ
 ------------------------------------
-После рефакторинга (Этап 1, 16.10.2026) часть модулей уехала в подпапки:
+После рефакторинга часть модулей уехала из корня `core/`:
+
+Этап 1 (16.10.2026):
   * core/utils/       — dates, fuzzy, text_normalize, address_utils;
   * core/data/        — contract_data, vat;
   * core/validation/  — validator.
 
-Чтобы не менять полторы сотни импортов по всему проекту, этот файл
-делает ДВЕ вещи:
+Этап 2 (16.10.2026) — слой распознавания документов:
+  * services/recognition/reader.py          (был core/document_reader.py);
+  * services/recognition/ocr.py             (был core/document_ocr.py);
+  * services/recognition/fields.py          (был core/document_fields.py);
+  * services/recognition/recognizer.py      (был core/recognizer.py);
+  * services/recognition/import_service.py  (был
+    core/document_import_service.py).
+
+Чтобы не менять импорты по всему проекту (их 122: 87 в публичной части,
+35 в приватной и в тестах), этот файл делает ДВЕ вещи:
 
 1. РЕЭКСПОРТИРУЕТ имена из новых мест — работает `from core import parse_date`.
 2. РЕГИСТРИРУЕТ СТАРЫЕ ИМЕНА МОДУЛЕЙ в `sys.modules` — работает
@@ -26,9 +36,10 @@
     from core.utils.dates import parse_date
     from core.data.contract_data import ContractData
     from core.validation.validator import Validator
+    from services.recognition.reader import read_document
 
 Старые пути помечены как deprecated: они работают, но новый код должен идти
-через подпапки.
+через подпапки (ядро) и через `services/` (слой распознавания).
 
 ЧЕГО ЗДЕСЬ НЕТ
 --------------
@@ -37,7 +48,11 @@
 договоров), и его импортируют генератор Экспедиторства и четыре набора
 тестов. Переезд этого модуля — отдельное решение (см. `docs/STATE.md`).
 
-Проверка совместимости — `tests/test_core_layout.py`.
+`core/import_cancel.py` и `core/trace.py` остались в корне: их Этап 2
+не трогал, и `services/recognition/*` импортирует их по старому пути.
+
+Проверка совместимости — `tests/test_core_layout.py` и
+`tests/test_services_layout.py`.
 """
 
 import sys as _sys
@@ -138,6 +153,52 @@ _MOVED_MODULES = {
     "validator": _validator,
 }
 for _old_name, _module in _MOVED_MODULES.items():
+    _sys.modules.setdefault(__name__ + "." + _old_name, _module)
+    setattr(_sys.modules[__name__], _old_name, _module)
+del _old_name, _module
+
+# ── Распознавание документов (services/recognition/) ──
+# Модули переехали в services/recognition/ (Этап 2, 16.10.2026). Ничего
+# не реэкспортируется: имена у них длинные и в корне `core` не нужны.
+# Регистрируются ТОЛЬКО старые имена модулей — ровно так же, как выше,
+# ради `from core.document_reader import read_document`, который читает
+# МОДУЛЬ из `sys.modules`, а не атрибут пакета. Объект модуля при этом
+# ОДИН: `core.recognizer is services.recognition.recognizer`.
+#
+# ПОРЯДОК ИМПОРТОВ ЗДЕСЬ — ЧАСТЬ РЕШЕНИЯ, а не вкусовщина:
+# reader и fields не зависят ни от кого, recognizer зависит от ядра
+# (`core.dates`, `core.trace` — уже загружены выше), а import_service
+# объявляет `SCHEMA` через `DataMapper`, то есть recognizer ему нужен
+# ГОТОВЫМ. Нарушение порядка даёт `ImportError` на частичном модуле.
+#
+# ЦИКЛ, КОТОРЫЙ ЗДЕСЬ БЫЛ. Первый заход в Этапе 2 использовал статический
+# импорт при обычных импортах в `import_service`, и это ломало ОБРАТНЫЙ
+# порядок — проверено пробой `tools/check_stage2_aliases.py`, режим `new`:
+#
+#   from services.recognition.reader import read_document   # первым
+#     → reader.py: from core.import_cancel import ...       # пакет `core`
+#       → core/__init__.py: import services...import_service
+#         → import_service.py: from services.recognition.reader import ...
+#           → reader ещё не догружен → ImportError (частичный модуль)
+#
+# Разорван цикл не здесь, а в `import_service.py`: `read_document` и
+# `DataMapper` берутся там лениво (`__getattr__` в конце файла). Так
+# работает ЛЮБОЙ порядок импорта, и ни один модуль не грузится дважды.
+from services.recognition import reader as _reader
+from services.recognition import fields as _fields
+from services.recognition import ocr as _ocr
+from services.recognition import recognizer as _recognizer
+from services.recognition import import_service as _import_service
+
+#: Старое имя модуля → модуль на новом месте.
+_MOVED_TO_SERVICES = {
+    "document_reader": _reader,
+    "document_ocr": _ocr,
+    "document_fields": _fields,
+    "recognizer": _recognizer,
+    "document_import_service": _import_service,
+}
+for _old_name, _module in _MOVED_TO_SERVICES.items():
     _sys.modules.setdefault(__name__ + "." + _old_name, _module)
     setattr(_sys.modules[__name__], _old_name, _module)
 del _old_name, _module

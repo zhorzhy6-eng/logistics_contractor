@@ -215,7 +215,10 @@ def test_service_diagnostics_never_log_recognized_values(monkeypatch, caplog):
     from core.document_reader import DocumentPage
     monkeypatch.setattr(module, "read_document", lambda *a: iter([DocumentPage(1, image=object())]))
     client = SimpleNamespace(recognize_image=lambda *a: ({"driver": {"full_name": "Личное Значение"}}, ""))
-    with caplog.at_level("INFO", logger=module.__name__):
+    # Имя логгера берётся у самого логгера, а не из `module.__name__`: после
+    # Этапа 2 модуль лежит в `services/recognition/`, но имя логгера оставлено
+    # прежним (его ждёт `config/logging_config.py`, см. пояснение в модуле).
+    with caplog.at_level("INFO", logger=module.logger.name):
         DocumentImportService({"document_cloud_enabled": True}, client).process(
             ["private-filename.png"], Event(), lambda *a: None)
     assert "Импорт документов" in caplog.text

@@ -6,16 +6,45 @@ from pathlib import Path
 import json
 import logging
 import re
+import sys as _sys
 import traceback
 
 # `core.import_cancel` не переезжал (Этап 2 не трогал его) — импорт как был.
 from core.import_cancel import ImportCancelled, check_cancel, interruptible_sleep
-# Соседи по пакету: после Этапа 2 (16.10.2026) reader и recognizer лежат
-# в services/recognition/, поэтому здесь импорт НОВОГО пути, а не старого.
-from services.recognition.reader import read_document
-from services.recognition.recognizer import DataMapper
 
-logger = logging.getLogger(__name__)
+# ── Почему соседи по пакету берутся ЛЕНИВО, а не обычным импортом ──
+# Обычный `from services.recognition.reader import read_document` здесь
+# замыкает цикл, и это проверено, а не предположено
+# (tools/check_stage2_aliases.py, режим `new`):
+#
+#   from services.recognition.reader import read_document   # первым
+#     → reader.py: from core.import_cancel import ...       # пакет `core`
+#       → core/__init__.py: from services.recognition import import_service
+#         → ЭТОТ модуль: from services.recognition.reader import ...
+#           → reader ещё не догружен → ImportError (частичный модуль)
+#
+# Поэтому явные импорты в шапке заменены на ленивое взятие имён: и
+# `read_document`, и `DataMapper` приходят через `__getattr__` этого модуля
+# (см. `_LAZY_SIBLINGS` ниже). Поведение то же: приходит ровно тот объект,
+# что дал бы обычный `from ... import`, и оба имени остаются ОБЫЧНЫМИ
+# глобальными именами модуля — поэтому `monkeypatch.setattr(module,
+# "read_document", ...)` в тестах работает как раньше.
+# Импорт `core.import_cancel` ленивым делать не нужно: `core.__init__` к
+# моменту загрузки этого модуля уже выполнил строки выше, а сам
+# `import_cancel` от `core` не зависит вовсе.
+
+
+# ВНИМАНИЕ: имя логгера задано ЯВНО и осталось прежним, хотя модуль теперь
+# лежит в services/recognition/. Причина двойная:
+#   1) `config/logging_config.py` настраивает логгеры только из списка
+#      APP_LOGGERS = ("core", "ui", "db", "config", "main", "qt"). Логгер
+#      `services.*` в него не входит и потерял бы свои обработчики и уровень;
+#   2) имя логгера — часть внешнего контракта: его ждут `caplog` в трёх
+#      наборах тестов и подсказки в документации.
+# Так же поступлено в соседнем `recognizer.py` (там имя было задано явно
+# изначально). Смена имени на `__name__` — отдельное осознанное решение
+# (см. `docs/STATE.md`), а не побочный эффект переезда.
+logger = logging.getLogger("core.document_import_service")
 
 # ── Имена методов распознавания ────────────────────────────────────────
 # Это одновременно и признак пути для оператора, и ключ ветвлений ниже:
@@ -119,16 +148,60 @@ LABELS = {
     "price_input": "Стоимость (по выбранному режиму НДС)", "vat_rate": "НДС (%)",
     "loading_plan_date": "Плановая дата погрузки", "unloading_plan_date": "Плановая дата выгрузки",
 }
+def _lazy_sibling(module_name):
+    """
+    Возвращает модуль-сосед по пакету в момент ПЕРВОГО обращения.
+
+    Зачем: обычный импорт соседа в шапке файла замыкает цикл
+    `reader → core → import_service → reader` (разбор — в комментарии на
+    месте импортов). Ленивое взятие разрывает его и НЕ меняет поведение:
+    возвращается ровно тот же объект модуля.
+    """
+    import importlib
+
+    return importlib.import_module("services.recognition." + module_name)
+
+
+#: Имя, которое модуль обязан отдавать, → модуль-сосед, где оно лежит.
+#: Оба имени остаются ОБЫЧНЫМИ глобальными именами модуля: `__getattr__`
+#: кладёт результат в `globals()`, поэтому дальше это обычная переменная
+#: (в том числе её можно подменить через `monkeypatch.setattr`, как делали
+#: до переезда).
+_LAZY_SIBLINGS = {
+    "read_document": "reader",
+    "DataMapper": "recognizer",
+}
+
+
+def __getattr__(name):
+    """Ленивая выдача соседей по пакету (см. `_LAZY_SIBLINGS`)."""
+    module_name = _LAZY_SIBLINGS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    value = getattr(_lazy_sibling(module_name), name)
+    globals()[name] = value
+    return value
+
+
+#: Схема полей по разделам. Раньше `DataMapper` стоял здесь напрямую
+#: (`list(DataMapper.DRIVER_FIELDS)`); после Этапа 2 он приходит через
+#: `__getattr__` этого модуля. Обращение идёт ЧЕРЕЗ `sys.modules[__name__]`,
+#: потому что модульный `__getattr__` вызывается только на доступ к
+#: атрибуту (`module.DataMapper`), а не на чтение глобального имени.
+#: Наборы полей и порядок ключей при этом ТЕ ЖЕ.
+_MAPPER = _sys.modules[__name__].DataMapper
 SCHEMA = {
-    "driver": list(DataMapper.DRIVER_FIELDS),
-    "carrier": DataMapper.ORGANIZATION_FIELDS + ["carrier_type", "vat_rate"] + DataMapper.CARRIER_EXTRA_FIELDS,
-    "customer": DataMapper.ORGANIZATION_FIELDS,
+    "driver": list(_MAPPER.DRIVER_FIELDS),
+    "carrier": _MAPPER.ORGANIZATION_FIELDS + ["carrier_type", "vat_rate"] + _MAPPER.CARRIER_EXTRA_FIELDS,
+    "customer": _MAPPER.ORGANIZATION_FIELDS,
     "vehicles": ["vin", "brand_model", "plate_number", "year", "color", "vehicle_type"],
     "tractor": ["brand_model", "plate_number", "year", "color"],
     "trailer": ["brand_model", "plate_number", "year", "color"],
     "contract": ["number", "date", "route", "payment_days", "special_conditions",
                  "price_input", "vat_rate", "loading_plan_date", "unloading_plan_date"],
 }
+del _MAPPER
 
 
 def normalized(value):
@@ -692,3 +765,4 @@ class _ReadyFuture:
 
     def result(self):
         return self._value
+

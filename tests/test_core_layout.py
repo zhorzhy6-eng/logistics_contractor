@@ -111,14 +111,22 @@ def test_new_subpackages_are_packages_with_docstrings():
 
 
 def test_core_root_modules_stayed_in_place():
-    """Переезд не задел остальные модули корня `core/`."""
+    """
+    Переезд не задел остальные модули корня `core/`.
+
+    Список сократился в Этапе 2 (16.10.2026): `recognizer.py` и
+    `document_reader.py` (а также `document_ocr.py`, `document_fields.py`,
+    `document_import_service.py`) уехали в `services/recognition/`. Их
+    раскладку проверяет `tests/test_services_layout.py` — здесь остались
+    только те модули, которых рефакторинг не касался.
+    """
     for name in (
         "audit.py",
         "pseudonymizer.py",
-        "recognizer.py",
-        "document_reader.py",
         "num_to_words.py",
         "mirror.py",
+        "import_cancel.py",
+        "trace.py",
     ):
         assert (CORE / name).is_file(), f"core/{name} пропал"
 
