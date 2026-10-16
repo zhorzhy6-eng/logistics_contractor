@@ -10,7 +10,7 @@
 > рефакторинга — разъехались и начали противоречить друг другу. Разделы
 > «Цель», «Ограничения», «Дорожная карта», «Риски» и «Что не делаем» —
 > это содержимое прежнего `PLAN.md`; остальное дописано по факту раскладки
-> после Этапов 1–2.
+> после Этапов 1–3.
 
 ---
 
@@ -59,7 +59,7 @@ main.py                  # точка входа: поднимает логи, �
 core/                    # ЯДРО: доменная логика, без Qt
   __init__.py            # реэкспорт и алиасы старых путей (см. § 6)
   data/                  # ContractData, НДС — нормализация данных
-  utils/                 # dates, fuzzy, text_normalize, address_utils
+  utils/                 # dates, fuzzy, text_normalize, address_utils, json_text
   validation/            # общий Validator
   contracts/             # реестр типов + генераторы + валидаторы
     contract_types.py    # ContractType (Enum)
@@ -75,11 +75,6 @@ core/                    # ЯДРО: доменная логика, без Qt
   import_cancel.py       # кооперативная отмена длинных операций
   mirror.py              # зеркало данных между типами
   trace.py, audit.py     # логи без ПДн
-  gigachat_client.py     # клиент GigaChat (-> infrastructure/api, Этап 3)
-  dadata_client.py       # клиент DaData  (-> infrastructure/api, Этап 3)
-  tls_config.py          # TLS/CA-бандл   (-> infrastructure/api, Этап 3)
-  secrets_store.py       # ключи в Windows Credential Manager (-> Этап 3)
-  json_text.py           # утилита сжатия JSON (-> core/utils, Этап 3)
   legal_indexer.py, legal_parser.py, settings_service.py, security.py,
   diagnostics.py, crash_handler.py, qt_crash_handler.py, num_to_words.py,
   contract_generator.py, import_entities.py, private_path.py
@@ -91,6 +86,12 @@ services/                # КРАЙ: прикладные сценарии по�
     fields.py            # извлечение полей из текста
     recognizer.py        # DataMapper: схемы полей по сущностям
     import_service.py    # оркестратор «файлы → поля → перенос в форму»
+
+infrastructure/          # КРАЙ: внешние API, секреты, TLS (Этап 3)
+  api/                   # gigachat.py (клиент GigaChat)
+                         # dadata.py   (клиент DaData)
+                         # tls.py      (CA-бандл, проверка сертификата)
+  secrets/               # store.py    (Windows Credential Manager)
 
 db/                      # КРАЙ: SQLite + логирование запросов
   schema.py, migrations.py, connection.py, fts.py, database.py
@@ -105,10 +106,6 @@ ui/                      # КРАЙ: PyQt5
   tabs/                  # вкладки формы
   windows/               # base_window.py, manager.py, окна типов
   widgets/               # row_reorder, columns, table_helpers
-
-infrastructure/          # КРАЙ: создаётся в Этапе 3 — внешние API, секреты, TLS
-  api/                   # gigachat.py, dadata.py, tls.py
-  secrets/               # store.py (Windows Credential Manager)
 
 config/                  # logging_config.py, settings.json, legal_sources.json
 templates/               # DOCX/XLSX-шаблоны (только читать)
@@ -156,7 +153,7 @@ resources/certs/         # русский корневой сертификат 
 ответ», не больше `max_tool_steps` шагов) → `tools.py`, `analytics_tools.py`,
 `proactivity_tools.py`, `legal_tools.py`, `dadata_tools.py` (инструменты над
 `db/crud/*`) → `llm.py` → `core/pseudonymizer.py` (маскирование ПДн) →
-`gigachat_client.py`. Оригиналы восстанавливаются в ответе.
+`infrastructure/api/gigachat.py`. Оригиналы восстанавливаются в ответе.
 
 **Генерация договора.**
 Вкладки формы → `ContractData` (`core/data/contract_data.py`) →
@@ -180,20 +177,34 @@ resources/certs/         # русский корневой сертификат 
 1. **Реэкспорт имён** — работает `from core import parse_date`.
 2. **Регистрация старых имён модулей в `sys.modules`** (`setdefault`, не
    присваивание) — работает `from core.dates import parse_date`.
+3. **Регистрация старых имён как атрибутов пакета** (`setattr`) — работает
+   `core.dates` и `import core.gigachat_client as module`. Одного
+   `sys.modules` для этого мало: `import core.X` для уже загруженного модуля
+   родительский атрибут не выставляет.
 
 Второй пункт не заменяется первым: `from core.dates import X` — это импорт
 **подмодуля**, Python ищет файл `core/dates.py` и без регистрации в
 `sys.modules` падает с `ModuleNotFoundError`.
 
 Объект модуля при этом **один**: `core.recognizer is
-services.recognition.recognizer` → `True`. Это не копия и не обёртка, поэтому
+services.recognition.recognizer` → `True`, `core.gigachat_client is
+infrastructure.api.gigachat` → `True`. Это не копия и не обёртка, поэтому
 `isinstance`, пикинг и сравнение классов ведут себя как раньше.
 
 Ловушка: статический импорт соседей внутри `core/__init__.py` ломает
 **обратный** порядок импорта (новый путь первым). В общем прогоне pytest этого
 не видно — `core` уже загружен `conftest.py`. Поэтому у каждого этапа есть
 проба, запускающая оба режима в отдельных процессах
-(`tools/check_stage2_aliases.py`).
+(`tools/check_stage2_aliases.py`, `tools/check_stage3_aliases.py`).
+
+Вторая ловушка (найдена в Этапе 3): переехавший модуль не должен импортировать
+ПАКЕТ `core` на уровне модуля. `infrastructure/secrets/store.py` делал
+`from core import audit` — и это замыкало цикл `store → core/__init__` →
+`infrastructure.api.gigachat` → `store`, из-за чего `import
+infrastructure.secrets.store` первым падал с `ImportError` на частичном
+модуле. Разрыв — в самом модуле-виновнике: `audit` берётся лениво
+(module-level `__getattr__` + `getattr` по модулю, чтобы работала подмена
+`monkeypatch.setattr(store, "audit", …)`).
 
 ### 6.2. Имена логгеров — часть контракта
 
@@ -225,6 +236,8 @@ services.recognition.recognizer` → `True`. Это не копия и не об
 | `core/data/contract_data.py`, `core/validation/validator.py`, `core/pseudonymizer.py` | менять только по согласованию |
 | `core/contracts/{perevozka,expediciya}/*` (готовые типы) | не трогать |
 | Слой распознавания (`services/recognition/*`) | правки допустимы, но с прогоном `tests/test_document_*.py` и `tests/test_recognition_*.py` |
+| `infrastructure/*` (внешние API, секреты, TLS) | края: заменяемы, но имена логгеров и публичный API — часть контракта |
+| `core/__init__.py` (реэкспорт и алиасы) | трогать только вместе с прогоном проб обоих порядков импорта |
 | `templates/*` | только читать; `tools/make_*.py` не запускать после фиксации SHA256 в тестах |
 | `requirements.txt` | новая зависимость — только по согласованию |
 | `AGENTS.md` | ведёт пользователь |
@@ -324,13 +337,16 @@ services.recognition.recognizer` → `True`. Это не копия и не об
 |---|---|---|
 | Этап 1 (16.10.2026) | 7 модулей из корня `core/` → `core/utils`, `core/data`, `core/validation` | 37 тестов раскладки, 59 импортов публичной и 63 приватной части не потребовали правок |
 | Этап 2 (16.10.2026) | 5 модулей распознавания → `services/recognition/` | 50 тестов раскладки, 87 импортов публичной и 4 приватной части покрыты алиасами |
-| Этап 3 (в работе) | 5 модулей → `infrastructure/api`, `infrastructure/secrets`, `core/utils` | — |
+| Этап 3 (16.10.2026) | 5 модулей → `infrastructure/api`, `infrastructure/secrets`, `core/utils` | 79 тестов раскладки, 50 импортов публичной и 18 приватной части покрыты алиасами; в корне `core/` осталось 17 файлов (было 22) |
 | Этап 4 (план) | разбиение `core/contracts/base_generator.py` | — |
 
 После каждого этапа в корне `core/` остаются только ядро и вспомогательные
 модули. Правило переезда неизменно: **меняются только пути импорта, логика
 внутри файлов не меняется**, а старые пути продолжают работать через алиасы
-(§ 6.1).
+(§ 6.1). Единственное исключение за три этапа — разрыв цикла импорта в
+`infrastructure/secrets/store.py` (Этап 3) и ленивое взятие имён в
+`services/recognition/import_service.py` (Этап 2): без них переезд не
+работает вовсе, и оба места помечены комментарием на месте.
 
 ---
 

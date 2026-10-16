@@ -346,7 +346,7 @@ pytest tests/test_legal_parser.py tests/test_legal_indexer.py tests/test_rag.py 
 
 Основной путь — эмбеддинги GigaChat (`POST /v1/embeddings`, модель
 `Embeddings`), авторизация та же, что у распознавания, TLS-сертификат НУЦ
-Минцифры берётся из `resources/certs/` (см. `core/tls_config.py`).
+Минцифры берётся из `resources/certs/` (см. `infrastructure/api/tls.py`).
 
 **Проверено на живом аккаунте:** чат-модели доступны, а `/v1/embeddings`
 отвечает `402 Payment Required` — эмбеддинги не входят в текущий тариф.

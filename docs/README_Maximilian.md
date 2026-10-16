@@ -138,7 +138,7 @@ SQL в инструментах нет.
 
 | Инструмент | Что делает |
 |---|---|
-| `recognize_document` | распознать файл через `core/document_import_service.py` |
+| `recognize_document` | распознать файл через `services/recognition/import_service.py` |
 | `apply_recognized_fields` | перенести распознанное в форму (с подтверждением) |
 
 ### Справочные

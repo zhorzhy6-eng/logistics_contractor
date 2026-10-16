@@ -37,10 +37,10 @@ python set_key.py --delete
 | Пакет | Роль |
 |---|---|
 | `PyQt5` | интерфейс (`ui/`) |
-| `requests` | запросы к GigaChat (`core/gigachat_client.py`) |
+| `requests` | запросы к GigaChat (`infrastructure/api/gigachat.py`) |
 | `python-docx` | чтение/запись DOCX (`core/contract_generator.py`) |
 | `docxtpl` | основной шаблонизатор договоров |
-| `keyring` | ключ GigaChat в Windows Credential Manager (`core/secrets_store.py`) |
+| `keyring` | ключ GigaChat в Windows Credential Manager (`infrastructure/secrets/store.py`) |
 | `openpyxl` | импорт справочника адресов из Excel |
 | `pytest` | тесты (`tests/`), нужен только для разработки |
 | `pyinstaller` | сборка `.exe` (`build.bat`), нужен только для сборки |

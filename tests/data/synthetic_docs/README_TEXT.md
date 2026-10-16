@@ -397,7 +397,7 @@ precision, а не в recall.
 | `customer.director_name` | 9 из 19 | 9 — уровень `extreme` |
 
 Сделано две половины: постобработка `_normalize_labeled_values`
-(`core/gigachat_client.py`) снимает слово-метку у `bank_name` и
+(`infrastructure/api/gigachat.py`) снимает слово-метку у `bank_name` и
 `director_name` в разделах `carrier` и `customer` — только метку, только если
 после неё осталось значение (у ФИО минимум два слова), входной словарь не
 меняется; и в системный промпт добавлены примеры с разбором строки реквизитов
