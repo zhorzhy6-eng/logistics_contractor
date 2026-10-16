@@ -34,7 +34,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
-from core.json_text import shorten_json_text
+from core.utils.json_text import shorten_json_text
 
 logger = logging.getLogger("core.agent.memory")
 

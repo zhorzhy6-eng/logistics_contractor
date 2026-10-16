@@ -171,7 +171,7 @@ def relevance(record: Dict[str, Any], tokens: Sequence[str]) -> float:
 def _stem(word: str) -> str:
     """Падежная основа слова (пусто — основа не отличается от слова)."""
     try:
-        from core.fuzzy import stem
+        from core.utils.fuzzy import stem
 
         base = str(stem(word) or "")
     except Exception:  # noqa: BLE001 — без морфологии память работает как есть

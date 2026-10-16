@@ -19,7 +19,7 @@ import logging
 import os
 from typing import Iterable, Optional, Tuple
 
-from core.agent.personas import DEFAULT_PERSONA, persona
+from services.agent.persona.personas import DEFAULT_PERSONA, persona
 
 logger = logging.getLogger("core.agent.prompt")
 

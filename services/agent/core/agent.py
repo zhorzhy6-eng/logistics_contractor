@@ -44,16 +44,16 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from core.agent.llm import SafeChat
-from core.agent.emotional import emotional_block
-from core.agent.long_memory import (
+from services.agent.core.llm import SafeChat
+from services.agent.persona.emotional import emotional_block
+from services.agent.core.long_memory import (
     extract, memory_block, recall, remember_facts, remember_search_result,
     search_terms,
 )
-from core.agent.memory import DEFAULT_MAX_HISTORY, AgentMemory
-from core.agent.personas import DEFAULT_PERSONA
-from core.agent.prompt import build_system_prompt
-from core.agent.tools import AgentContext, Tool, ToolRegistry, build_registry
+from services.agent.core.memory import DEFAULT_MAX_HISTORY, AgentMemory
+from services.agent.persona.personas import DEFAULT_PERSONA
+from services.agent.core.prompt import build_system_prompt
+from services.agent.tools.registry import AgentContext, Tool, ToolRegistry, build_registry
 
 logger = logging.getLogger("core.agent.agent")
 

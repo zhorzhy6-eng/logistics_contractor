@@ -1054,14 +1054,14 @@ def _validate_current_form(context: AgentContext, **_) -> Dict[str, Any]:
     if error:
         return error
 
-    from core.validator import Validator
+    from core.validation.validator import Validator
 
     data = collect_form_data(window)
     if not data:
         return _error("форма открыта, но данные из неё собрать не удалось")
 
     try:
-        from core.contract_data import ContractData
+        from core.data.contract_data import ContractData
 
         contract_data = ContractData(
             driver=dict(data.get("driver_tab", {})),
@@ -1519,7 +1519,7 @@ def _fill_parsed(context: AgentContext, text: str = "",
     :param vehicles: правки по машинам (``[{vin, brand_model}, …]``);
     :param use_dadata: спрашивать ли DaData про адреса.
     """
-    from core.agent.fill_parser import parse_text
+    from services.agent.tools.fill_parser import parse_text
 
     if not str(text or "").strip():
         return _error("не передан текст с данными")
@@ -1692,7 +1692,7 @@ def _diagnose(context: AgentContext, checks: Any = None,
     :param checks: какие проверки выполнить (пусто — все);
     :param live_network: проверять ли сервисы сетевыми запросами.
     """
-    from core import diagnostics
+    from services.agent.tools import diagnostics_agent as diagnostics
 
     if checks is None or checks == "":
         keys = list(diagnostics.CHECK_ORDER)
@@ -1772,7 +1772,7 @@ def _recognize_document(file_path: str = "", **_) -> Dict[str, Any]:
     if not os.path.isfile(path):
         return _error(f"файл не найден: {path}")
 
-    from core.document_import_service import DocumentImportService
+    from services.recognition.import_service import DocumentImportService
     from core.settings_service import get_settings_service
 
     try:
@@ -1942,7 +1942,7 @@ def _explain_field(field: str = "", contract_type: str = "", **_) -> Dict[str, A
 
     if not text:
         # Поле могли назвать по-русски: «расчётный счёт», «ВУ».
-        from core.document_import_service import LABELS
+        from services.recognition.import_service import LABELS
 
         for code, title in LABELS.items():
             if title.casefold() == key or title.casefold() in key or key in title.casefold():
@@ -2436,7 +2436,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     # Функции объявлены обычными def, а не lambda: в проекте lambda
     # запрещены в связях сигналов (цикл ссылок Python ↔ Qt), и хотя здесь
     # связи нет, единое правило читать проще, чем исключение из него.
-    from core.agent.context_tools import (  # локальный импорт: без цикла модулей
+    from services.agent.tools.context import (  # локальный импорт: без цикла модулей
         get_current_window as context_window,
         get_form_state as context_form_state,
         get_open_tabs as context_open_tabs,
@@ -2541,7 +2541,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     # адрес. Проверка ИНН внутри инструментов не даёт отправить в DaData
     # ничего другого — ФИО и паспорта водителей сюда попасть не могут.
     # Ответы кэшируются на час: см. core/agent/dadata_tools.py.
-    from core.agent.dadata_tools import (  # локальный импорт: без цикла модулей
+    from services.agent.tools.dadata import (  # локальный импорт: без цикла модулей
         check_address_dadata as dadata_address,
         check_inn_dadata as dadata_inn,
         compare_with_dadata as dadata_compare,
@@ -2653,7 +2653,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     # названий полей и операций — в core/agent/analytics_tools.py.
     # Описания инструментов берутся из analytics_tools.tool_specs(): один
     # источник и для реестра, и для тестов.
-    from core.agent import analytics_tools  # локальный импорт: без цикла модулей
+    from services.agent.tools import analytics  # локальный импорт: без цикла модулей
 
     def aggregate_contracts(counterparty: str = "", period: str = "",
                             field: str = "amount", operation: str = "sum",
@@ -2720,7 +2720,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     # Тоже только чтение: подсказка — предложение, а не действие. Логика
     # «что обязательно и что дальше» живёт в core/agent/proactivity.py,
     # сроки берутся из db/crud/*.
-    from core.agent import proactivity_tools  # локальный импорт: без цикла
+    from services.agent.tools import proactivity_tools  # локальный импорт: без цикла
 
     def suggest_next_field(**_):
         return proactivity_tools.suggest_next_field(ctx)
@@ -2799,7 +2799,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     # Логика живёт в core/agent/legal_tools.py: там RAG, портал
     # опубликования и правило «источник обязателен». Здесь — только
     # регистрация, как у инструментов DaData.
-    from core.agent import legal_tools  # локальный импорт: без цикла модулей
+    from services.agent.tools import legal  # локальный импорт: без цикла модулей
 
     def search_legal(query: str = "", top_k: int = 0, **_):
         """Поиск нормы в правовой базе (RAG) с указанием источника."""
@@ -2867,7 +2867,7 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
     # ── 6. Обучение: инструкции по заполнению (база знаний) ──
     # Логика живёт в core/agent/tutorial.py: чтение файлов и поиск по ним.
     # Здесь — только регистрация, как у правовой базы и DaData.
-    from core.agent import tutorial  # локальный импорт: без цикла модулей
+    from services.agent.tools import tutorial  # локальный импорт: без цикла модулей
 
     def tutorial_topic(topic: str = "", **_):
         """Инструкция по заполнению из базы знаний «Обучение»."""
