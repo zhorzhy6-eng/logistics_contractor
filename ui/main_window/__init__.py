@@ -58,6 +58,9 @@ from ui.main_window.theme import ThemeMixin  # noqa: F401
 # ── Раскладка окна (подэтап 1.K) ──
 from ui.main_window.layout import LayoutMixin  # noqa: F401
 
+# ── Закрытие окна (подэтап 1.L) ──
+from ui.main_window.close import CloseMixin  # noqa: F401
+
 # ── ВРЕМЕННО (до 1.N): каркас пока берётся из прежнего файла ──
 # Пока миксины наполняются по одному (1.C–1.L), класс MainWindow живёт в
 # `ui/main_window/_legacy.py` — так окно и 30+ UI-тестов работают на каждом
@@ -91,4 +94,5 @@ __all__ = [
     "SettingsMixin",
     "ThemeMixin",
     "LayoutMixin",
+    "CloseMixin",
 ]
