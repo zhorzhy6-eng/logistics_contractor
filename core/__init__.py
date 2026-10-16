@@ -80,6 +80,8 @@ from core.utils.address_utils import (  # noqa: F401
 )
 
 # ── Данные и правила (core/data/) ──
+from core.data import contract_data as _contract_data
+from core.data.contract_data import ContractData  # noqa: F401
 from core.data import vat as _vat
 from core.data.vat import (  # noqa: F401
     DEFAULT_ENTITY_TYPE,
@@ -107,6 +109,7 @@ _MOVED_MODULES = {
     "fuzzy": _fuzzy,
     "text_normalize": _text_normalize,
     "address_utils": _address_utils,
+    "contract_data": _contract_data,
     "vat": _vat,
 }
 for _old_name, _module in _MOVED_MODULES.items():
@@ -128,6 +131,7 @@ __all__ = [
     "normalize_organization_fields", "normalize_position",
     "city_for_document", "clean_address_from_index", "extract_city",
     # Данные
+    "ContractData",
     "VAT_FREE", "VAT_RATES", "DEFAULT_VAT_RATE", "ENTITY_TYPES",
     "DEFAULT_ENTITY_TYPE",
     "is_vat_free", "vat_rate_number", "vat_rate_label",

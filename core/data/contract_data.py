@@ -32,7 +32,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
-from core.address_utils import city_for_document, extract_city
+from core.utils.address_utils import city_for_document, extract_city
 
 logger = logging.getLogger("core.contract_data")
 
