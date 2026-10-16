@@ -6,12 +6,18 @@
 `ui/main_window.py` методы менеджера базы. Логика не менялась — только
 переезд.
 
-Особенность этого блока: вызовы функций базы оставлены «как есть» —
-именами модуля (`load_organization_by_id(...)`, а не
-`from db.database import load_organization_by_id`). Так тесты могут
-подменить функцию: `monkeypatch.setattr(module, "load_organization_by_id", …)`
-(см. `tests/test_ui_main_window_load_driver_carrier.py`). Прямой импорт имён
-сломал бы эту подмену.
+Особенность этого блока: функции базы импортированы в ЭТОТ модуль и
+вызываются по короткому имени (`load_organization_by_id(...)`) — так тест
+может подменить функцию:
+`monkeypatch.setattr(ui.main_window.load, "load_organization_by_id", …)`
+(см. `tests/test_ui_main_window_load_driver_carrier.py`).
+
+⚠️ Подменять надо ИМЕННО ЭТОТ модуль. Реэкспорт в `ui/main_window/__init__.py`
+(оставлен ради прежнего вида одиночного модуля) вызов НЕ перехватывает:
+`monkeypatch.setattr(ui.main_window, "load_organization_by_id", …)` меняет
+атрибут пакета, а `_load_driver_from_db` читает своё глобальное имя.
+Проверено пробой: после подмены пакета `ui.main_window.load.
+load_organization_by_id` остаётся прежней функцией.
 """
 
 import logging

@@ -305,16 +305,28 @@ def test_load_driver_calls_bind_reference_ids(
 def test_load_driver_no_exception_on_corrupt_carrier_data(
     window, isolated_db, carrier_a, monkeypatch
 ):
-    """Битые данные перевозчика не мешают загрузить водителя."""
-    import ui.main_window as module
+    """
+    Битые данные перевозчика не мешают загрузить водителя.
+
+    Подмена идёт по МОДУЛЮ-ВЛАДЕЛЬЦУ (`ui.main_window.load`), а не по пакету:
+    после разбиения (Этап 6) функцию зовёт `load.py` из своего пространства
+    имён, и `monkeypatch.setattr(ui.main_window, …)` до вызова не доходит —
+    тест оставался бы зелёным, ничего не проверяя. Поэтому ниже есть
+    проверка, что подмена СРАБОТАЛА.
+    """
+    import ui.main_window.load as module
+
+    calls = []
 
     def broken(org_id, is_carrier=False):
+        calls.append(org_id)
         raise RuntimeError("битая запись перевозчика")
 
     monkeypatch.setattr(module, "load_organization_by_id", broken)
 
     window._load_driver_from_db(_driver_record(isolated_db, carrier_a))
 
+    assert calls, "подмена не дошла до кода: функция базы не была вызвана"
     assert window.driver_tab.full_name.text() == DRIVER_NAME
     assert window.tabs.currentWidget() is window.driver_tab
 

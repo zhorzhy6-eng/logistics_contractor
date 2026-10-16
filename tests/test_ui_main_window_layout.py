@@ -395,6 +395,118 @@ def test_key_validation_helper_is_available():
     assert _validate_gigachat_key("abc") is None
 
 
+#: Имена, которые прежний ОДИНОЧНЫЙ модуль `ui/main_window.py` отдавал наружу.
+#: Список — из `vars()` старого модуля (86 имён); здесь те, к которым есть
+#: обращения из тестов и внешнего кода. Проверка нужна потому, что полный
+#: прогон подэтапа 1.P нашёл ровно такой регресс:
+#: `tests/test_icons.py::test_main_window_reexports_icon_helpers` упал, когда
+#: пакет перестал реэкспортировать `_action_icon` и родню (ЭТАП 2B оставлял их
+#: здесь алиасами на `ui.icons`).
+OLD_MODULE_NAMES = (
+    "_action_icon",
+    "_tab_icon",
+    "_themed_icon",
+    "_resource_path",
+    "_validate_gigachat_key",
+    "_PROJECT_ROOT",
+    "TEMPLATES_DIR",
+    "logger",
+    "load_organization_by_id",
+    "MainWindow",
+    "RecognitionTask",
+    "RecognitionSignals",
+    "BulkPasteDialog",
+)
+
+
+@pytest.mark.parametrize("name", OLD_MODULE_NAMES)
+def test_old_module_name_still_available(name):
+    """Имя из прежнего модуля доступно и после разбиения на пакет."""
+    import ui.main_window as module
+    assert hasattr(module, name), (
+        f"ui.main_window.{name} пропало: внешний код и тесты на него смотрят"
+    )
+
+
+def test_icon_helpers_point_to_ui_icons():
+    """Алиасы иконок ведут к ТЕМ ЖЕ функциям `ui.icons` (ЭТАП 2B)."""
+    import ui.icons as icons
+    import ui.main_window as module
+    assert module._action_icon is icons.action_icon
+    assert module._tab_icon is icons.tab_icon
+    assert module._themed_icon is icons.themed_icon
+    assert module._resource_path is icons.resource_path
+
+
+def test_templates_dir_points_to_templates():
+    import ui.main_window as module
+    assert Path(module.TEMPLATES_DIR).name == "templates"
+    assert Path(module.TEMPLATES_DIR).is_dir()
+
+
+#: Коммит ПЕРЕД Этапом 6 — в нём `ui/main_window.py` ещё целый файл.
+#: Список имён берётся из него, а не пишется руками: так страж не устареет
+#: и поймает ЛЮБОЕ пропавшее имя, а не только те, что вспомнили.
+PRE_STAGE6_COMMIT = "8362a67"
+PRE_STAGE6_PATH = "ui/main_window.py"
+
+
+def _old_module_names() -> set:
+    """
+    Имена уровня модуля из прежнего `ui/main_window.py` (по AST, без импорта).
+
+    Импортировать старый файл нельзя: он конфликтует с пакетом. Разбираем
+    исходник из истории git — нужны только имена, которые модуль отдавал
+    наружу: импорты, определения верхнего уровня и присваивания.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "show", f"{PRE_STAGE6_COMMIT}:{PRE_STAGE6_PATH}"],
+        cwd=str(PROJECT_ROOT), capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    if result.returncode != 0:
+        pytest.skip(f"нет доступа к {PRE_STAGE6_COMMIT}:{PRE_STAGE6_PATH}")
+
+    names = set()
+    for node in ast.parse(result.stdout).body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                names.add(alias.asname or alias.name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+    return {name for name in names if not name.startswith("__")}
+
+
+def test_no_name_from_old_module_disappeared():
+    """
+    Страж обратной совместимости: ни одно имя прежнего модуля не пропало.
+
+    Прежний `ui/main_window.py` был ОДНИМ файлом, поэтому для вызывающего
+    кода его транзитные импорты (`ContractData`, `save_driver`, `QMessageBox`,
+    `theme`, …) неотличимы от «своих» имён. Разбиение на пакет их молча
+    убирает — и это уже случилось: полный прогон 1.P поймал падение
+    `tests/test_icons.py::test_main_window_reexports_icon_helpers` на
+    `_action_icon`. Этот тест ловит весь класс таких поломок разом.
+    """
+    import ui.main_window as module
+
+    missing = sorted(
+        name for name in _old_module_names() if not hasattr(module, name)
+    )
+    assert not missing, (
+        "имена прежнего ui/main_window.py пропали из пакета: " + ", ".join(missing)
+    )
+
+
 # ─────────────────────────────────────────────────────────────
 # 4. Дом для каждого метода: ничего не потеряно и не продублировано
 # ─────────────────────────────────────────────────────────────
