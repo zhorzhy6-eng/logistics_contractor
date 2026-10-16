@@ -10,10 +10,15 @@ import requests
 from core.import_cancel import interruptible_sleep
 from core.json_text import shorten_json_text
 from core.pseudonymizer import Pseudonymizer
-from core.secrets_store import MISSING_KEY_MESSAGE, get_gigachat_key
-from core.tls_config import describe_tls, resolve_ca_bundle, ssl_error_hint
+from infrastructure.api.tls import describe_tls, resolve_ca_bundle, ssl_error_hint
+from infrastructure.secrets.store import MISSING_KEY_MESSAGE, get_gigachat_key
 
-logger = logging.getLogger(__name__)
+# Имя логгера задано ЯВНО, а не через __name__ (было бы
+# "infrastructure.api.gigachat"). Это часть контракта: config/logging_config.py
+# настраивает только APP_LOGGERS = ("core", "ui", "db", "config", "main", "qt"),
+# и логи из "infrastructure.*" выпали бы из настройки. На старое имя опираются
+# и caplog-проверки в тестах (публичных и приватных).
+logger = logging.getLogger("core.gigachat_client")
 
 
 def normalized_source_text(text: str) -> str:
@@ -28,7 +33,7 @@ def normalized_source_text(text: str) -> str:
     if not text:
         return text
 
-    from core.recognizer import DataMapper
+    from services.recognition.recognizer import DataMapper
 
     normalized = DataMapper.normalize_vin_lookalikes(text)
     if normalized != text:
@@ -246,7 +251,7 @@ def _normalize_vin_values(data: dict) -> dict:
     ``tractor`` / ``trailer``: остальные строки ответа не трогаются, чтобы
     значения вида «марка и модель» не «нормализовались» заодно.
     """
-    from core.recognizer import DataMapper
+    from services.recognition.recognizer import DataMapper
 
     def clean(value):
         return DataMapper.normalize_vin(value)
@@ -1070,7 +1075,7 @@ class GigaChatClient:
     @classmethod
     def _has_meaningful_values(cls, data) -> bool:
         """Data is useful only inside the known schema and valid by format."""
-        from core.document_import_service import SCHEMA, valid_value
+        from services.recognition.import_service import SCHEMA, valid_value
         if not isinstance(data, dict):
             return False
         for section, keys in SCHEMA.items():
@@ -1124,7 +1129,7 @@ class GigaChatClient:
         """
         from io import BytesIO
         from core.import_cancel import check_cancel, ImportCancelled
-        from core.document_import_service import SCHEMA
+        from services.recognition.import_service import SCHEMA
 
         uploaded_ids = []
         result, warning = {}, ""
