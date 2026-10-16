@@ -84,10 +84,13 @@ STATE.md обновлён: HEAD=<хеш>, tests=<число>, шаг=<стату
   следующий шаг, новые замечания.
 - Коммитить `docs/STATE.md` **вместе** с изменениями шага (одним коммитом)
   или отдельным — на выбор агента, но **запушить до отчёта**.
-  - Менять core/document_fields.py, core/recognizer.py, core/document_reader.py, 
-  core/document_ocr.py, core/gigachat_client.py, core/document_import_service.py.
-  Это слой распознавания; правки допустимы, но с прогоном tests/test_document_*.py 
-  и tests/test_recognition_*.py.
+- **Менять слой распознавания:** `services/recognition/reader.py`, `ocr.py`,
+  `fields.py`, `recognizer.py`, `import_service.py` (бывшие
+  `core/document_reader.py`, `core/document_ocr.py`, `core/document_fields.py`,
+  `core/recognizer.py`, `core/document_import_service.py` — переехали
+  в Этапе 2, старые пути работают через алиасы) и `core/gigachat_client.py`.
+  Правки допустимы, но с прогоном `tests/test_document_*.py` и
+  `tests/test_recognition_*.py`.
 
 ### Ask first (спроси перед действием)
 
@@ -159,34 +162,38 @@ STATE.md обновлён: HEAD=<хеш>, tests=<число>, шаг=<стату
 
 ```
 core/                    # доменная логика, без Qt
-  contract_data.py       # ContractData — нормализация данных (НЕ трогать)
-  validator.py           # общий Validator (НЕ трогать)
+  data/                  # ContractData — нормализация данных (НЕ трогать)
+  validation/            # общий Validator (НЕ трогать)
+  utils/                 # dates, fuzzy, text_normalize, address_utils
   contracts/             # реестр типов + генераторы + валидаторы
     contract_types.py    # ContractType Enum
     registry.py          # ContractTypeRegistry
     factory.py           # GeneratorFactory / ValidatorFactory
     base_generator.py    # BaseContractGenerator + PostprocessStep
     base_validator.py    # BaseValidator
-    perevozka/ formika/ logistiks_rus/ arenda_ts/ zayavka/
+    perevozka/ expediciya/   # публичные типы; клиентские — в приватной части
   prompts/               # промпты распознавания по типам
-  dates.py               # единый парсер дат
-  address_utils.py       # разбор адресов
+  agent/                 # Максимилиан: цикл, инструменты, промпт, память
+  pseudonymizer.py       # маскирование ПДн перед отправкой в GigaChat
+  import_cancel.py, mirror.py
   audit.py, trace.py     # логи без ПДн
 
+services/                # прикладные сценарии поверх ядра
+  recognition/           # распознавание документов (был core/document_*.py)
 db/                      # SQLite + логирование запросов
 ui/                      # PyQt5: окна, вкладки, виджеты
   windows/               # окна типов (по подпакету на тип)
 templates/               # DOCX/XLSX-шаблоны (только читать)
 tools/                   # make_*_template.py, make_golden.py
 tests/                   # pytest
-docs/                    # ARCHITECTURE.md, ADR, STATE.md
+docs/                    # ARCHITECTURE.md, STATE.md, PRIVATE_MIGRATION.md
 ```
 
 ## 7. Ссылки
 
 - Архитектура: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- Решения (ADR): [`docs/adr/`](docs/adr/)
 - Текущее состояние: [`docs/STATE.md`](docs/STATE.md)
+- Ассистент «Максимилиан»: [`docs/README_Maximilian.md`](docs/README_Maximilian.md)
 
 ## 8. `docs/STATE.md` — ведёт агент
 
