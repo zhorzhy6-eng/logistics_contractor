@@ -30,7 +30,7 @@
 тестах, ни в приватной части.
 """
 
-from ui.main_window.window import MainWindow  # noqa: F401
+from ui.main_window.window import MainWindow, logger  # noqa: F401
 from ui.main_window.recognition import (  # noqa: F401
     BulkPasteDialog,
     RecognitionMixin,
@@ -53,12 +53,11 @@ from ui.main_window.close import CloseMixin  # noqa: F401
 # ── Совместимость с прежним ОДИНОЧНЫМ модулем `ui/main_window.py` ──
 # Тесты (и приватная часть) читают у модуля его собственные имена, а не
 # только класс: `module.logger` и подмена функций базы через
-# `monkeypatch.setattr(module, "load_organization_by_id", …)`. Логгер ниже —
+# `monkeypatch.setattr(module, "load_organization_by_id", …)`. Логгер выше —
 # ТОТ ЖЕ объект, что и в миксинах (одно имя "ui.main_window"), поэтому
 # `caplog.set_level(logging.DEBUG, logger="ui.main_window")` продолжает
 # видеть записи окна.
 from db.database import load_organization_by_id  # noqa: F401
-from ui.main_window.window import logger  # noqa: F401
 
 __all__ = [
     "MainWindow",
