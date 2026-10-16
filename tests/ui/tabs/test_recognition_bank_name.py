@@ -218,13 +218,6 @@ def test_bank_name_reaches_the_carrier_tab(qt_app):
     assert data["correspondent_account"] == CORR_ACCOUNT
 
 
-@pytest.fixture
-def templates_dir():
-    from pathlib import Path
-
-    return Path(__file__).resolve().parent.parent / "templates"
-
-
 def test_bank_name_reaches_the_contract_blank(templates_dir, tmp_path, qt_app):
     """
     Сквозная проверка: распознанный банк печатается в бланке перевозки.
