@@ -43,6 +43,15 @@ from ui.main_window.load import LoadMixin  # noqa: F401
 # ── Создание договора (подэтап 1.G) ──
 from ui.main_window.contract import ContractMixin  # noqa: F401
 
+# ── Сбор данных и проверка (подэтап 1.H) ──
+from ui.main_window.data import DataMixin  # noqa: F401
+
+# ── Настройки и клиент GigaChat (подэтап 1.I) ──
+from ui.main_window.settings import (  # noqa: F401
+    SettingsMixin,
+    _validate_gigachat_key,
+)
+
 # ── ВРЕМЕННО (до 1.N): каркас пока берётся из прежнего файла ──
 # Пока миксины наполняются по одному (1.C–1.L), класс MainWindow живёт в
 # `ui/main_window/_legacy.py` — так окно и 30+ UI-тестов работают на каждом
@@ -72,4 +81,6 @@ __all__ = [
     "SaveMixin",
     "LoadMixin",
     "ContractMixin",
+    "DataMixin",
+    "SettingsMixin",
 ]
