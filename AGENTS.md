@@ -191,9 +191,18 @@ docs/                    # ARCHITECTURE.md, STATE.md, PRIVATE_MIGRATION.md
 
 ## 7. Ссылки
 
+### Документация проекта
 - Архитектура: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Текущее состояние: [`docs/STATE.md`](docs/STATE.md)
-- Ассистент «Максимилиан»: [`docs/README_Maximilian.md`](docs/README_Maximilian.md)
+- Про Максимилиана: [`docs/README_Maximilian.md`](docs/README_Maximilian.md)
+- Правила работы: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- История версий: [`CHANGELOG.md`](CHANGELOG.md)
+
+### Инструменты
+- pytest: `pytest tests/unit/`, `tests/integration/`, `tests/ui/`
+- ruff: `ruff check .`
+- pyproject.toml: метаданные проекта
+- .editorconfig: единый стиль
 
 ## 8. `docs/STATE.md` — ведёт агент
 
