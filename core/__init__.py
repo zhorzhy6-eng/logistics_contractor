@@ -301,6 +301,46 @@ except Exception:  # noqa: BLE001 — алиасы нужны для совме�
     )
 
 
+# ── base_generator → core/contracts/base/ (Этап 4, 16.10.2026) ──
+# `core/contracts/base_generator.py` разбит на пакет `core/contracts/base/`.
+# Старое имя модуля регистрируется в `sys.modules` — тем же приёмом
+# `setdefault`, что и в Этапах 1–3, — поэтому работают ОБА написания:
+#
+#     from core.contracts.base_generator import BaseContractGenerator
+#     from core.contracts.base import BaseContractGenerator
+#
+# Объект модуля при этом ОДИН: `core.contracts.base_generator is
+# core.contracts.base` → True.
+#
+# ПОЧЕМУ АЛИАС ЗДЕСЬ, А НЕ В `core/contracts/__init__.py`. Файла
+# `core/contracts/__init__.py` в проекте НЕТ и заводить его нельзя:
+# `core.contracts` — пакет-ПРОСТРАНСТВО ИМЁН (namespace package). Обычный
+# пакет «выигрывает» поиск у одноимённой папки на `sys.path`, и подпакеты
+# клиентских типов из приватной части (`core/contracts/formika/` и три
+# соседних в `logistics_contractor_private`) перестали бы находиться —
+# приватная часть отвалилась бы целиком. Проверено чтением
+# `core/private_path.py`: расширение `__path__` рассчитано ровно на
+# namespace-пакет. Реэкспорт имён достигается тем же результатом:
+# `from core.contracts.base import BaseContractGenerator` работает и без
+# `__init__.py` — это импорт подмодуля.
+#
+# РЕГИСТРАЦИЙ ДВЕ, и обе обязательны — как в Этапах 1–3:
+#   * `sys.modules["core.contracts.base_generator"]` — чтобы работал импорт
+#     ПОДМОДУЛЯ (`from core.contracts.base_generator import …`);
+#   * атрибут `base_generator` у пакета `core.contracts` — чтобы работало
+#     `import core.contracts.base_generator` и обращение
+#     `core.contracts.base_generator`. Одного `sys.modules` МАЛО: инструкция
+#     `import a.b.c` после загрузки читает `c` как АТРИБУТ `a.b`, и без
+#     `setattr` падает с `AttributeError: module 'core.contracts' has no
+#     attribute 'base_generator'` (проверено пробой на временном пакете,
+#     повторяет граблю Этапа 3).
+import sys as _sys  # noqa: F811 — уже импортирован выше, нужен явно рядом
+from core.contracts import base as _contracts_base
+
+_sys.modules.setdefault("core.contracts.base_generator", _contracts_base)
+setattr(_sys.modules["core.contracts"], "base_generator", _contracts_base)
+
+
 # ── Реэкспорт ИМЁН инфраструктуры (для `from core import GigaChatClient`) ──
 # Делается ЛЕНИВО, через module-level `__getattr__`, а не статическим
 # импортом: на момент выполнения `core/__init__.py` модули infrastructure
