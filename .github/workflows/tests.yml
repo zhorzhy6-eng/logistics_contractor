@@ -75,8 +75,19 @@ jobs:
           $skip = @(Get-Content .ci/known_failures.txt -Encoding utf8 |
                     Where-Object { $_.Trim() -ne "" -and -not $_.TrimStart().StartsWith("#") } |
                     ForEach-Object { $_.Trim() })
-          python -m pytest tests/unit/ -o addopts="" -q --basetemp=tests/_tmp/_ci @skip
-          exit $LASTEXITCODE
+          python -m pytest tests/unit/ -o addopts="" -q --basetemp=tests/_tmp/_ci `
+            --junitxml=tests/_tmp/junit-unit.xml @skip
+          $code = $LASTEXITCODE
+          Write-Output "pytest вернул: $code"
+          exit $code
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-unit
+          path: tests/_tmp/junit-unit.xml
+          if-no-files-found: ignore
 
   test-integration:
     name: Integration tests
@@ -101,8 +112,19 @@ jobs:
           $skip = @(Get-Content .ci/known_failures.txt -Encoding utf8 |
                     Where-Object { $_.Trim() -ne "" -and -not $_.TrimStart().StartsWith("#") } |
                     ForEach-Object { $_.Trim() })
-          python -m pytest tests/integration/ -o addopts="" -q --basetemp=tests/_tmp/_ci @skip
-          exit $LASTEXITCODE
+          python -m pytest tests/integration/ -o addopts="" -q --basetemp=tests/_tmp/_ci `
+            --junitxml=tests/_tmp/junit-integration.xml @skip
+          $code = $LASTEXITCODE
+          Write-Output "pytest вернул: $code"
+          exit $code
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-integration
+          path: tests/_tmp/junit-integration.xml
+          if-no-files-found: ignore
 
   test-ui:
     name: UI tests (offscreen)
@@ -129,8 +151,19 @@ jobs:
           $skip = @(Get-Content .ci/known_failures.txt -Encoding utf8 |
                     Where-Object { $_.Trim() -ne "" -and -not $_.TrimStart().StartsWith("#") } |
                     ForEach-Object { $_.Trim() })
-          python -m pytest tests/ui/ -o addopts="" -q --basetemp=tests/_tmp/_ci @skip
-          exit $LASTEXITCODE
+          python -m pytest tests/ui/ -o addopts="" -q --basetemp=tests/_tmp/_ci `
+            --junitxml=tests/_tmp/junit-ui.xml @skip
+          $code = $LASTEXITCODE
+          Write-Output "pytest вернул: $code"
+          exit $code
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-ui
+          path: tests/_tmp/junit-ui.xml
+          if-no-files-found: ignore
 
   lint:
     name: Ruff
