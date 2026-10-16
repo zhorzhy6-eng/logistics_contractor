@@ -4,10 +4,13 @@
 > шага. Архитектура — в [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **Обновлено:** 2026-10-16
-**HEAD:** `11203c9` — «1.H: tests/test_agent_layout.py — раскладка
-services/agent/ (152 теста)» (последний коммит кода Этапа 5). Это HEAD
-ПРЕДЫДУЩЕГО коммита; свой собственный хеш внутри файла стоять не может
+**HEAD:** `a84e352` — «0.3: STATE.md — мини-фиксы Этапа 5» (последний
+коммит документации; последний коммит КОДА — `11203c9`, «1.H:
+tests/test_agent_layout.py — раскладка services/agent/ (152 теста)»). Это
+HEAD ПРЕДЫДУЩЕГО коммита; свой собственный хеш внутри файла стоять не может
 (`AGENTS.md` § 5.3).
+**Шаг:** Этап 6 (разбиение `ui/main_window.py`), идёт подэтап 1.A — план
+составлен, дальше 1.B.
 **Тестов (публичная часть):** полный прогон 16.10.2026 ЧАСТЯМИ — семь
 процессов по 21 файла (одним процессом MemoryError), у каждого свой
 `--basetemp` — **4749 passed, 3 skipped, 10 failed, 0 error**; собрано 4762
@@ -254,6 +257,94 @@ test_404_hint_does_not_promise_gigachat2`, и он **пре-существующ
 **Порядок работы** (каждый шаг — отдельный коммит): 1.B структура → 1.C
 `persona/` → 1.D `tools/` → 1.E `core/` + `registry` → 1.F реэкспорт →
 1.G алиасы → 1.H тесты раскладки → 1.I финальная проверка.
+
+### ЭТАП 6: РАЗБИЕНИЕ `ui/main_window.py` НА МИКСИНЫ (16.10.2026)
+
+**ЭТАП НАЧАТ** (подэтап 1.A — план разбиения). `ui/main_window.py`
+(**2136 строк**, 111 813 байт) разбирается на пакет `ui/main_window/` из
+**11 модулей**: 9 миксинов + `recognition.py` + `window.py` (каркас) +
+`__init__.py` (реэкспорт).
+
+**Содержимое файла до разбиения** (измерено, не оценено):
+
+| Часть | Строки |
+|---|---|
+| `_validate_gigachat_key` (модульная функция) | 75–90 |
+| `RecognitionSignals` (QObject) | 93–113 |
+| `RecognitionTask` (QRunnable) | 116–180 |
+| `MainWindow` | 183–2069 |
+| `BulkPasteDialog` (QDialog) | 2072–2114 |
+| отладочный `__main__` | 2117–2136 |
+
+**Карта «метод → миксин»** (все 51 метод и 2 вспомогательных класса
+распределены; без адреса не осталось ничего):
+
+| Модуль | Класс | Методы и классы |
+|---|---|---|
+| `layout.py` | `LayoutMixin` | `_init_ui` (разбит на 5 секций), `_log_ui_action`, `_on_tab_changed`, `_sync_side_nav`, `_refresh_status_indicators`, `_refresh_status_fields`, `_sync_loadings_to_vehicles`, `_sync_unloadings_to_vehicles`, `_on_import_documents`, `_on_clear_form`, `_on_tab_clear_requested`, `_on_clear_tab` |
+| `settings.py` | `SettingsMixin` | `_validate_gigachat_key` (модульная функция), `_init_gigachat_client`, `_on_open_settings` |
+| `theme.py` | `ThemeMixin` | `_apply_theme_choice`, `_sync_system_theme_watcher`, `_on_system_theme_changed`, `_refresh_nav_icons` |
+| `data.py` | `DataMixin` | `_collect_data`, `_confirm_validation`, `_mark_saved` |
+| `contract.py` | `ContractMixin` | `_on_create_contract`, `_show_contract_created`, `_open_folder` |
+| `save.py` | `SaveMixin` | `_sync_organization_with_db`, `_safe_organization_record` (static), `_on_save_to_db` |
+| `load.py` | `LoadMixin` | `_on_open_db_manager`, `_load_driver_from_db`, `_load_customer_from_db`, `_load_carrier_from_db`, `_apply_party_type`, `_sync_contract_form_type`, `_party_entity_type` (static) |
+| `driver_match.py` | `DriverMatchMixin` | `_driver_carrier_id` (static), `_carrier_form_is_empty` (static), `_carrier_title` (static), `_check_driver_carrier_match`, `_safe_organization`, `_confirm_carrier_mismatch` |
+| `recognition.py` | `RecognitionMixin` | `RecognitionSignals`, `RecognitionTask`, `BulkPasteDialog`, `_on_recognize_clicked`, `_on_tab_recognize_requested`, `_start_recognition`, `_cancel_recognition`, `_task_of_sender`, `_task_from`, `_is_current_task`, `_on_recognition_progress`, `_on_recognition_cancelled`, `_finish_recognition_ui`, `_log_recognition_result`, `_on_recognition_finished`, `_on_recognition_error` |
+| `close.py` | `CloseMixin` | `closeEvent`, `_close_floating_cat`, `_save_all_column_widths`, `force_close` |
+| `window.py` | `MainWindow` | сигналы `switch_to_type_requested` / `exit_requested`, `CONTRACT_TYPE`, `_RECOGNITION_SECTIONS`, `_TAB_ICON_NAMES`, `__init__`, `_tab_keys` |
+
+- ⚠️ **`BulkPasteDialog` — находка, которой не было в ТЗ этапа.** В
+  `ui/main_window.py` на строках 2072–2114 лежит ВТОРАЯ копия класса
+  `BulkPasteDialog` (первая, рабочая — `ui/widgets/__init__.py:383`).
+  Локальная копия перекрывает импортированную и используется
+  `_on_recognize_clicked` (строка 792). Класс уезжает в `recognition.py`
+  вместе со слотом, который его вызывает: это сохраняет и поведение, и
+  импортируемость `from ui.main_window import BulkPasteDialog`.
+- ⚠️ **Порядок MRO:** `LayoutMixin` → `SettingsMixin` → `ThemeMixin` →
+  `DataMixin` → `ContractMixin` → `SaveMixin` → `LoadMixin` →
+  `DriverMatchMixin` → `RecognitionMixin` → `CloseMixin` →
+  `DiagnosticsMenuMixin` → `QMainWindow`. Причина: `LayoutMixin` создаёт
+  виджеты, на которые ссылаются все остальные; `SettingsMixin` создаёт
+  клиента GigaChat; `ThemeMixin` применяет тему к уже созданным виджетам.
+  Имён методов, встречающихся в двух миксинах, **нет** — порядок влияет
+  только на читаемость, но он зафиксирован тестом.
+- ⚠️ **У миксинов НЕТ `__init__`.** Всю инициализацию делает
+  `MainWindow.__init__` — ровно как сейчас, поэтому MRO-цепочка `__init__`
+  не может пойти не в том порядке. Отдельные `init_X()` не нужны.
+- ⚠️ **Логгер:** во всех модулях пакета — явное
+  `logging.getLogger("ui.main_window")`, а не `__name__`: иначе после
+  переезда записи выпадут из списка `APP_LOGGERS`.
+- ⚠️ **`lambda` и `functools.partial` в `connect` — НЕТ.** Проверено
+  `git grep`: в файле **31** вызов `.connect(`, ни одного с lambda/partial.
+  Разбиение этого не меняет: все слоты — методы.
+- 🔴 **Ограничение приватной части (нашлось при анализе 1.2).** Приватный
+  тест `tests/test_agent_all_windows.py::test_main_window_installs_agent`
+  берёт **исходный текст** метода:
+  `inspect.getsource(module.MainWindow.__init__)`. После переезда `inspect`
+  вернёт исходник из `window.py`, поэтому вызов
+  `install_agent_safely(self)` **остаётся прямо в теле
+  `MainWindow.__init__`** в `window.py` (не уезжает в миксин, не выносится
+  в `init_agent()`). Тогда тест проходит без правок приватной части.
+  Остальные обращения приватной части —
+  `monkeypatch.setattr(MainWindow, "_init_gigachat_client", …)`
+  (`test_diagnostics.py:722`) и упоминания `MainWindow._on_save_to_db` —
+  работают через MRO без изменений.
+- ✅ **Классификация риска: СРЕДНИЙ** (не низкий). Приватная часть
+  `MainWindow` **импортирует** (7 файлов) и **патчит атрибуты класса**, а
+  один тест читает исходник `__init__` через `inspect`. Прямых обращений к
+  внутренним атрибутам экземпляра нет.
+- **Проверено перед началом:** `lambda`/`partial` в `connect` — нет;
+  подписчики `from ui.main_window import …` — только `MainWindow` (31 файл)
+  и `RecognitionTask` (1 файл, `tests/test_vehicle_recognition_list.py:358`);
+  обращений к атрибутам МОДУЛЯ — одно
+  (`tests/test_ui_main_window_load_driver_carrier.py:314`:
+  `monkeypatch.setattr(module, "load_organization_by_id", broken)`), оно
+  покрывается реэкспортом старых имён в `ui/main_window/__init__.py`.
+- **Порядок работы** (каждый шаг — отдельный коммит): 1.B структура →
+  1.C `recognition` → 1.D `driver_match` → 1.E `save` → 1.F `load` →
+  1.G `contract` → 1.H `data` → 1.I `settings` → 1.J `theme` →
+  1.K `layout` → 1.L `close` → 1.M `window` → 1.N реэкспорт + удаление
+  старого файла → 1.O тесты раскладки → 1.P финальная проверка.
 
 ### Мини-фиксы Этапа 5 (16.10.2026)
 
