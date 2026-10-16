@@ -145,3 +145,6 @@ _for_analysis.txt
 _dump_doc.py
 demo_route_tables.py
 *.patch
+
+# Временные архивы анализа (создаются вручную, не для git)
+_analysis_*.zip
