@@ -133,6 +133,25 @@ def _private_dir_for(name: str, root: Path) -> Optional[Path]:
         return None
 
 
+def private_dir_for(package_name: str) -> Optional[Path]:
+    """
+    Папка приватной части для пакета ``package_name`` (None, если её нет).
+
+    Публичная обёртка над ``_private_dir_for``: нужна там, где пакет сам
+    дополняет свой ``__path__`` приватной папкой. Так делает
+    ``core/agent/__init__.py``: он остался пакетом-«переходником» после
+    переезда агента в ``services/agent/``, а приватный сосед
+    ``core/agent/labels.py`` лежит именно в приватной папке ``core/agent``.
+
+    :param package_name: полное имя пакета, например ``"core.agent"``.
+    :return: путь к папке приватной части или None — приватная часть не
+        подключена либо такой папки в ней нет.
+    """
+    if _attached_root is None:
+        return None
+    return _private_dir_for(package_name, _attached_root)
+
+
 def _path_str_for(name: str, root: Path) -> Optional[str]:
     """Строка приватного пути для пакета ``name`` (None — папки нет)."""
     candidate = _private_dir_for(name, root)
@@ -358,6 +377,7 @@ __all__ = [
     "find_private_root",
     "is_private_available",
     "optional_module",
+    "private_dir_for",
     "private_path",
     "private_root",
     "register_module_alias",
