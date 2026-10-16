@@ -8,9 +8,12 @@ import logging
 import re
 import traceback
 
+# `core.import_cancel` не переезжал (Этап 2 не трогал его) — импорт как был.
 from core.import_cancel import ImportCancelled, check_cancel, interruptible_sleep
-from core.document_reader import read_document
-from core.recognizer import DataMapper
+# Соседи по пакету: после Этапа 2 (16.10.2026) reader и recognizer лежат
+# в services/recognition/, поэтому здесь импорт НОВОГО пути, а не старого.
+from services.recognition.reader import read_document
+from services.recognition.recognizer import DataMapper
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +178,7 @@ def valid_value(key, value):
 
 def extract_local_fields(text):
     """Label-based extraction only. No synthetic dates, transliteration or digit fixes."""
-    from core.document_fields import extract_document_fields
+    from services.recognition.fields import extract_document_fields
     structured = extract_document_fields(text)
     if structured is not None:
         return structured
@@ -466,7 +469,7 @@ class DocumentImportService:
     @staticmethod
     def _local_ocr():
         # Импорт внутри функции: Tesseract нужен только на локальном пути.
-        from core.document_ocr import recognize_image as local_ocr
+        from services.recognition.ocr import recognize_image as local_ocr
         return local_ocr
 
     def _run_image(self, page, source, file_index, cancel, on_result, on_text,
