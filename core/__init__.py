@@ -79,6 +79,27 @@ from core.utils.address_utils import (  # noqa: F401
     extract_city,
 )
 
+# ── Данные и правила (core/data/) ──
+from core.data import vat as _vat
+from core.data.vat import (  # noqa: F401
+    DEFAULT_ENTITY_TYPE,
+    DEFAULT_VAT_RATE,
+    ENTITY_TYPES,
+    VAT_FREE,
+    VAT_RATES,
+    base_from_total,
+    compute_carrier_type,
+    compute_vat,
+    is_vat_free,
+    normalize_entity_type,
+    normalize_vat_rate,
+    split_carrier_type,
+    total_from_base,
+    vat_factor,
+    vat_rate_label,
+    vat_rate_number,
+)
+
 # ── Старые имена модулей: алиасы для `from core.<старое_имя> import ...` ──
 # Ключ — имя модуля ДО переезда, значение — модуль на новом месте.
 _MOVED_MODULES = {
@@ -86,6 +107,7 @@ _MOVED_MODULES = {
     "fuzzy": _fuzzy,
     "text_normalize": _text_normalize,
     "address_utils": _address_utils,
+    "vat": _vat,
 }
 for _old_name, _module in _MOVED_MODULES.items():
     _sys.modules.setdefault(__name__ + "." + _old_name, _module)
@@ -105,4 +127,11 @@ __all__ = [
     "is_abbreviation", "is_all_caps", "normalize_caps_phrase",
     "normalize_organization_fields", "normalize_position",
     "city_for_document", "clean_address_from_index", "extract_city",
+    # Данные
+    "VAT_FREE", "VAT_RATES", "DEFAULT_VAT_RATE", "ENTITY_TYPES",
+    "DEFAULT_ENTITY_TYPE",
+    "is_vat_free", "vat_rate_number", "vat_rate_label",
+    "normalize_vat_rate", "vat_factor", "base_from_total",
+    "total_from_base", "compute_vat", "compute_carrier_type",
+    "split_carrier_type", "normalize_entity_type",
 ]
