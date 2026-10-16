@@ -146,6 +146,32 @@ def project_root() -> Path:
     return PROJECT_ROOT
 
 
+# ─────────────────────────────────────────────────────────────
+# Эталоны и данные тестов (Этап 7)
+# ─────────────────────────────────────────────────────────────
+# Пути к данным считаются от ЭТОГО файла, а не от файла теста: после
+# Этапа 7 тесты лежат в tests/<слой>/<группа>/, и `Path(__file__).parent`
+# из теста указывал бы не туда. Константа PROJECT_ROOT в самих тестах
+# ищется вверх по маркеру pytest.ini (те же грабли, см. docs/STATE.md).
+
+@pytest.fixture(scope="session")
+def tests_data_dir() -> Path:
+    """Папка данных тестов (tests/data)."""
+    return Path(__file__).resolve().parent / "data"
+
+
+@pytest.fixture(scope="session")
+def golden_dir(tests_data_dir) -> Path:
+    """Эталоны договоров (tests/data/golden, см. tools/make_golden.py)."""
+    return tests_data_dir / "golden"
+
+
+@pytest.fixture(scope="session")
+def synthetic_docs_dir(tests_data_dir) -> Path:
+    """Синтетические документы и базовые линии (tests/data/synthetic_docs)."""
+    return tests_data_dir / "synthetic_docs"
+
+
 @pytest.fixture(scope="session")
 def templates_dir() -> Path:
     """
