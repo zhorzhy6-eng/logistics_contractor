@@ -2,9 +2,20 @@
 """
 Полный прогон тестов ЧАСТЯМИ: гоняет pytest по 23 файла в отдельном процессе.
 
-Нужен потому, что одним процессом полный набор роняет pytest с MemoryError
-(139 файлов, PyQt5). Каждая часть получает СВОЙ --basetemp: два pytest с общим
-basetemp одновременно запускать нельзя.
+Нужен потому, что одним процессом ПОЛНЫЙ набор роняет pytest (0xC0000409,
+PyQt5 на Python 3.14; раньше это выглядело как MemoryError). Каждая часть
+получает СВОЙ --basetemp: два pytest с общим basetemp одновременно запускать
+нельзя.
+
+С Этапа 7 тесты разложены по слоям (tests/unit, tests/integration, tests/ui),
+и штатный способ прогона — ПО СЛОЯМ:
+
+    pytest tests/unit/         -o addopts="" -q
+    pytest tests/integration/  -o addopts="" -q
+    pytest tests/ui/           -o addopts="" -q
+
+Скрипт остаётся для случая «прогнать всё и получить одну сводку»: он ищет
+тесты РЕКУРСИВНО по всему tests/ и по-прежнему делит их по 23 файла.
 
 ВАЖНО ПРО РАЗБОР ИТОГА. Строку сводки нельзя искать свободным поиском
 «N failed / N error» по всему выводу: pytest печатает ещё и блоки логов
@@ -37,7 +48,12 @@ def summarize(line: str) -> dict:
 
 
 def main() -> int:
-    files = sorted(p.name for p in TESTS.glob("test_*.py"))
+    # Рекурсивно: после Этапа 7 тесты лежат в tests/<слой>/<группа>/.
+    files = sorted(
+        p.relative_to(PROJECT_ROOT).as_posix()
+        for p in TESTS.rglob("test_*.py")
+        if "_tmp" not in p.parts
+    )
     parts = [files[i:i + PART_SIZE] for i in range(0, len(files), PART_SIZE)]
     print(f"файлов: {len(files)}, частей: {len(parts)}", flush=True)
 
@@ -48,7 +64,7 @@ def main() -> int:
         basetemp = TESTS / "_tmp" / f"_pt_run_p{index:02d}"
         cmd = [
             sys.executable, "-m", "pytest",
-            *[f"tests/{name}" for name in part],
+            *part,
             "-o", "addopts=", "-q", "-p", "no:cacheprovider",
             f"--basetemp={basetemp}",
         ]
