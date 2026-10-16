@@ -62,21 +62,28 @@ except Exception:  # noqa: BLE001 — без приватной части аг�
 
 def __getattr__(name):
     """
-    Ленивый реэкспорт имён агента из ``services.agent``.
+    Реэкспорт имён агента из ``services.agent`` (и его подмодулей).
 
     Вызывается только на доступ к АТРИБУТУ пакета (``core.agent.Agent``)
     или на ``from core.agent import Agent``. Имена МОДУЛЕЙ агента
-    (``core.agent.memory``) идут сюда же — ``_resolve_module`` поднимает
-    модуль и ставит алиас, после чего работает обычный механизм импорта.
+    (``core.agent.memory``, ``core.agent.analytics_tools``) отдаются
+    алиасами из ``core._AGENT_ALIASES`` — они уже лежат в ``sys.modules``,
+    зарегистрированные при импорте `core`.
     """
     from services import agent as _services_agent
 
     if name in _services_agent.__all__:
         return getattr(_services_agent, name)
 
-    from core import _resolve_agent_module
+    from core import _AGENT_ALIASES
 
-    return _resolve_agent_module(name)
+    new_name = _AGENT_ALIASES.get("core.agent." + name)
+    if new_name is not None:
+        import importlib as _importlib
+
+        return _importlib.import_module(new_name)
+
+    raise AttributeError(f"module 'core.agent' has no attribute {name!r}")
 
 
 __all__ = [
