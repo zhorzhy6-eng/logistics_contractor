@@ -77,6 +77,77 @@ test_recent_actions_without_journal_is_empty`. Этот тест порядко�
 
 ## Что сделано
 
+### ЭТАП 4: РАЗБИЕНИЕ `base_generator.py` (16.10.2026)
+
+> **1.A — план разбиения.** Ниже — карта «метод → куда едет». Заполняется
+> перед работой (1.A) и остаётся в журнале после её завершения.
+
+**Цель.** `core/contracts/base_generator.py` (1128 строк, один класс
+`BaseContractGenerator` на шесть ответственностей) разбивается на пакет
+`core/contracts/base/` из семи модулей. **Логика методов не меняется,
+публичный API `BaseContractGenerator` не меняется, подклассы не правятся.**
+
+**Проверка приватной части (1.1–1.4) — ДО начала работы.**
+
+Кто импортирует `core.contracts.base_generator`:
+
+| Часть | Файлов | Строк импорта |
+|---|---|---|
+| Публичная | 6 | 8 (генераторы `perevozka`, `expediciya`; `perevozka/postprocess.py`; три файла тестов) |
+| Приватная | 8 | 11 (генераторы и `postprocess.py` четырёх клиентских типов) |
+
+Что делают подклассы (`git grep` по `self._`/`cls._`):
+
+| Класс | Наследуется | Переопределяет | Вызывает из базы |
+|---|---|---|---|
+| `PerevozkaGenerator` (публичный) | да | `_get_template_path`, `_carrier_type_of`, `_build_replacements_map`, `_insert_route_tables`, `_remove_empty_vehicle_rows`, `_contract_year`, `_log_split_payment` | `_find_marker_paragraph`, `_outline_paragraph`, `_make_point_heading`, `_make_spacer`, `_fill_table_cell`, `_sample_cell`, `_set_grid_widths`, `_delete_row`, `_normalized_point_address`, `_split_payment`, `_days_to_words_genitive`, `_format_date_full`, `_format_date_dot`, `_day_of_month`, `_month_name`, `_short_fio`, `_single_line`, `_flatten_replacements` |
+| `ExpediciyaGenerator` (публичный) | да | `generate`, `_get_template_path`, `_build_replacements_map` | — |
+| `ArendaTsGenerator` (приватный) | да | `_get_template_path`, `_carrier_type_of`, `generate`, `postprocess_steps`, `_insert_route_tables`, `_remove_empty_vehicle_rows`, `_build_replacements_map` | `_delete_row`, `_flatten_replacements`, `_single_line`, `_short_fio`, `_format_date_full`, `_days_to_words_genitive` |
+| `FormikaGenerator` (приватный) | да | `_get_template_path`, `_insert_route_tables`, `_remove_empty_vehicle_rows`, `_build_replacements_map`, `_contract_year` | `_delete_row`, `_flatten_replacements`, `_single_line`, `_format_date_full`, `_day_of_month`, `_month_name`, `_days_to_words_genitive` |
+| `LogistiksRusGenerator` (приватный) | да | `_get_template_path`, `_insert_route_tables`, `_remove_empty_vehicle_rows`, `_build_replacements_map`, `_contract_year` | `_delete_row`, `_flatten_replacements`, `_single_line`, `_carrier_type_of`, `_format_date_full`, `_day_of_month`, `_month_name` |
+| `ZayavkaExcelGenerator` (приватный) | **нет** | — | — |
+
+**Классификация риска: СРЕДНИЙ, ближе к высокому.** Переопределяются только
+публичные и «хуковые» методы — те, что остаются в `generator.py`, поэтому
+переопределения продолжают работать. Но подклассы вызывают **16 приватных
+методов, которые переезжают** в модули-помощники. Значит:
+
+> **Правило работы: КАЖДЫЙ переехавший приватный метод остаётся в
+> `BaseContractGenerator` тонким делегатом с прежней подписью и прежним
+> `@classmethod`/`@staticmethod`.** Без этого приватная часть падает с
+> `AttributeError` — и никакие алиасы `sys.modules` не спасут: метод
+> физически в другом файле.
+
+**Карта «метод → куда едет»** (`→` — метод остаётся в классе делегатом).
+
+| Модуль | Методы и классы |
+|---|---|
+| `postprocess.py` | `PostprocessStep` (ABC), `ConvertNewlinesStep`, `NormalizeSpacesStep`; свободные функции `normalize_spaces`, `normalize_document_spaces`, `set_paragraph_text`, `convert_newlines_to_breaks`; константа `W_BR_TAG`. ← `_normalize_document_spaces →`, `_set_paragraph_text →`, `normalize_spaces →`, `_convert_newlines_to_breaks →` |
+| `dates.py` | свободные функции `parse_iso` (новый частный помощник), `format_date_full`, `format_date_dot`, `day_of_month`, `month_name`. ← `_format_date_full →`, `_format_date_dot →`, `_day_of_month →`, `_month_name →`. **`_contract_year` НЕ переезжает** — в базе его нет вовсе, каждый подкласс объявляет свой |
+| `payments.py` | свободные функции `split_payment`, `lower_first`, `days_to_words`, `days_to_words_genitive`, `triple_to_words`, `plural_form`. ← `_split_payment →` (classmethod сохранён: тест `test_prepayment.py` зовёт `BaseContractGenerator._split_payment`), `_lower_first →`, `_days_to_words →`, `_days_to_words_genitive →`, `_triple_to_words →`, `_plural_form →` |
+| `formatting.py` | класс `Formatting` со `@staticmethod`: `qname`, `single_line`, `copy_paragraph_format`, `copy_run_format`, `apply_sample_cell_format`, `set_cell_text`, `sample_cell`, `fill_table_cell`, `set_grid_widths`, `iter_paragraphs`, `iter_table_paragraphs`; константы `NS`, `W_BR_TAG`. ← `_qname →`, `_single_line →`, `_copy_paragraph_format →`, `_copy_run_format →`, `_apply_sample_cell_format →`, `_set_cell_text →`, `_sample_cell →`, `_fill_table_cell →`, `_set_grid_widths →`, `_iter_paragraphs →`, `_iter_table_paragraphs →` |
+| `render.py` | класс `TemplateRenderer` со `@staticmethod`: `render_docxtpl`, `render_manual`, `replace_in_document`, `replace_in_paragraph`, `find_marker_paragraph`, `outline_paragraph`, `make_point_heading`, `make_spacer`. ← `_render_template →` (остаётся методом: зовёт `self._render_manual`, чтобы переопределение подклассом работало), `_render_manual →`, `_replace_in_document →`, `_replace_in_paragraph →`, `_find_marker_paragraph →`, `_outline_paragraph →`, `_make_point_heading →`, `_make_spacer →` |
+| `tables.py` | свободные функции `delete_row`, `vehicle_table`, `sample_vehicle_table`. ← `_delete_row →`, `_make_vehicle_table →`, `_sample_vehicle_table →`. **`_is_vehicle_table`, `_get_vehicle_brand`, `_get_vehicle_vin`, `_sample_vehicle_table` в БАЗЕ ОТСУТСТВУЮТ** — их объявляет `PerevozkaGenerator`, они не трогаются |
+| `generator.py` | `BaseContractGenerator` (каркас): `__init__` (+ `self.formatting`, `self.renderer`, `self.tables`), `default_output_dir`, `preprocess`, `_carrier_type_of`, `get_template_path`, `build_replacements`, `get_filename`, `validate`, `postprocess_steps`, `generate`, `generate_docx`, `generate_pdf`, `_postprocess_document`, четыре заглушки (`_get_template_path`, `_build_replacements_map`, `_insert_route_tables`, `_remove_empty_vehicle_rows`), `_short_fio`, `_normalized_point_address →`, `_flatten_replacements →`, все делегаты; константы `CONTRACT_TYPE`, `TEMPLATE_NAMES`, `FILE_PREFIX`, `VALIDATOR_CLASS`, `DEFAULT_OUTPUT_DIRNAME`, `MULTILINE_PLACEHOLDERS`; логгер `core.contract_generator` |
+
+**Две тонкости, найденные при анализе (обе — причина падений, если пропустить):**
+
+1. ⚠️ **`default_output_dir()` считает корень проекта от `__file__`.** В
+   `core/contracts/base_generator.py` это `parents[2]`, после переезда в
+   `core/contracts/base/generator.py` — `parents[3]`. Забыть — значит
+   складывать договоры в `core/contracts/output/`; тест
+   `test_contract_generator.py::test_default_output_dir` это ловит.
+2. ⚠️ **`_short_fio` и `_normalized_point_address` в задании не упомянуты.**
+   `_normalized_point_address` переезжает в `formatting.py` (та же работа с
+   текстом, что у `_single_line`), `_short_fio` **остаётся** в `generator.py`:
+   сокращение ФИО — не форматирование документа, а подготовка значения.
+
+**Порядок работы** (от менее связанных к более связанным, каждый модуль —
+отдельный коммит с прогоном): 1.B структура → 1.C `postprocess` → 1.D `dates`
+→ 1.E `payments` → 1.F `formatting` → 1.G `render` → 1.H `tables` → 1.I
+`generator` → 1.J реэкспорт + удаление старого файла → 1.K тесты раскладки →
+1.L финальная проверка.
+
 ### Мини-фиксы Этапа 3 (16.10.2026)
 
 Четыре вопроса, оставшиеся открытыми после Этапа 3. Кода не касались —
