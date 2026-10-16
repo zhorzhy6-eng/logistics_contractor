@@ -507,6 +507,66 @@
   старого файла → 1.O тесты раскладки → 1.P финальная проверка.
   **✅ Пройден целиком, шаги не переставлялись.**
 
+### ЭТАП 7: ГРУППИРОВКА ТЕСТОВ ПО СЛОЯМ (16.10.2026)
+
+**Карта «тест → куда» (подэтап 1.A).** 142 файла `tests/test_*.py` + корневой
+`conftest.py`. Правило раскладки: (1) тест создаёт Qt-объекты и проверяет
+UI → `tests/ui/`; (2) иначе работает с БД (SQLite, `isolated_db`, `db.*`) →
+`tests/integration/`; (3) иначе → `tests/unit/`. Внутри слоя — по модулю под
+тестом.
+
+**Проверено ДО работы (1.1–1.6):**
+- Импортов между тестами (`from tests.X import Y`) — **ноль**: ни одного
+  вхождения `tests.` в инструкциях `import`/`from` по всем `tests/*.py`.
+  Значит, подэтап 1.I в части импортов сводится к проверке.
+- `PROJECT_ROOT` объявлен **в 60 файлах** как
+  `Path(__file__).resolve().parent.parent` (+1 файл — `.parents[1]`,
+  +2 файла — через `os.path`). Это единственная реальная относительная
+  привязка: при переезде на уровень глубже `parent.parent` даёт `tests/`
+  вместо корня проекта. Ломается НЕ импорт (корень и так в `sys.path` из
+  `conftest.py`), а пути к файлам проекта: `templates/`, `main.py`,
+  `tests/data/`, `db/legal_metadata.db`.
+- Прямых ссылок на `tests/data/golden` из тестов нет — эталоны читаются
+  через `tools.make_golden.GOLDEN_DIR`. `tests/data/synthetic_docs` читает
+  один тест (`test_synthetic_docs_regression.py`).
+
+| Куда | Файлов |
+|---|---|
+| `tests/unit/core/` | 21 |
+| `tests/unit/utils/` | 1 |
+| `tests/unit/contracts/` | 17 |
+| `tests/unit/agent/` | 11 |
+| `tests/unit/services/` | 1 |
+| `tests/unit/infrastructure/` | 1 |
+| `tests/unit/tools/` | 5 |
+| **итого `tests/unit/`** | **57** |
+| `tests/integration/db/` | 9 |
+| `tests/integration/services/` | 12 |
+| `tests/integration/infrastructure/` | 2 |
+| `tests/integration/tools/` | 2 |
+| **итого `tests/integration/`** | **25** |
+| `tests/ui/main_window/` | 11 |
+| `tests/ui/agent_widget/` | 14 |
+| `tests/ui/tabs/` | 14 |
+| `tests/ui/windows/` | 17 |
+| `tests/ui/widgets/` | 4 |
+| **итого `tests/ui/`** | **60** |
+| **ВСЕГО** | **142** |
+
+Отличия от структуры, предложенной заданием (все — расширения, не сужения):
+- добавлен `tests/unit/tools/` — тесты инструментов `tools/`
+  (`make_text_scenarios`, `run_text_stress_gigachat`, `stress_check`,
+  `synthetic_stress`), которые не относятся ни к ядру, ни к сервисам;
+- добавлен `tests/integration/tools/` — те же инструменты, но с БД
+  (`stress_test_agent`, `download_legal_pre2011`);
+- `tests/ui/windows/` — это «окна и диалоги»: сюда попадают и диалоги
+  верхнего уровня `ui/*_dialog.py` (`db_manager`, `address_book`,
+  `carrier_drivers`, `driver_carrier`, `document_import`, `legal_base`);
+- `tests/unit/utils/` — тесты модулей `core/utils/*`; их всего один
+  (`test_dates.py`): `core.utils.fuzzy` и `core.utils.address_utils`
+  проверяются тестами, которым нужна БД (`test_fuzzy_search`,
+  `test_recognizer`), и они уезжают в `tests/integration/`.
+
 ### Замечания Этапа 6 (16.10.2026)
 
 Решения по трём честным замечаниям агента Этапа 6 и по дублю класса.
