@@ -26,6 +26,7 @@
 """
 
 import importlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -254,6 +255,12 @@ def test_new_path_imported_first_does_not_break(mode):
     никогда не проверяется. Именно на нём падал первый заход Этапа 2.
     """
     probe = PROJECT_ROOT / "tools" / "check_stage2_aliases.py"
+    # Проба печатает по-русски, а stdout дочернего процесса — труба: на
+    # англоязычном раннере кодировка по умолчанию cp1252, кириллица в неё
+    # не влезает, и print() роняет пробу через UnicodeEncodeError. UTF-8 для
+    # дочернего процесса — то же, что делает
+    # tests/ui/main_window/test_qt_shutdown_agent_pool.py.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     result = subprocess.run(
         [sys.executable, str(probe), mode],
         cwd=str(PROJECT_ROOT),
@@ -261,6 +268,7 @@ def test_new_path_imported_first_does_not_break(mode):
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
         timeout=180,
     )
     assert result.returncode == 0, (

@@ -78,12 +78,22 @@ foreach ($case in ($failures | Select-Object -First $MaxAnnotations)) {
     $detail = ""
     if ($case.failure) { $detail = [string]$case.failure.message }
     elseif ($case.error) { $detail = [string]$case.error.message }
-    $first = ([string]$detail -split "`n")[0]
+
+    # В сообщении junit лежит всё: и суть отказа, и вывод подпроцесса-пробы,
+    # поэтому в аннотацию идут первые строки, а не одна. Иначе по аннотации
+    # видно только «проба упала», а почему — нет.
+    $messageLines = @(
+        [string]$detail -split "`r?`n" |
+        Where-Object { $_.Trim() -ne "" } |
+        Select-Object -First 12
+    )
+    if ($messageLines.Count -eq 0) { $messageLines = @("(сообщение пустое)") }
 
     $name = "$($case.classname)::$($case.name)"
     Write-Output "  FAIL: $name"
-    Write-Output "        $first"
-    Write-Annotation "FAIL $Layer" "$name — $first"
+    foreach ($line in $messageLines) { Write-Output "        $line" }
+
+    Write-Annotation "FAIL $Layer" ("$name`n" + ($messageLines -join "`n"))
 }
 
 # ── 3. Сводка шага (видна на странице прогона) ──
