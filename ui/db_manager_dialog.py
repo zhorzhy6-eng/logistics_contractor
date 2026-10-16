@@ -54,8 +54,7 @@ from typing import Dict, Any, Optional, Callable, List, Set, Tuple
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
-    QWidget, QTableWidget, QTableWidgetItem, QHeaderView,
-    QPushButton, QMessageBox, QLabel, QAbstractItemView,
+    QWidget, QTableWidget, QTableWidgetItem, QPushButton, QMessageBox, QLabel, QAbstractItemView,
     QLineEdit, QFormLayout, QScrollArea, QGroupBox, QTextEdit,
     QCheckBox, QComboBox, QDateEdit, QTreeWidget, QTreeWidgetItem,
 )

@@ -30,7 +30,6 @@
 проскочил из справочника, в договор всё равно уйдёт «Директора».
 """
 
-import re
 from typing import List
 
 from core.text_normalize import normalize_position as _normalize_position

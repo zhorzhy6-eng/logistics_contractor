@@ -408,7 +408,6 @@ def template_path(template_name: str) -> Path:
     Клиентские бланки лежат в приватной папке (templates/ приватного
     корня), публичные — в templates/ проекта.
     """
-    from core.private_path import private_path
 
     public = PROJECT_ROOT / "templates" / template_name
     if public.exists():

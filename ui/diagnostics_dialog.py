@@ -32,7 +32,7 @@ import logging
 import os
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import (
@@ -43,7 +43,6 @@ from PyQt5.QtWidgets import (
 
 from core import diagnostics
 from core.diagnostics import CheckResult, DiagnosticReport
-from ui import theme
 
 logger = logging.getLogger("ui.diagnostics_dialog")
 

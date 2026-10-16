@@ -42,7 +42,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from services.agent.core.llm import SafeChat
 from services.agent.persona.emotional import emotional_block

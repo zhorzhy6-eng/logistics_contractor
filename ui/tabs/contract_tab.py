@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QTableWidget, QTableWidgetItem,
     QAbstractItemView,
 )
-from PyQt5.QtCore import QDate, QTime, QTimer, pyqtSignal, Qt
+from PyQt5.QtCore import QDate, QTime, QTimer, pyqtSignal
 
 from core.vat import (
     DEFAULT_ENTITY_TYPE, DEFAULT_VAT_RATE, ENTITY_TYPES, VAT_RATES,

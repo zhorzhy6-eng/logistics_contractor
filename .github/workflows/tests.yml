@@ -1,0 +1,106 @@
+# CI: прогон тестов по слоям на каждый push в main и на pull request.
+#
+# Почему по слоям, а не одним процессом: на этой машине полный набор в одном
+# процессе роняет pytest с 0xC0000409 (свойство окружения — PyQt5 на
+# Python 3.14). После Этапа 7 слои запускаются раздельно и не требуют деления
+# на части: `tests/ui/` (1687 тестов) проходит одним процессом.
+#
+# python-version: 3.14 доступен в actions/python-versions (есть 3.14.4 и
+# новее для win32-x64), поэтому стоит 3.14. Если когда-нибудь станет
+# недоступен — замена одна строка: '3.12' (проект совместим).
+#
+# Что НЕ делается в CI:
+#   * приватная часть (`logistics_contractor_private`) — отдельный
+#     репозиторий, в публичном CI её нет; тесты, которым она нужна, помечены
+#     маркером `needs_private` и здесь не собираются (их просто нет в этих
+#     слоях);
+#   * Tesseract OCR не ставится: тесты офлайн-OCR при его отсутствии
+#     пропускаются (`skip`), а не падают.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-unit:
+    name: Unit tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -o addopts="" -q --basetemp=tests/_tmp/_ci
+
+  test-integration:
+    name: Integration tests
+    runs-on: windows-latest
+    needs: test-unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -o addopts="" -q --basetemp=tests/_tmp/_ci
+
+  test-ui:
+    name: UI tests (offscreen)
+    runs-on: windows-latest
+    needs: test-unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run UI tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest tests/ui/ -o addopts="" -q --basetemp=tests/_tmp/_ci
+
+  lint:
+    name: Ruff
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff
+        run: ruff check .

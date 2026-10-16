@@ -14,7 +14,6 @@ from PyQt5.QtWidgets import (
     QSpinBox, QPushButton, QHBoxLayout, QLabel,
     QComboBox, QGroupBox, QMessageBox, QCheckBox,
 )
-from PyQt5.QtCore import Qt
 
 from core import secrets_store
 from ui import theme

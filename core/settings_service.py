@@ -22,7 +22,6 @@ LOGISTICS_SETTINGS_PATH (удобно для тестов и портативн�
 import json
 import logging
 import os
-import sys
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("core.settings_service")

@@ -99,7 +99,7 @@ def make_chunk(article: str = "793", text: str = CONTRACT_TEXT,
     chunk = {
         "text": text, "score": 0.9, "mode": "lexical",
         "article": article, "part": "",
-        "doc_title": f"Гражданский кодекс Российской Федерации (часть вторая)",
+        "doc_title": "Гражданский кодекс Российской Федерации (часть вторая)",
         "doc_short": title, "doc_number": "14-ФЗ", "doc_date": "26.01.1996",
         "doc_url": "http://publication.pravo.gov.ru/document/0001202601010001",
         "doc_id": "gk-rf-2",

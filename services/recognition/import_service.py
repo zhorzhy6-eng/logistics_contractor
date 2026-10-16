@@ -1,7 +1,6 @@
 """Import evidence, conservative entity matching, and explicit field approval."""
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
 from pathlib import Path
 import json
 import logging

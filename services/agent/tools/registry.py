@@ -531,7 +531,7 @@ def _search_carrier(query: str = "", limit: int = MAX_SEARCH_RESULTS, **_) -> Di
     term = _clean_term(query)
     if not term:
         return _empty_term_error(
-            query, f"пустой запрос: укажите название, ИНН или ОГРН перевозчика"
+            query, "пустой запрос: укажите название, ИНН или ОГРН перевозчика"
         )
 
     noise = looks_like_command_or_noise(term)

@@ -50,7 +50,7 @@ from typing import Any, Dict, List, Optional
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QMessageBox,
-    QHeaderView, QComboBox, QSpinBox, QLabel,
+    QComboBox, QSpinBox, QLabel,
 )
 from PyQt5.QtCore import pyqtSignal
 

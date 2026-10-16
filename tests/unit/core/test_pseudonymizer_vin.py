@@ -144,8 +144,6 @@ def test_vin_inside_a_latin_word_is_not_masked(mask):
     Границы проверяются по латинице и цифрам
     (``(?<![A-Za-z0-9])``): это ровно те символы, из которых состоит VIN.
     """
-    text = f"Слово{VIN_JETOUR}слово"  # кириллица по краям — см. ниже
-
     masked, mapping = mask.anonymize(f"code{VIN_JETOUR}end")
 
     assert mapping == {}, f"латинские края должны мешать: {masked}"

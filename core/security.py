@@ -18,10 +18,8 @@
 import glob
 import logging
 import os
-import shutil
 import sqlite3
 import subprocess
-import sys
 from datetime import datetime
 from typing import List, Optional
 

@@ -9,8 +9,7 @@ import logging
 from typing import Dict, Any
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QFormLayout, QLineEdit,
-    QGroupBox, QSpinBox, QScrollArea,
+    QWidget, QVBoxLayout, QFormLayout, QGroupBox, QSpinBox, QScrollArea,
 )
 from PyQt5.QtCore import pyqtSignal
 

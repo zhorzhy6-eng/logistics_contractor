@@ -16,7 +16,7 @@ from typing import Dict, Any, List
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLineEdit,
-    QGroupBox, QDateEdit, QScrollArea,
+    QDateEdit, QScrollArea,
     QComboBox,
 )
 from PyQt5.QtCore import QDate, pyqtSignal

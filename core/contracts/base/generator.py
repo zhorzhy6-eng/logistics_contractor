@@ -48,7 +48,6 @@ from core.contracts.base import payments as base_payments
 from core.contracts.base.formatting import Formatting
 from core.contracts.base.postprocess import (
     ConvertNewlinesStep,
-    NormalizeSpacesStep,
     PostprocessStep,
     convert_newlines_to_breaks,
     normalize_document_spaces,

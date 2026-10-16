@@ -670,7 +670,9 @@ def check_gigachat(live: bool = False) -> CheckResult:
         from core.gigachat_client import GigaChatClient
 
         client = GigaChatClient()
-        token = client._get_token()
+        # Токен не сохраняем: проверка в том, что запрос ПРОШЁЛ (при ошибке
+        # сработает except ниже). Значение здесь не нужно.
+        client._get_token()
         message = f"авторизация прошла за {time.monotonic() - started:.1f} с"
         details.append("Токен получен")
         status = STATUS_OK

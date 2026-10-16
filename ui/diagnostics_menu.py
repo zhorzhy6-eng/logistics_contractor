@@ -19,7 +19,7 @@
 """
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 from PyQt5.QtWidgets import QAction, QWidget
 

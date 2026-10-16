@@ -24,7 +24,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, List, Sequence, Tuple, Union
 
 from PyQt5.QtWidgets import QTableWidget
 

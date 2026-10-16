@@ -400,7 +400,6 @@ def test_same_arguments_in_another_order_are_the_same_call():
 
 def test_two_tools_are_not_a_loop():
     """Чередование двух инструментов циклом не считается."""
-    calls_log = []
     registry = ToolRegistry([
         Tool(name=name, description="", summary=name, parameters={},
              function=lambda **_: {"ok": True, "data": []})

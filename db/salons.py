@@ -106,12 +106,10 @@ def read_salons_rows(path: str) -> List[Dict[str, str]]:
         sheet = workbook.active
         rows = sheet.iter_rows(values_only=True)
 
-        header = None
         columns: Dict[str, int] = {}
         for row in rows:
             if row is None or all(value is None or not str(value).strip() for value in row):
                 continue
-            header = row
             columns = _find_salon_columns(row)
             break
 

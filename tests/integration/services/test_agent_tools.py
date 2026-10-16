@@ -639,7 +639,7 @@ def test_list_expiring_contracts_rejects_bad_days(registry):
 def test_confirmation_text_hides_long_values(registry):
     """Вопрос подтверждения не пересказывает значение поля целиком."""
     tool = registry.get("fill_field")
-    tool_name, arguments = "fill_field", {
+    arguments = {
         "field": "special_conditions",
         "value": "очень длинное значение " * 20,
     }

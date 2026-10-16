@@ -12,7 +12,7 @@ from typing import Dict, Any
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QGroupBox,
-    QScrollArea, QPushButton, QHBoxLayout,
+    QScrollArea,
 )
 from PyQt5.QtCore import pyqtSignal
 

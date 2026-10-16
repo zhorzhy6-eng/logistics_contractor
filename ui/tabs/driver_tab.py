@@ -15,9 +15,8 @@ import re
 from typing import Any, Dict, List
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QFormLayout, QLineEdit, QDateEdit,
-    QTextEdit, QGroupBox, QLabel, QScrollArea, QPushButton,
-    QHBoxLayout, QApplication, QComboBox,
+    QWidget, QVBoxLayout, QFormLayout, QDateEdit,
+    QGroupBox, QScrollArea, QComboBox,
 )
 from PyQt5.QtCore import QDate, pyqtSignal
 

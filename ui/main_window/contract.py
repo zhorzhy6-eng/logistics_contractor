@@ -26,7 +26,6 @@ import os
 from PyQt5.QtWidgets import QMessageBox
 
 from core import audit
-from core.contract_generator import ContractGenerator
 from core.contracts.perevozka.validator import PerevozkaValidator
 
 # Имя логгера задано ЯВНО (а не __name__): после переезда в пакет

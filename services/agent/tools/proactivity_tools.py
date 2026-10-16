@@ -154,7 +154,7 @@ def _required_text(missing: Sequence[Dict[str, str]], checked: int) -> str:
         return f"Все обязательные поля заполнены (проверено {checked})."
     parts = [f"{item['title']} ({item['section_title']})" for item in missing[:5]]
     tail = "" if len(missing) <= 5 else f" и ещё {len(missing) - 5}"
-    return (f"Не хватает обязательных полей: " + ", ".join(parts) + tail
+    return ("Не хватает обязательных полей: " + ", ".join(parts) + tail
             + f". Всего не заполнено: {len(missing)}.")
 
 

@@ -43,7 +43,7 @@
 """
 
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 #: Внутри слова оставляем только буквы и цифры: дефис, точка, скобка,
 #: кавычка и апостроф — разделители («Фас-Транс» = «ФасТранс»).

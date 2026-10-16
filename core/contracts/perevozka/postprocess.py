@@ -7,9 +7,7 @@
 объявляются в postprocess_steps().
 """
 
-from typing import Any, Dict
 
-from core.contract_data import ContractData
 from core.contracts.base_generator import PostprocessStep
 
 

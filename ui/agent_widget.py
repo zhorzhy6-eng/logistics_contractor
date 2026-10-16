@@ -42,7 +42,7 @@ from PyQt5.QtWidgets import (
 )
 
 from core.agent.agent import Agent, AgentReply
-from core.agent.memory import DEFAULT_MAX_HISTORY, AgentMemory
+from core.agent.memory import AgentMemory
 from core.agent.personas import DEFAULT_PERSONA, persona
 from core.agent import proactivity
 from core.agent.tools import AgentContext, Tool, active_window, set_context_window

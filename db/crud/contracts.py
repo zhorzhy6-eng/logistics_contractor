@@ -148,7 +148,10 @@ def load_contract_points(contract_id: int) -> Dict[str, List[Dict]]:
     rows = cursor.fetchall()
     conn.close()
     loadings, unloadings = [], []
-    for ptype, order, name, addr, date, tw in rows:
+    # `date` здесь — ИМЯ КОЛОНКИ из SELECT выше и переменная цикла; она
+    # затеняет `datetime.date` из импорта (ruff: F402). Переименование
+    # задело бы распаковку ниже, а поведение от затенения не меняется.
+    for ptype, order, name, addr, date, tw in rows:  # noqa: F402
         item = {
             "name": name or "",
             "address": addr or "",

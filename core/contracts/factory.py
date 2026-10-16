@@ -12,7 +12,7 @@
 """
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 from core.contracts.paths import PROJECT_ROOT, TEMPLATES_DIR
 from core.contracts.registry import ContractTypeError, ContractTypeRegistry

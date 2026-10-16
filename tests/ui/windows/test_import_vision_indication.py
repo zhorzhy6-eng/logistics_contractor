@@ -200,7 +200,9 @@ def test_log_names_reason_without_pii(reason, settings, factory, label, hint_tai
 def window(monkeypatch):
     from PyQt5.QtWidgets import QApplication, QMessageBox
     from ui.main_window import MainWindow
-    app = QApplication.instance() or QApplication([])
+    # Ссылку на QApplication держим до конца теста: если её не сохранить,
+    # Qt-приложение соберёт сборщик мусора и окно упадёт (ruff: F841).
+    app = QApplication.instance() or QApplication([])  # noqa: F841
     monkeypatch.setattr(MainWindow, "_init_gigachat_client", lambda *a, **k: False)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
     window = MainWindow()

@@ -21,7 +21,7 @@ import functools
 import logging
 import time
 import traceback
-from typing import Any, Dict, List
+from typing import Any, List
 
 # Поля, значения которых считаются безопасными и пишутся как есть
 # (идентификаторы, счётчики, суммы). Всё остальное маскируется.

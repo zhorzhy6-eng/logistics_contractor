@@ -28,9 +28,7 @@ from PyQt5.QtWidgets import QMessageBox
 from core.vat import split_carrier_type
 
 from db.database import (
-    load_driver,
     load_driver_vehicle,
-    load_organization,
     load_organization_by_id,
 )
 

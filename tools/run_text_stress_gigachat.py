@@ -666,8 +666,8 @@ def run(args) -> int:
                 error = kind
                 if kind == "401":
                     save_progress(progress)
-                    print(f"\nСТОП (401): ключ недействителен. "
-                          f"Запустите: python set_key.py")
+                    print("\nСТОП (401): ключ недействителен. "
+                          "Запустите: python set_key.py")
                     return 2
                 if kind == "403":
                     save_progress(progress)
