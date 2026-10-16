@@ -44,11 +44,29 @@ from core.utils.dates import (  # noqa: F401
     to_display,
     to_iso,
 )
+from core.utils import fuzzy as _fuzzy
+from core.utils.fuzzy import (  # noqa: F401
+    MAX_CASE_VARIANTS,
+    MAX_PATTERNS,
+    MAX_VARIANTS,
+    SEARCH_LEVELS,
+    case_variants,
+    collapse_doubles,
+    e_yo_variants,
+    level_condition,
+    level_conditions,
+    normalize_term,
+    search_levels,
+    spelling_variants,
+    stem,
+    words,
+)
 
 # ── Старые имена модулей: алиасы для `from core.<старое_имя> import ...` ──
 # Ключ — имя модуля ДО переезда, значение — модуль на новом месте.
 _MOVED_MODULES = {
     "dates": _dates,
+    "fuzzy": _fuzzy,
 }
 for _old_name, _module in _MOVED_MODULES.items():
     _sys.modules.setdefault(__name__ + "." + _old_name, _module)
@@ -59,4 +77,9 @@ __all__ = [
     # Утилиты
     "DATE_FORMATS", "parse_date", "to_iso", "to_display", "to_day_month",
     "month_name", "day_of_month",
+    "SEARCH_LEVELS", "normalize_term", "words", "stem",
+    "collapse_doubles", "spelling_variants", "level_condition",
+    "level_conditions", "search_levels",
+    "case_variants", "e_yo_variants",
+    "MAX_VARIANTS", "MAX_PATTERNS", "MAX_CASE_VARIANTS",
 ]
