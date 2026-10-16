@@ -285,6 +285,45 @@ def is_private_available() -> bool:
     return _attached_root is not None or find_private_root() is not None
 
 
+def register_module_alias(old_name: str, new_module) -> None:
+    """
+    Регистрирует алиас модуля: ``sys.modules`` ПЛЮС атрибут пакета.
+
+    Две регистрации обязательны, и обе нужны разным написаниям импорта:
+
+      * ``sys.modules[old_name] = new_module`` — чтобы работал импорт
+        ПОДМОДУЛЯ: ``from core.agent.llm import SafeChat``. Python ищет
+        модуль по имени и, найдя его в ``sys.modules``, файл не открывает;
+      * ``setattr(parent_package, "llm", new_module)`` — чтобы работало
+        ``import core.agent.llm`` и обращение ``core.agent.llm``. Инструкция
+        ``import a.b.c`` после загрузки читает последнее имя как АТРИБУТ
+        родителя ``a.b``, и без ``setattr`` падает с ``AttributeError:
+        module 'core.agent' has no attribute 'llm'``.
+
+    Одного ``sys.modules`` МАЛО — на этом спотыкались Этапы 3, 4 и 5: дефект
+    не виден в общем прогоне pytest (там пакет уже поднят `conftest.py`)
+    и всплывает только при ПЕРВОМ импорте старого пути в свежем процессе.
+
+    :param old_name: полное ИМЯ модуля до переезда, например
+        ``"core.agent.llm"``. Пакет-родитель (``"core.agent"``) берётся из
+        этого же имени; если родителя ещё нет в ``sys.modules``, ставится
+        только запись в ``sys.modules`` — атрибут выставит тот, кто родителя
+        импортирует (в примере это ``core/agent/__init__.py``).
+    :param new_module: сам объект модуля на новом месте. Копий и обёрток не
+        делается: ``isinstance``, пикинг и сравнение классов ведут себя как
+        раньше.
+    """
+    sys.modules[old_name] = new_module
+
+    parts = old_name.split(".")
+    if len(parts) < 2:
+        return
+
+    parent = sys.modules.get(".".join(parts[:-1]))
+    if parent is not None:
+        setattr(parent, parts[-1], new_module)
+
+
 def optional_module(module_name: str):
     """
     Модуль из ``sys.path`` или None, если его нет.
@@ -321,4 +360,5 @@ __all__ = [
     "optional_module",
     "private_path",
     "private_root",
+    "register_module_alias",
 ]
