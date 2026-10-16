@@ -124,7 +124,7 @@ SQL в инструментах нет.
 |---|---|
 | `get_current_form` | текущие значения полей открытой формы |
 | `get_schema` | какие разделы и поля есть у типа договора |
-| `validate_current_form` | проверка формы через `core/validator.py` |
+| `validate_current_form` | проверка формы через `core/validation/validator.py` |
 
 ### Заполнение формы (требует подтверждения)
 
