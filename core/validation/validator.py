@@ -13,17 +13,30 @@
 
 Проверки разделены на два уровня:
   * errors   — без этого договор-заявка не имеет смысла (водитель, номер,
-               дата, маршрут, точки, стоимость, ТС, идентифицирующие реквизиты);
+               дата, маршрут, точки, стоимость, ТС, идентифицирующие реквизиты,
+               а также противоречия в связях: повтор VIN, выгрузка раньше
+               погрузки);
   * warnings — неполные или нестандартные реквизиты: документ напечатать можно,
-               но соответствующие поля останутся пустыми.
+               но соответствующие поля останутся пустыми. Сюда же попадают
+               несошедшиеся контрольные суммы ИНН/ОГРН/счёта: в ЕГРЮЛ бывают
+               нестандартные реквизиты, и запретить их значит запретить
+               оператору работать (см. `core/validation/checksums.py`).
 """
 
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from core.data.contract_data import ContractData
+from core.utils.dates import parse_date
+from core.validation.checksums import (
+    account_checksum_ok,
+    inn_checksum_ok,
+    ogrn_checksum_ok,
+    ogrnip_checksum_ok,
+)
 
 logger = logging.getLogger("core.validator")
 
@@ -154,6 +167,7 @@ class Validator:
         cls._check_contract(contract_data, report)
         cls._check_vehicles(contract_data, report)
         cls._check_tractor_trailer(contract_data, report)
+        cls._check_relations(contract_data, report)
 
         if report.has_errors:
             logger.warning(
@@ -235,6 +249,14 @@ class Validator:
             target.append(f"Не заполнен ИНН {role}")
         elif not (cls.INN_PATTERN_10.match(inn) or cls.INN_PATTERN_12.match(inn)):
             target.append(f"ИНН {role} должен содержать 10 или 12 цифр")
+        elif not inn_checksum_ok(inn):
+            # Контрольная сумма — ЗАМЕЧАНИЕ даже у перевозчика, чьи пустые
+            # поля считаются ошибками: нестандартный реквизит в ЕГРЮЛ не
+            # повод не дать оператору создать договор. Поэтому здесь
+            # report.warnings напрямую, а не target.
+            report.warnings.append(
+                f"ИНН {role} не проходит проверку по контрольной сумме"
+            )
 
         # КПП: у ИП его не существует — проверка пропускается.
         # (Раньше валидатор требовал КПП у всех, из-за чего был непригоден.)
@@ -251,6 +273,13 @@ class Validator:
         ogrn = cls._digits(org.get("ogrn"))
         if ogrn and not cls.OGRN_PATTERN.match(ogrn):
             target.append(f"ОГРН {role} должен содержать 13 или 15 цифр")
+        elif ogrn and not cls._ogrn_checksum_ok(ogrn):
+            # Тоже замечание, а не ошибка — см. проверку ИНН выше.
+            report.warnings.append(
+                f"ОГРН {role} не проходит проверку по контрольной сумме"
+            )
+
+        cls._check_account_checksums(org, role, report)
 
         if is_carrier:
             # Реквизиты для оплаты — обязательны
@@ -356,8 +385,107 @@ class Validator:
             report.warnings.append("Не заполнены данные полуприцепа")
 
     # ─────────────────────────────────────────────────────────
+    # Проверки связей (ЭТАП пост-рефакторинга, часть 3.4)
+    # ─────────────────────────────────────────────────────────
+
+    @classmethod
+    def _check_relations(cls, cd: ContractData, report: ValidationReport) -> None:
+        """
+        Проверки СВЯЗЕЙ: то, что видно только по данным целиком.
+
+        Отдельные поля могут быть заполнены верно, а вместе — противоречить
+        друг другу: один VIN у двух строк, выгрузка раньше погрузки,
+        перевозчик и заказчик с одним ИНН. Такие противоречия печатаются
+        в документе как есть, поэтому ловить их надо до генерации.
+        """
+        cls._check_vin_duplicates(cd, report)
+        cls._check_route_dates(cd, report)
+        cls._check_same_inn(cd, report)
+
+    @classmethod
+    def _check_vin_duplicates(cls, cd: ContractData, report: ValidationReport) -> None:
+        """Один и тот же VIN в списке ТС — почти всегда задвоенная строка."""
+        vins = [cls._text(vehicle.get("vin")).upper() for vehicle in cd.vehicles]
+        vins = [vin for vin in vins if vin]
+        duplicates = sorted({vin for vin in vins if vins.count(vin) > 1})
+        if duplicates:
+            report.errors.append(
+                "VIN повторяется в списке ТС: " + ", ".join(duplicates)
+            )
+
+    @classmethod
+    def _check_route_dates(cls, cd: ContractData, report: ValidationReport) -> None:
+        """
+        Выгрузка раньше погрузки — противоречие в датах маршрута.
+
+        Даты в точках маршрута — строки в свободном формате, поэтому
+        сравниваются только те, что удалось разобрать; неразобранную дату
+        трогает отдельная проверка формата, а не эта.
+        """
+        first_loading = cls._point_date(cd.loadings[0] if cd.loadings else None)
+        last_unloading = cls._point_date(cd.unloadings[-1] if cd.unloadings else None)
+
+        if first_loading and last_unloading and last_unloading < first_loading:
+            report.errors.append("Дата выгрузки раньше даты погрузки")
+
+    @classmethod
+    def _check_same_inn(cls, cd: ContractData, report: ValidationReport) -> None:
+        """Совпадающие ИНН сторон: договор организации сама с собой."""
+        carrier_inn = cls._digits(cd.carrier.get("inn"))
+        customer_inn = cls._digits(cd.customer.get("inn"))
+        if carrier_inn and customer_inn and carrier_inn == customer_inn:
+            report.warnings.append("ИНН перевозчика и заказчика совпадают")
+
+    # ─────────────────────────────────────────────────────────
     # Вспомогательные методы
     # ─────────────────────────────────────────────────────────
+
+    @classmethod
+    def _check_account_checksums(
+        cls,
+        org: Dict[str, Any],
+        role: str,
+        report: ValidationReport,
+    ) -> None:
+        """
+        Контрольные суммы расчётного и корреспондентского счёта — замечания.
+
+        Сумма считается по БИК, поэтому проверка идёт только когда оба
+        реквизита заполнены и их длины верны: длину проверяет отдельная
+        проверка, и дублировать её сообщением о сумме не нужно.
+        """
+        bik = cls._digits(org.get("bik"))
+        if len(bik) != 9:
+            return
+
+        account = cls._digits(org.get("bank_account"))
+        if len(account) == 20 and not account_checksum_ok(account, bik):
+            report.warnings.append(
+                f"Расчётный счёт {role} не проходит проверку по контрольной сумме"
+            )
+
+        correspondent = cls._digits(org.get("correspondent_account"))
+        if len(correspondent) == 20 and not account_checksum_ok(
+            correspondent, bik, correspondent=True
+        ):
+            report.warnings.append(
+                f"Корреспондентский счёт {role} не проходит проверку "
+                f"по контрольной сумме"
+            )
+
+    @staticmethod
+    def _ogrn_checksum_ok(ogrn: str) -> bool:
+        """13 цифр — ОГРН, 15 — ОГРНИП: формулы разные."""
+        if len(ogrn) == 13:
+            return ogrn_checksum_ok(ogrn)
+        return ogrnip_checksum_ok(ogrn)
+
+    @staticmethod
+    def _point_date(point: Optional[Dict[str, Any]]) -> Optional[datetime]:
+        """Дата точки маршрута или None, если её нет либо не разобрать."""
+        if not point:
+            return None
+        return parse_date(point.get("date"), warn=False)
 
     @staticmethod
     def _text(value: Any) -> str:

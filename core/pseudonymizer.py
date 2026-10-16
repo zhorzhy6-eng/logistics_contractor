@@ -59,6 +59,8 @@ import sys
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.validation.checksums import inn_checksum_ok, snils_checksum_ok
+
 logger = logging.getLogger("core.pseudonymizer")
 
 #: Типы сущностей, для которых строятся плейсхолдеры.
@@ -284,31 +286,12 @@ def _digits(value: str) -> str:
     return "".join(ch for ch in value if ch.isdigit())
 
 
-def _inn_checksum_ok(digits: str) -> bool:
-    """Контрольная сумма ИНН (алгоритм ФНС) — 10 или 12 цифр."""
-    if len(digits) == 10:
-        weights = (2, 4, 10, 3, 5, 9, 4, 6, 8)
-        check = sum(int(d) * w for d, w in zip(digits, weights)) % 11 % 10
-        return check == int(digits[9])
-    if len(digits) == 12:
-        weights_11 = (7, 2, 4, 10, 3, 5, 9, 4, 6, 8)
-        weights_12 = (3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8)
-        check_11 = sum(int(d) * w for d, w in zip(digits, weights_11)) % 11 % 10
-        check_12 = sum(int(d) * w for d, w in zip(digits, weights_12)) % 11 % 10
-        return check_11 == int(digits[10]) and check_12 == int(digits[11])
-    return False
-
-
-def _snils_checksum_ok(digits: str) -> bool:
-    """Контрольная сумма СНИЛС — 11 цифр."""
-    if len(digits) != 11:
-        return False
-    base = digits[:9]
-    total = sum(int(d) * (9 - i) for i, d in enumerate(base))
-    check = total % 101
-    if check == 100:
-        check = 0
-    return check == int(digits[9:])
+#: Контрольные суммы: расчёт живёт в `core.validation.checksums` — тем же
+#: кодом пользуется валидатор договора. Здесь остались ПРЕЖНИЕ ИМЕНА,
+#: на которые смотрят детекторы этого модуля и его тесты: это те же
+#: функции (алиасы, а не обёртки), второй копии алгоритма в проекте нет.
+_inn_checksum_ok = inn_checksum_ok
+_snils_checksum_ok = snils_checksum_ok
 
 
 # ─────────────────────────────────────────────────────────────

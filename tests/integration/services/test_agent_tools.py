@@ -321,9 +321,15 @@ def test_search_driver_finds_by_name(isolated_db, registry, filled_db):
     assert "Иванов" in found["full_name"]
 
 
-def test_search_carrier_finds_by_inn(isolated_db, registry, filled_db):
-    """Перевозчик находится по ИНН."""
-    result = registry.call("search_carrier", {"query": "7701234567"})
+def test_search_carrier_finds_by_inn(isolated_db, registry, filled_db,
+                                     organization_data):
+    """Перевозчик находится по ИНН.
+
+    ИНН берётся из фикстуры, которой запись и создавалась: литерал в тесте
+    сломался бы от любой правки реквизитов (например, когда контрольный
+    разряд ИНН исправили под проверку контрольных сумм).
+    """
+    result = registry.call("search_carrier", {"query": organization_data["inn"]})
     assert result["ok"] is True
     assert result["data"][0]["id"] == filled_db["carrier"]
 
@@ -508,14 +514,15 @@ def test_fill_from_entity_includes_vehicle_of_driver(isolated_db, db_registry, f
     assert data["tractor"]["plate_number"] == "O844XY196"
 
 
-def test_fill_from_entity_carrier(isolated_db, db_registry, filled_db):
+def test_fill_from_entity_carrier(isolated_db, db_registry, filled_db,
+                                  organization_data):
     """Перевозчик подтягивается вместе с реквизитами."""
     result = db_registry.call("fill_from_entity", {
         "entity_type": "carrier", "entity_id": filled_db["carrier"],
     })
     assert result["ok"] is True
     fields = result["data"]["fields"]
-    assert fields["inn"] == "7701234567"
+    assert fields["inn"] == organization_data["inn"]
     assert result["data"]["target"] == "carrier_tab"
 
 

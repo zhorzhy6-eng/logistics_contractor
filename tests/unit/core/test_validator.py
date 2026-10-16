@@ -5,6 +5,11 @@
 
 Логика: ошибки (errors) — то, без чего договор не имеет смысла; замечания
 (warnings) — неполные реквизиты, которые не мешают печати.
+
+Ниже отдельным разделом — проверки связей и контрольных сумм: повтор VIN,
+даты маршрута, совпадающие ИНН сторон, несошедшиеся контрольные суммы
+ИНН/ОГРН/счёта. Контрольная сумма — всегда ЗАМЕЧАНИЕ: нестандартный
+реквизит в ЕГРЮЛ не повод не дать оператору создать договор.
 """
 
 import pytest
@@ -13,16 +18,22 @@ from core.validator import ValidationReport, Validator
 
 
 def _carrier_ip(**overrides):
-    """Перевозчик-ИП: у ИП нет КПП."""
+    """
+    Перевозчик-ИП: у ИП нет КПП.
+
+    ИНН и ОГРНИП — с верными контрольными суммами (12 цифр у ИП, 15 у
+    ОГРНИП): иначе к «корректному» набору данных добавлялось бы замечание
+    про контрольную сумму, и тесты проверяли бы не то, что задумано.
+    """
     carrier = {
         "full_name": "Индивидуальный предприниматель Иванов Елена Валентиновна",
         "short_name": "ИП Иванов Е.В.",
-        "inn": "770123456789",
+        "inn": "500100732259",
         "kpp": "",
-        "ogrn": "315770000100012",
+        "ogrn": "315770000100014",
         "entity_type": "ИП",
         "legal_address": "г. Москва, ул. Тестовая, д. 1",
-        "bank_account": "40702810000000000001",
+        "bank_account": "40702810000000000007",
         "bik": "044525225",
         "bank_name": "ПАО Сбербанк",
         "director_name": "Иванов Елена Валентиновна",
@@ -270,3 +281,227 @@ def test_report_flags():
 
     with_error = ValidationReport(errors=["что-то"])
     assert with_error.has_errors is True
+
+
+# ─────────────────────────────────────────────────────────────
+# Проверки связей (часть 3.4): повтор VIN, даты маршрута, ИНН сторон
+# ─────────────────────────────────────────────────────────────
+
+def _payload_with_vehicles(valid_payload, *vehicles):
+    payload = dict(valid_payload)
+    payload["vehicles"] = [dict(vehicle) for vehicle in vehicles]
+    return payload
+
+
+def test_duplicate_vin_is_error(valid_payload):
+    """Один VIN в двух строках — задвоенная строка, а не два автомобиля."""
+    payload = _payload_with_vehicles(
+        valid_payload,
+        {"vin": "EC3TEUMB0T0002608", "brand_model": "JETOUR T2",
+         "plate_number": "А123ВС77"},
+        {"vin": "EC3TEUMB0T0002608", "brand_model": "JETOUR T2",
+         "plate_number": "А123ВС77"},
+    )
+
+    report = Validator().check(payload)
+
+    assert any("VIN повторяется" in e for e in report.errors), report.errors
+
+
+def test_different_vins_are_not_duplicates(valid_payload):
+    payload = _payload_with_vehicles(
+        valid_payload,
+        {"vin": "EC3TEUMB0T0002608", "brand_model": "JETOUR T2",
+         "plate_number": "А123ВС77"},
+        {"vin": "XW8ZZZ61ZJG000001", "brand_model": "KIA Rio",
+         "plate_number": "В456СЕ77"},
+    )
+
+    report = Validator().check(payload)
+
+    assert not any("VIN повторяется" in e for e in report.errors)
+
+
+def test_duplicate_vin_is_case_insensitive(valid_payload):
+    """VIN пишут и строчными: регистр не делает строку другой машиной."""
+    payload = _payload_with_vehicles(
+        valid_payload,
+        {"vin": "EC3TEUMB0T0002608"},
+        {"vin": "ec3teumb0t0002608"},
+    )
+
+    report = Validator().check(payload)
+
+    assert any("VIN повторяется" in e for e in report.errors)
+
+
+def test_empty_vins_are_not_duplicates(valid_payload):
+    """Пустые VIN — не повтор: о пустом скажет отдельное замечание."""
+    payload = _payload_with_vehicles(
+        valid_payload,
+        {"vin": "", "brand_model": "JETOUR T2"},
+        {"vin": "", "brand_model": "KIA Rio"},
+    )
+
+    report = Validator().check(payload)
+
+    assert not any("VIN повторяется" in e for e in report.errors)
+
+
+def test_unloading_before_loading_is_error(valid_payload):
+    payload = dict(valid_payload)
+    payload["loadings"] = [dict(valid_payload["loadings"][0], date="2026-09-27")]
+    payload["unloadings"] = [dict(valid_payload["unloadings"][0], date="2026-09-24")]
+
+    report = Validator().check(payload)
+
+    assert any("выгрузки раньше" in e for e in report.errors), report.errors
+
+
+def test_route_in_right_order_is_not_error(valid_payload):
+    """Даты в порядке (погрузка раньше выгрузки) — противоречия нет."""
+    report = Validator().check(valid_payload)
+
+    assert not any("выгрузки раньше" in e for e in report.errors)
+
+
+def test_same_route_day_is_not_error(valid_payload):
+    payload = dict(valid_payload)
+    payload["loadings"] = [dict(valid_payload["loadings"][0], date="24.09.2026")]
+    payload["unloadings"] = [dict(valid_payload["unloadings"][0], date="24.09.2026")]
+
+    report = Validator().check(payload)
+
+    assert not any("выгрузки раньше" in e for e in report.errors)
+
+
+def test_unparsable_route_dates_are_skipped(valid_payload):
+    """Формат дат разбирает отдельная проверка: здесь ложных срабатываний нет."""
+    payload = dict(valid_payload)
+    payload["loadings"] = [dict(valid_payload["loadings"][0], date="как договоримся")]
+    payload["unloadings"] = [dict(valid_payload["unloadings"][0], date="")]
+
+    report = Validator().check(payload)
+
+    assert not any("выгрузки раньше" in e for e in report.errors)
+
+
+def test_same_inn_of_both_sides_is_warning(valid_payload):
+    payload = dict(valid_payload)
+    payload["customer"] = dict(valid_payload["customer"],
+                               inn=valid_payload["carrier"]["inn"])
+
+    report = Validator().check(payload)
+
+    assert any("ИНН перевозчика и заказчика совпадают" in w
+               for w in report.warnings), report.warnings
+    assert not report.errors
+
+
+def test_different_inn_of_both_sides_is_clean(valid_payload):
+    report = Validator().check(valid_payload)
+
+    assert not any("совпадают" in w for w in report.warnings)
+
+
+def test_missing_customer_inn_is_not_a_collision(valid_payload):
+    """Пустой ИНН заказчика — не «совпадение»: о пустом скажет своё замечание."""
+    payload = dict(valid_payload)
+    payload["customer"] = dict(valid_payload["customer"], inn="")
+
+    report = Validator().check(payload)
+
+    assert not any("совпадают" in w for w in report.warnings)
+
+
+# ─────────────────────────────────────────────────────────────
+# Контрольные суммы (часть 3.2): замечание, а не ошибка
+# ─────────────────────────────────────────────────────────────
+
+def test_valid_checksums_produce_no_warnings(valid_payload):
+    """Эталонный набор данных — с верными суммами, значит чистый отчёт."""
+    report = Validator().check(valid_payload)
+
+    assert not any("контрольной сумме" in w for w in report.warnings), report.warnings
+
+
+def test_invalid_inn_checksum_is_warning_not_error(valid_payload):
+    """Нестандартный ИНН из ЕГРЮЛ не должен запрещать договор."""
+    payload = dict(valid_payload)
+    payload["carrier"] = dict(valid_payload["carrier"], inn="7701234561")
+
+    report = Validator().check(payload)
+
+    assert report.errors == []
+    assert any("ИНН перевозчика не проходит проверку" in w
+               for w in report.warnings), report.warnings
+
+
+def test_invalid_ogrn_checksum_is_warning(valid_payload):
+    payload = dict(valid_payload)
+    payload["carrier"] = dict(valid_payload["carrier"], ogrn="1027700132196")
+
+    report = Validator().check(payload)
+
+    assert report.errors == []
+    assert any("ОГРН перевозчика не проходит проверку" in w
+               for w in report.warnings), report.warnings
+
+
+def test_invalid_ogrnip_checksum_is_warning(valid_payload):
+    """15 цифр — ОГРНИП: у него своя формула (модуль 13, а не 11)."""
+    payload = dict(valid_payload)
+    payload["carrier"] = _carrier_ip(ogrn="315770000100012")
+
+    report = Validator().check(payload)
+
+    assert report.errors == []
+    assert any("ОГРН перевозчика не проходит проверку" in w
+               for w in report.warnings), report.warnings
+
+
+def test_invalid_account_checksum_is_warning(valid_payload):
+    payload = dict(valid_payload)
+    payload["carrier"] = dict(valid_payload["carrier"],
+                              bank_account="40702810000000000001")
+
+    report = Validator().check(payload)
+
+    assert report.errors == []
+    assert any("Расчётный счёт перевозчика не проходит проверку" in w
+               for w in report.warnings), report.warnings
+
+
+def test_invalid_correspondent_account_checksum_is_warning(valid_payload):
+    payload = dict(valid_payload)
+    payload["carrier"] = dict(valid_payload["carrier"],
+                              correspondent_account="30101810400000000226")
+
+    report = Validator().check(payload)
+
+    assert report.errors == []
+    assert any("Корреспондентский счёт перевозчика не проходит проверку" in w
+               for w in report.warnings), report.warnings
+
+
+def test_account_checksum_needs_bik(valid_payload):
+    """Без БИК сумму счёта не с чем сверять — и замечания быть не должно."""
+    payload = dict(valid_payload)
+    payload["carrier"] = dict(valid_payload["carrier"], bik="",
+                              bank_account="40702810000000000001")
+
+    report = Validator().check(payload)
+
+    assert not any("счёт перевозчика не проходит" in w for w in report.warnings)
+
+
+def test_short_account_is_not_checked_by_sum(valid_payload):
+    """Длину проверяет своя проверка: короткий счёт не получает второе замечание."""
+    payload = dict(valid_payload)
+    payload["carrier"] = dict(valid_payload["carrier"],
+                              bank_account="4070281000000000000")
+
+    report = Validator().check(payload)
+
+    assert not any("не проходит проверку по контрольной сумме" in w
+                   for w in report.warnings)
