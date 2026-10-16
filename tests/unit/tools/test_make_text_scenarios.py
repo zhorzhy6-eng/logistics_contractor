@@ -30,9 +30,9 @@ from core.document_import_service import SCHEMA
 from core.pseudonymizer import Pseudonymizer
 from tools.make_text_scenarios import (
     BASE_SEED, KIND_PLAN, KINDS, LEVEL_PLAN, LEVELS, SEEDS_PATH,
-    _pii_values, build_plan, build_scenario, build_seeds, db_haystack,
-    find_db_collisions, inn_checksum_ok, load_seeds, ogrn_checksum_ok,
-    scenario_from_seed,
+    _pii_values, build_plan, build_scenario, build_seeds, db_fingerprint,
+    db_haystack, find_db_collisions, inn_checksum_ok, load_seeds,
+    ogrn_checksum_ok, scenario_from_seed, write_seeds,
 )
 from tools.synthetic_stress import score
 
@@ -91,6 +91,32 @@ def flat_fields(scenario):
             if isinstance(item, dict):
                 for key, value in item.items():
                     yield f"{section}.{key}", value
+
+
+def _working_db_matches_seeds(seeds) -> bool:
+    """
+    Та ли это рабочая база, по которой собирались зёрна.
+
+    Файл зёрен собран СО СВЕРКОЙ по базе оператора, поэтому проверки
+    «зёрна воспроизводятся» и «нет совпадений с базой» верны ровно для
+    того состояния базы, в котором он собран. Оператор добавит записи —
+    и совпадения появятся законно: прогонщик стресс-теста остановится на
+    своей проверке безопасности (`tools/run_text_stress_gigachat.py`),
+    а здесь честнее пропустить. Отпечаток базы лежит рядом с зёрнами
+    (`db_fingerprint`), его пишет `tools/make_text_scenarios.py`.
+    """
+    expected = str(seeds.get("db_fingerprint") or "")
+    if not expected:
+        return False
+    return db_fingerprint() == expected
+
+
+#: Причина пропуска для проверок, которым нужна база «как при сборке зёрен».
+STALE_DB_REASON = (
+    "рабочая contracts.db изменилась после сборки зёрен — сверку надо "
+    "повторить: python tools/make_text_scenarios.py --write-seeds "
+    "(Ask first: tools/make_*.py)"
+)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -177,6 +203,8 @@ def test_build_seeds_reproduces_written_file(seeds):
     rows = db_haystack()
     if not rows:
         pytest.skip("рабочая contracts.db не найдена — сверка не делается")
+    if not _working_db_matches_seeds(seeds):
+        pytest.skip(STALE_DB_REASON)
     rebuilt_seeds, rebuilt_meta = build_seeds(
         seed=seeds["seed"],
         collision_check=lambda scenario: find_db_collisions(scenario, rows))
@@ -318,10 +346,54 @@ def test_anonymizer_masks_documents_and_phones(sample):
                     f"#{meta['number']}: {key} ушло бы в облако открытым"
 
 
+def test_db_fingerprint_changes_with_db_contents():
+    """Отпечаток базы: тот же состав — тот же хеш, новый состав — другой."""
+    rows = ["иванов иван иванович", "7701234567"]
+    assert db_fingerprint(rows) == db_fingerprint(list(rows))
+    assert len(db_fingerprint(rows)) == 16
+    assert db_fingerprint(rows) != db_fingerprint(rows + ["новая запись"])
+    assert db_fingerprint([]) == "", "пустой базы нет — и отпечатка нет"
+
+
+def test_working_db_matches_seeds_only_with_fingerprint(seeds):
+    """Без отпечатка в файле зёрен сверку считать не с чем."""
+    assert _working_db_matches_seeds({"db_fingerprint": ""}) is False
+    assert _working_db_matches_seeds({}) is False
+
+
+def test_write_seeds_records_db_fingerprint(work_file):
+    """Отпечаток базы попадает в файл зёрен — по нему судят тесты сверки."""
+    path = work_file("text_seeds.json")
+    rows = ["иванов иван иванович", "7701234567"]
+    payload = write_seeds(path, haystack=rows)
+
+    assert payload["db_fingerprint"] == db_fingerprint(rows)
+    written = load_seeds(path)
+    assert written["db_fingerprint"] == payload["db_fingerprint"]
+    assert written["count"] == 1000
+    # Отпечаток — это хеш: значений базы в файле нет.
+    assert "иванов" not in path.read_text(encoding="utf-8").casefold()
+
+
+def test_write_seeds_without_db_check_has_empty_fingerprint(work_file):
+    """Сверки не было — отпечатка нет: сверять не с чем."""
+    path = work_file("text_seeds_nodb.json")
+    assert write_seeds(path)["db_fingerprint"] == ""
+    assert write_seeds(path, haystack=[])["db_fingerprint"] == ""
+
+
 def test_no_scenario_collides_with_working_db(seeds):
+    """Ни одно значение сценария не встречается в рабочей базе.
+
+    Проверка имеет смысл ровно для той базы, по которой собирались зёрна
+    (см. `_working_db_matches_seeds`): база оператора растёт, и новые
+    совпадения — повод пересобрать зёрна, а не отказ теста.
+    """
     rows = db_haystack()
     if not rows:
         pytest.skip("рабочая contracts.db не найдена — сверка не делается")
+    if not _working_db_matches_seeds(seeds):
+        pytest.skip(STALE_DB_REASON)
     collisions = []
     for seed, meta in zip(seeds["seeds"], seeds["scenarios"]):
         scenario = scenario_from_seed(seed, meta["kind"], meta["level"])

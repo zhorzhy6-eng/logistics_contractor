@@ -43,9 +43,12 @@ documents) и четырём уровням сложности:
 Сборщик зёрен дополнительно сверяет каждый сценарий с рабочей базой
 (`--db-check`, включён по умолчанию) и перебирает зерно, если
 сгенерированное ФИО/паспорт/ИНН случайно совпало с записью в базе.
+Отпечаток базы (`db_fingerprint`) пишется в файл зёрен: по нему видно,
+что оператор добавил записи и зёрна надо пересобрать.
 """
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -56,6 +59,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.validation.checksums import (  # noqa: E402
+    inn_checksum_ok,
+    ogrn_checksum_ok as _ogrn_checksum_ok,
+    ogrnip_checksum_ok,
+)
 from tools.make_synthetic_docs import (  # noqa: E402
     BANKS, CAR_BRANDS, CATEGORIES, CITIES, COLORS, FEMALE_NAMES, ISSUERS,
     MALE_NAMES, ORGANIZATIONS, PATRONYMICS_FEMALE, PATRONYMICS_MALE, STREETS,
@@ -190,28 +198,14 @@ BUILDING_WORDS = ("д.", "дом", "стр.", "влд.")
 # ─────────────────────────────────────────────────────────────
 # Контрольные суммы: ИНН и ОГРН
 # ─────────────────────────────────────────────────────────────
-
-def inn_checksum_ok(digits: str) -> bool:
-    """Проверка контрольной суммы ИНН (алгоритм ФНС) — 10 или 12 цифр."""
-    if len(digits) == 10:
-        weights = (2, 4, 10, 3, 5, 9, 4, 6, 8)
-        return sum(int(d) * w for d, w in zip(digits, weights)) % 11 % 10 == int(digits[9])
-    if len(digits) == 12:
-        weights_11 = (7, 2, 4, 10, 3, 5, 9, 4, 6, 8)
-        weights_12 = (3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8)
-        check_11 = sum(int(d) * w for d, w in zip(digits, weights_11)) % 11 % 10
-        check_12 = sum(int(d) * w for d, w in zip(digits, weights_12)) % 11 % 10
-        return check_11 == int(digits[10]) and check_12 == int(digits[11])
-    return False
-
+# Алгоритмы живут в `core.validation.checksums`: там же их берут валидатор
+# договора и псевдонимизатор. Здесь остаётся имя `ogrn_checksum_ok`,
+# которое принимает и 13 цифр (ОГРН), и 15 (ОГРНИП) — генератор проверяет
+# свою работу одним вызовом, не разбирая длину заранее.
 
 def ogrn_checksum_ok(digits: str) -> bool:
     """Проверка контрольной суммы ОГРН (13 цифр) и ОГРНИП (15 цифр)."""
-    if len(digits) == 13:
-        return int(digits[12]) == (int(digits[:12]) % 11) % 10
-    if len(digits) == 15:
-        return int(digits[14]) == (int(digits[:14]) % 13) % 10
-    return False
+    return _ogrn_checksum_ok(digits) or ogrnip_checksum_ok(digits)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -798,9 +792,16 @@ def build_seeds(seed: int = BASE_SEED,
 
 
 def write_seeds(path: Path = SEEDS_PATH, seed: int = BASE_SEED,
-                collision_check: Optional[Callable[[Dict[str, Any]], List[str]]] = None
+                collision_check: Optional[Callable[[Dict[str, Any]], List[str]]] = None,
+                haystack: Optional[List[str]] = None
                 ) -> Dict[str, Any]:
-    """Записывает text_seeds.json: только числа и раскладка, без значений."""
+    """
+    Записывает text_seeds.json: только числа и раскладка, без значений.
+
+    :param haystack: строки рабочей базы, по которым шла сверка. Их отпечаток
+        (`db_fingerprint`) попадает в файл и говорит тестам сверки, к какому
+        состоянию базы этот файл относится. Пустой список — сверки не было.
+    """
     seeds, scenarios = build_seeds(seed, collision_check)
     payload = {
         "version": 1,
@@ -808,6 +809,7 @@ def write_seeds(path: Path = SEEDS_PATH, seed: int = BASE_SEED,
         "count": len(seeds),
         "kinds": dict(KIND_PLAN),
         "levels": {kind: dict(LEVEL_PLAN[kind]) for kind in KINDS},
+        "db_fingerprint": db_fingerprint(haystack or []),
         "seeds": seeds,
         "scenarios": scenarios,
     }
@@ -881,6 +883,27 @@ def db_haystack(db_path: Optional[Path] = None) -> List[str]:
     return rows
 
 
+def db_fingerprint(haystack: Optional[List[str]] = None,
+                   db_path: Optional[Path] = None) -> str:
+    """
+    Отпечаток рабочей базы, по которой сверялись зёрна.
+
+    Зёрна собираются со сверкой по базе оператора, поэтому файл зёрен
+    действителен ровно для того состояния базы, в котором он собран:
+    оператор добавит записи — и какое-то зерно начнёт совпадать. Отпечаток
+    пишется в файл рядом с зёрнами, и тесты сверки по нему видят, что база
+    ушла вперёд, и пропускаются с понятной причиной вместо ложного отказа.
+    Отпечаток не разглашает данные: это хеш склеенных строк.
+
+    :return: 16 шестнадцатеричных символов или пустая строка, если базы нет.
+    """
+    rows = haystack if haystack is not None else db_haystack(db_path)
+    if not rows:
+        return ""
+    digest = hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
 def find_db_collisions(scenario: Dict[str, Any],
                        haystack: Optional[List[str]] = None,
                        db_path: Optional[Path] = None) -> List[str]:
@@ -927,6 +950,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     check = None
+    rows: Optional[List[str]] = None
     if not args.no_db_check:
         rows = db_haystack()
         if rows:
@@ -936,8 +960,9 @@ def main(argv=None) -> int:
             print("Рабочая база не найдена — сверка пропущена")
 
     if args.write_seeds:
-        payload = write_seeds(SEEDS_PATH, args.seed, check)
+        payload = write_seeds(SEEDS_PATH, args.seed, check, rows)
         print(f"Записано {payload['count']} зёрен: {SEEDS_PATH}")
+        print(f"Отпечаток базы: {payload['db_fingerprint'] or '— (сверки не было)'}")
 
     if args.show:
         seeds, scenarios = build_seeds(args.seed, check)

@@ -16,6 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
+from core.contracts.picker_order import picker_title  # noqa: E402
 from ui.placeholder_window import PlaceholderWindow  # noqa: E402
 
 
@@ -96,10 +97,14 @@ def test_each_stub_type_opens(qt_app, key, title):
 
 
 def test_title_falls_back_to_picker(qt_app):
-    """Без явного названия берётся подпись из списка типов."""
+    """Без явного названия берётся подпись из списка типов.
+
+    С приватной частью это рабочее название клиентского типа, без неё —
+    ключ типа: подпись берётся тем же вызовом, что и в самом окне.
+    """
     win = PlaceholderWindow("zayavka_excel")
     try:
-        assert "клиентский тип C" in win.message()
+        assert picker_title("zayavka_excel") in win.message()
     finally:
         win.close()
         win.deleteLater()

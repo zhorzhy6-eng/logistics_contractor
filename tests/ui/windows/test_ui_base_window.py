@@ -18,14 +18,22 @@ import pytest  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 import ui.windows.base_window as base_window_module  # noqa: E402
+from core.contracts.picker_order import picker_items, picker_title  # noqa: E402
 from ui.windows.base_window import BaseContractWindow  # noqa: E402
+
+#: Ключ типа для окна-двойника. Клиентский тип берётся, только если он есть
+#: в реестре (подключена приватная часть): селектор показывает ТОЛЬКО
+#: зарегистрированные типы, и на незарегистрированный ключ он не встанет.
+#: Без приватной части остаётся публичное «Экспедиторство» — каркас окна
+#: от ключа типа не зависит, поэтому тест проверяет то же самое.
+DEMO_TYPE = "formika" if "formika" in dict(picker_items()) else "perevozka"
 
 
 class DemoWindow(BaseContractWindow):
     """Подкласс для тестов: две вкладки, как у настоящих окон типов."""
 
-    CONTRACT_TYPE = "formika"
-    WINDOW_TITLE = "клиентский тип A"
+    CONTRACT_TYPE = DEMO_TYPE
+    WINDOW_TITLE = "Тестовое окно"
     TAB_CONFIGS = [
         ("Заказчик", "customer.svg"),
         ("Груз", "contract.svg"),
@@ -88,7 +96,9 @@ def test_programmatic_tab_change_highlights_side_nav(window):
 
 
 def test_window_title_comes_from_subclass(window):
-    assert window.windowTitle() == "клиентский тип A"
+    """Название из подкласса ГЛАВНЕЕ подписи типа из списка типов."""
+    assert window.windowTitle() == "Тестовое окно"
+    assert window.windowTitle() != picker_title(DEMO_TYPE)
 
 
 def test_every_tab_has_action_panel(window):
@@ -104,17 +114,24 @@ def test_every_tab_has_action_panel(window):
 # ─────────────────────────────────────────────────────────────
 
 def test_selector_shows_current_type(window):
-    assert window.selector.current_type() == "formika"
-    assert window.selector.combo.currentText() == "клиентский тип A"
+    assert window.selector.current_type() == DEMO_TYPE
+    # Подпись пункта берётся из списка типов: с приватной частью — рабочее
+    # название клиентского типа, без неё — название «Экспедиторства».
+    assert window.selector.combo.currentText() == picker_title(DEMO_TYPE)
 
 
 def test_selector_selection_emits_switch_request(qt_app, messages):
     win = DemoWindow()
+    other = next((k for k in win.selector.keys() if k != DEMO_TYPE), None)
+    if other is None:
+        win.force_close()
+        pytest.skip("в списке типов только один пункт: нет приватной части")
+
     collected = []
     win.switch_to_type_requested.connect(collected.append)
     try:
-        win.selector.combo.setCurrentIndex(0)  # «Экспедиторство»
-        assert collected == ["perevozka"]
+        win.selector.combo.setCurrentIndex(win.selector.keys().index(other))
+        assert collected == [other]
     finally:
         win.force_close()
 
@@ -162,7 +179,7 @@ def test_create_contract_button_shows_placeholder(window, messages):
 
     assert len(messages) == 1
     _title, text = messages[0]
-    assert "клиентский тип A" in text
+    assert picker_title(DEMO_TYPE) in text
     assert "разработке" in text or "следующих версиях" in text
 
 
@@ -172,7 +189,7 @@ def test_clear_button_shows_placeholder(window, messages):
 
     assert len(messages) == 1
     _title, text = messages[0]
-    assert "клиентский тип A" in text
+    assert picker_title(DEMO_TYPE) in text
 
 
 def test_recognize_button_calls_prompt_lookup(window, monkeypatch, messages):
@@ -187,7 +204,7 @@ def test_recognize_button_calls_prompt_lookup(window, monkeypatch, messages):
     tab = window.tabs.widget(0)
     tab.btn_recognize.click()
 
-    assert calls == ["formika"]
+    assert calls == [DEMO_TYPE]
     assert len(messages) == 1
     assert "ещё не написан" in messages[0][1]
 
@@ -213,7 +230,7 @@ def test_close_hides_window_without_destroying_it(qt_app, messages):
     # окно живо (обращение к нему не падает), но скрыто
     assert win.isVisible() is False
     assert win.tabs.count() == 2
-    assert win.selector.current_type() == "formika"
+    assert win.selector.current_type() == DEMO_TYPE
 
     win.force_close()
 
