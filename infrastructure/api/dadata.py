@@ -99,15 +99,20 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from core.secrets_store import (
+from core.utils.text_normalize import normalize_position as _normalize_position
+from infrastructure.secrets.store import (
     MISSING_DADATA_KEY_MESSAGE,
     MISSING_DADATA_SECRET_MESSAGE,
     get_dadata_key,
     get_dadata_secret,
 )
-from core.text_normalize import normalize_position as _normalize_position
 
-logger = logging.getLogger(__name__)
+# Имя логгера задано ЯВНО, а не через __name__ (было бы
+# "infrastructure.api.dadata"). Это часть контракта: config/logging_config.py
+# настраивает только APP_LOGGERS = ("core", "ui", "db", "config", "main", "qt"),
+# и логи из "infrastructure.*" выпали бы из настройки. На старое имя опираются
+# и caplog-проверки в тестах.
+logger = logging.getLogger("core.dadata_client")
 
 #: Эндпоинт поиска организации по ИНН (ИП — тоже, ИНН из 12 цифр).
 FIND_PARTY_URL = (
