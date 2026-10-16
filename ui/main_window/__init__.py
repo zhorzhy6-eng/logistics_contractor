@@ -37,12 +37,27 @@ from ui.main_window.driver_match import DriverMatchMixin  # noqa: F401
 # ── Сохранение в базу (подэтап 1.E) ──
 from ui.main_window.save import SaveMixin  # noqa: F401
 
+# ── Загрузка из базы (подэтап 1.F) ──
+from ui.main_window.load import LoadMixin  # noqa: F401
+
 # ── ВРЕМЕННО (до 1.N): каркас пока берётся из прежнего файла ──
 # Пока миксины наполняются по одному (1.C–1.L), класс MainWindow живёт в
-# `ui/_main_window_legacy.py` — так окно и 30+ UI-тестов работают на каждом
-# шаге. В 1.N этот импорт заменяется на `ui.main_window.window`, а сам файл
+# `ui/main_window/_legacy.py` — так окно и 30+ UI-тестов работают на каждом
+# шаге. Файл лежит ВНУТРИ пакета (а не рядом с ним) намеренно: тогда его
+# `__name__` — `ui.main_window._legacy`, и pytest сопоставляет импорт
+# `import ui.main_window as module` именно с этим `__init__.py`. Тесты,
+# которые читают атрибуты модуля (`module.logger`,
+# `monkeypatch.setattr(module, "load_organization_by_id", …)`), продолжают
+# работать без правок.
+#
+# В 1.N этот импорт заменяется на `ui.main_window.window`, а сам файл
 # удаляется.
-from ui._main_window_legacy import MainWindow  # noqa: F401
+from ui.main_window._legacy import (  # noqa: F401
+    MainWindow,
+    init_database,
+    load_organization_by_id,
+    logger,
+)
 
 __all__ = [
     "MainWindow",
@@ -52,4 +67,5 @@ __all__ = [
     "RecognitionMixin",
     "DriverMatchMixin",
     "SaveMixin",
+    "LoadMixin",
 ]
