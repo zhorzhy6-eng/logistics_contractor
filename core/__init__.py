@@ -61,12 +61,24 @@ from core.utils.fuzzy import (  # noqa: F401
     stem,
     words,
 )
+from core.utils import text_normalize as _text_normalize
+from core.utils.text_normalize import (  # noqa: F401
+    ABBREVIATION_MAX_LENGTH,
+    SERVICE_WORDS,
+    SHORT_VALUE_MAX_LENGTH,
+    is_abbreviation,
+    is_all_caps,
+    normalize_caps_phrase,
+    normalize_organization_fields,
+    normalize_position,
+)
 
 # ── Старые имена модулей: алиасы для `from core.<старое_имя> import ...` ──
 # Ключ — имя модуля ДО переезда, значение — модуль на новом месте.
 _MOVED_MODULES = {
     "dates": _dates,
     "fuzzy": _fuzzy,
+    "text_normalize": _text_normalize,
 }
 for _old_name, _module in _MOVED_MODULES.items():
     _sys.modules.setdefault(__name__ + "." + _old_name, _module)
@@ -82,4 +94,7 @@ __all__ = [
     "level_conditions", "search_levels",
     "case_variants", "e_yo_variants",
     "MAX_VARIANTS", "MAX_PATTERNS", "MAX_CASE_VARIANTS",
+    "ABBREVIATION_MAX_LENGTH", "SHORT_VALUE_MAX_LENGTH", "SERVICE_WORDS",
+    "is_abbreviation", "is_all_caps", "normalize_caps_phrase",
+    "normalize_organization_fields", "normalize_position",
 ]
