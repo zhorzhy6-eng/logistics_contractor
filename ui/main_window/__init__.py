@@ -21,78 +21,58 @@
 
 Публичный API не изменился: `from ui.main_window import MainWindow` работает
 по-прежнему и ведёт к ТОМУ ЖЕ классу.
+
+Совместимость имён модуля (`ui.main_window`) сохранена намеренно: прежний
+модуль был ОДНИМ файлом, поэтому внешний код и тесты обращались не только к
+`MainWindow`, но и к именам внутри него — `logger`,
+`monkeypatch.setattr(module, "load_organization_by_id", …)`. Эти имена
+реэкспортируются ниже, чтобы разбиение не потребовало правок ни в публичных
+тестах, ни в приватной части.
 """
 
-# ── Распознавание: классы задачи уже переехали (подэтап 1.C) ──
+from ui.main_window.window import MainWindow  # noqa: F401
 from ui.main_window.recognition import (  # noqa: F401
     BulkPasteDialog,
     RecognitionMixin,
     RecognitionSignals,
     RecognitionTask,
 )
-
-# ── Привязка водителя к перевозчику (подэтап 1.D) ──
-from ui.main_window.driver_match import DriverMatchMixin  # noqa: F401
-
-# ── Сохранение в базу (подэтап 1.E) ──
-from ui.main_window.save import SaveMixin  # noqa: F401
-
-# ── Загрузка из базы (подэтап 1.F) ──
-from ui.main_window.load import LoadMixin  # noqa: F401
-
-# ── Создание договора (подэтап 1.G) ──
-from ui.main_window.contract import ContractMixin  # noqa: F401
-
-# ── Сбор данных и проверка (подэтап 1.H) ──
-from ui.main_window.data import DataMixin  # noqa: F401
-
-# ── Настройки и клиент GigaChat (подэтап 1.I) ──
+from ui.main_window.layout import LayoutMixin  # noqa: F401
 from ui.main_window.settings import (  # noqa: F401
     SettingsMixin,
     _validate_gigachat_key,
 )
-
-# ── Тема, watcher системы, иконки (подэтап 1.J) ──
 from ui.main_window.theme import ThemeMixin  # noqa: F401
-
-# ── Раскладка окна (подэтап 1.K) ──
-from ui.main_window.layout import LayoutMixin  # noqa: F401
-
-# ── Закрытие окна (подэтап 1.L) ──
+from ui.main_window.data import DataMixin  # noqa: F401
+from ui.main_window.contract import ContractMixin  # noqa: F401
+from ui.main_window.save import SaveMixin  # noqa: F401
+from ui.main_window.load import LoadMixin  # noqa: F401
+from ui.main_window.driver_match import DriverMatchMixin  # noqa: F401
 from ui.main_window.close import CloseMixin  # noqa: F401
 
-# ── ВРЕМЕННО (до 1.N): каркас пока берётся из прежнего файла ──
-# Пока миксины наполняются по одному (1.C–1.L), класс MainWindow живёт в
-# `ui/main_window/_legacy.py` — так окно и 30+ UI-тестов работают на каждом
-# шаге. Файл лежит ВНУТРИ пакета (а не рядом с ним) намеренно: тогда его
-# `__name__` — `ui.main_window._legacy`, и pytest сопоставляет импорт
-# `import ui.main_window as module` именно с этим `__init__.py`. Тесты,
-# которые читают атрибуты модуля (`module.logger`,
-# `monkeypatch.setattr(module, "load_organization_by_id", …)`), продолжают
-# работать без правок.
-#
-# В 1.N этот импорт заменяется на `ui.main_window.window`, а сам файл
-# удаляется.
-from ui.main_window._legacy import (  # noqa: F401
-    MainWindow,
-    init_database,
-    load_organization_by_id,
-    logger,
-)
+# ── Совместимость с прежним ОДИНОЧНЫМ модулем `ui/main_window.py` ──
+# Тесты (и приватная часть) читают у модуля его собственные имена, а не
+# только класс: `module.logger` и подмена функций базы через
+# `monkeypatch.setattr(module, "load_organization_by_id", …)`. Логгер ниже —
+# ТОТ ЖЕ объект, что и в миксинах (одно имя "ui.main_window"), поэтому
+# `caplog.set_level(logging.DEBUG, logger="ui.main_window")` продолжает
+# видеть записи окна.
+from db.database import load_organization_by_id  # noqa: F401
+from ui.main_window.window import logger  # noqa: F401
 
 __all__ = [
     "MainWindow",
     "RecognitionTask",
     "RecognitionSignals",
     "BulkPasteDialog",
-    "RecognitionMixin",
-    "DriverMatchMixin",
-    "SaveMixin",
-    "LoadMixin",
-    "ContractMixin",
-    "DataMixin",
+    "LayoutMixin",
     "SettingsMixin",
     "ThemeMixin",
-    "LayoutMixin",
+    "DataMixin",
+    "ContractMixin",
+    "SaveMixin",
+    "LoadMixin",
+    "DriverMatchMixin",
+    "RecognitionMixin",
     "CloseMixin",
 ]
