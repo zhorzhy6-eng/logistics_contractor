@@ -259,10 +259,10 @@ def test_close_floating_cats_without_qt(monkeypatch, qapp):
 # 6. Живая проверка: окно программы закрывается — кот исчезает
 # ─────────────────────────────────────────────────────────────
 
-#: На раннере GitHub тест роняет процесс НАТИВНО (junit пустой, сводки нет):
-#: строится настоящее главное окно и закрывается по-настоящему. Локально
-#: проходит — и один, и всей папкой. В CI пропускается (`runner_crash`),
-#: на машине оператора идёт: разбор — `docs/STATE.md`, ЧАСТЬ 4.
+#: На раннере GitHub этот тест роняет процесс НАТИВНО (junit пустой, сводки
+#: нет): строится настоящее главное окно и закрывается (или скрывается).
+#: Локально проходит — и один, и всей папкой. В CI пропускается маркером
+#: `runner_crash`, на машине оператора идёт: разбор — `docs/STATE.md`, ЧАСТЬ 4.
 @pytest.mark.runner_crash
 def test_main_window_force_close_closes_cat(qapp, isolated_db, settings_service):
     """
@@ -290,6 +290,11 @@ def test_main_window_force_close_closes_cat(qapp, isolated_db, settings_service)
         main.deleteLater()
 
 
+#: На раннере GitHub этот тест роняет процесс НАТИВНО (junit пустой, сводки
+#: нет): строится настоящее главное окно и закрывается (или скрывается).
+#: Локально проходит — и один, и всей папкой. В CI пропускается маркером
+#: `runner_crash`, на машине оператора идёт: разбор — `docs/STATE.md`, ЧАСТЬ 4.
+@pytest.mark.runner_crash
 def test_main_window_hide_hides_cat(qapp, isolated_db, settings_service):
     """Закрытие крестиком (скрытие окна) тоже прячет кота."""
     from ui.main_window import MainWindow

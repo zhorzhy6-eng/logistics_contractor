@@ -233,10 +233,10 @@ def test_db_manager_widths_survive_reopen(qapp, isolated_db):
         second.deleteLater()
 
 
-#: На раннере GitHub тест роняет процесс НАТИВНО (junit пустой, сводки нет):
-#: строится настоящее главное окно и закрывается по-настоящему. Локально
-#: проходит — и один, и всей папкой. В CI пропускается (`runner_crash`),
-#: на машине оператора идёт: разбор — `docs/STATE.md`, ЧАСТЬ 4.
+#: На раннере GitHub этот тест роняет процесс НАТИВНО (junit пустой, сводки
+#: нет): строится настоящее главное окно и закрывается (или скрывается).
+#: Локально проходит — и один, и всей папкой. В CI пропускается маркером
+#: `runner_crash`, на машине оператора идёт: разбор — `docs/STATE.md`, ЧАСТЬ 4.
 @pytest.mark.runner_crash
 def test_main_window_saves_all_widths_on_force_close(qapp, isolated_db):
     """`force_close()` окна «Экспедиторство» пишет раскладку всех таблиц."""
@@ -266,6 +266,11 @@ def test_main_window_saves_all_widths_on_force_close(qapp, isolated_db):
         window.deleteLater()
 
 
+#: На раннере GitHub этот тест роняет процесс НАТИВНО (junit пустой, сводки
+#: нет): строится настоящее главное окно и закрывается (или скрывается).
+#: Локально проходит — и один, и всей папкой. В CI пропускается маркером
+#: `runner_crash`, на машине оператора идёт: разбор — `docs/STATE.md`, ЧАСТЬ 4.
+@pytest.mark.runner_crash
 def test_main_window_hide_saves_widths(qapp, isolated_db):
     """Закрытие крестиком (окно прячется) тоже сохраняет раскладку."""
     from ui.main_window import MainWindow
