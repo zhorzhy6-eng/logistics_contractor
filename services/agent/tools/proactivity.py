@@ -27,11 +27,21 @@ import logging
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from core.legal_rules import is_blank
+from core.utils import text_truncate
+
 logger = logging.getLogger("core.agent.proactivity")
 
 #: Как часто максимум показывать подсказку (секунды). Задание, часть 4:
 #: «не навязчиво: не больше 1 подсказки в 5 минут».
 SUGGESTION_INTERVAL = 300.0
+
+#: Сколько секунд после запуска программы подсказки молчат. Панель,
+#: открытая вместе с программой, не должна начинать разговор с замечания:
+#: оператор только что вошёл в приложение, форма ещё пустая, и любое
+#: «поле не заполнено» — это упрёк на пустом месте. Полминуты хватает,
+#: чтобы осмотреться и начать работу.
+STARTUP_QUIET_SECONDS = 30.0
 
 #: Через сколько дней считать срок «истекающим» по умолчанию.
 DEFAULT_WARNING_DAYS = 30
@@ -714,8 +724,12 @@ LEGAL_HINT_RULES: Tuple[str, ...] = (
 #: подсказка — совет проверить, а не приказ и не правка формы.
 LEGAL_HINT_SUFFIX = "Проверьте."
 
-#: Предел длины подсказки: длинный абзац в панели не читают.
-LEGAL_HINT_MAX_CHARS = 260
+#: Предел длины подсказки. Было 260 — и юридическое предупреждение про
+#: маршрут (381 символ вместе с источником и советом) обрывалось на
+#: «оставляет дого…». 400 вмещает самый длинный текст каталога правил
+#: целиком; обрезка остаётся страховкой от патологически длинного текста,
+#: а не обычным путём.
+LEGAL_HINT_MAX_CHARS = 400
 
 
 def legal_hint_text(violation: Dict[str, Any]) -> str:
@@ -728,6 +742,11 @@ def legal_hint_text(violation: Dict[str, Any]) -> str:
 
     Норма без ссылки в подсказку не попадает: без источника это не
     юридическая подсказка, а мнение программы.
+
+    Длинный текст режется по КОНЦУ ПРЕДЛОЖЕНИЯ, а не по счёту символов:
+    юридическая фраза, оборванная на полуслове, читается как сбой
+    программы. Совет «Проверьте.» сохраняется всегда — иначе подсказка
+    превращается в приказ.
 
     :param violation: элемент violations из check_contract_legal;
     :return: текст подсказки (пустая строка — подсказывать нечего).
@@ -742,11 +761,17 @@ def legal_hint_text(violation: Dict[str, Any]) -> str:
 
     title = str(violation.get("title") or violation.get("rule") or "").strip()
     text = f"{title}: {message}" if title else message
+
+    # Совет добавляется ДО обрезки (точнее — его место резервируется):
+    # длинный текст не должен вытеснить ту часть, ради которой подсказка
+    # и показывается.
+    advice = ""
     if not text.casefold().endswith(LEGAL_HINT_SUFFIX.casefold()):
-        text = f"{text} {LEGAL_HINT_SUFFIX}"
-    if len(text) > LEGAL_HINT_MAX_CHARS:
-        text = text[: LEGAL_HINT_MAX_CHARS - 1].rstrip() + "…"
-    return text
+        advice = LEGAL_HINT_SUFFIX
+    budget = LEGAL_HINT_MAX_CHARS - (len(advice) + 1 if advice else 0)
+
+    text = text_truncate.shorten(text, budget, mode=text_truncate.SENTENCE)
+    return f"{text} {advice}".strip() if advice else text
 
 
 def legal_hint_texts(result: Dict[str, Any],
@@ -758,6 +783,15 @@ def legal_hint_texts(result: Dict[str, Any],
     руками) и только НАСТОЯЩИЕ нарушения: «не проверено» — не повод
     подсказывать.
 
+    ПУСТОЕ ПОЛЕ — ТОЖЕ НЕ ПОВОД. Подсказка — про норму, с которой
+    разошлось ВВЕДЁННОЕ значение («ставка 20%, а с 2026 года — 22%»).
+    «Поле не заполнено» — это не норма, а состояние формы: у пустого
+    маршрута норма не нарушена, он просто ещё не заполнен. Раньше это
+    различие не проводилось, и панель, открытая вместе с программой,
+    сразу начинала разговор с упрёка «Маршрут перевозки: Поле
+    «contract_tab.route» не заполнено…». За незаполненными полями следят
+    проверка формы по кнопке «⚖» и подсветка обязательных полей.
+
     :param result: ответ check_contract_legal;
     :param rules: какие правила подсказывать;
     :return: список текстов в порядке нарушений.
@@ -766,6 +800,8 @@ def legal_hint_texts(result: Dict[str, Any],
     texts: List[str] = []
     for violation in (result or {}).get("violations") or []:
         if str(violation.get("rule") or "") not in allowed:
+            continue
+        if "current" in violation and is_blank(violation.get("current")):
             continue
         text = legal_hint_text(violation)
         if text and text not in texts:
@@ -852,6 +888,52 @@ class SuggestionEngine:
         return self._last_text
 
 
+class StartupQuiet:
+    """
+    Первые секунды после запуска подсказки молчат.
+
+    Зачем: панель, открытая вместе с программой, начинала разговор с
+    замечания («Маршрут перевозки: поле не заполнено»). Форма в этот момент
+    пустая по определению — оператор только что запустил программу, — и
+    такое «предупреждение» читается не как помощь, а как упрёк.
+
+    Часы подменяются тестами: ждать полминуты в тесте нельзя.
+
+    :param seconds: сколько секунд молчать после старта;
+    :param clock: часы (по умолчанию ``time.monotonic``).
+    """
+
+    def __init__(self, seconds: float = STARTUP_QUIET_SECONDS,
+                 clock: Optional[Callable[[], float]] = None) -> None:
+        self.seconds = max(0.0, float(seconds))
+        self._clock = clock or time.monotonic
+        #: Когда тишина началась (None — тишина не включалась).
+        self._started_at: Optional[float] = None
+
+    def start(self, seconds: Optional[float] = None) -> None:
+        """Начинает тишину заново (запуск программы, новое окно)."""
+        if seconds is not None:
+            self.seconds = max(0.0, float(seconds))
+        self._started_at = self._clock()
+
+    def stop(self) -> None:
+        """Снимает тишину немедленно (оператор сам попросил подсказку)."""
+        self._started_at = None
+
+    def active(self) -> bool:
+        """Идёт ли ещё тишина (молчать — да/нет)."""
+        if self._started_at is None:
+            return False
+        return (self._clock() - self._started_at) < self.seconds
+
+    def remaining(self) -> float:
+        """Сколько секунд тишины осталось (0 — можно подсказывать)."""
+        if self._started_at is None:
+            return 0.0
+        left = self.seconds - (self._clock() - self._started_at)
+        return max(0.0, left)
+
+
 __all__ = [
     "DEFAULT_WARNING_DAYS",
     "LEGAL_HINT_MAX_CHARS",
@@ -861,8 +943,10 @@ __all__ = [
     "RECOMMENDED",
     "REQUIRED",
     "SECTION_TITLES",
+    "STARTUP_QUIET_SECONDS",
     "SUGGESTION_INTERVAL",
     "HabitMemory",
+    "StartupQuiet",
     "SuggestionEngine",
     "habits",
     "legal_hint_text",

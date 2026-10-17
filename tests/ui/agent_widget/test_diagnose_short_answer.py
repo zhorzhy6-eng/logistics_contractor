@@ -158,14 +158,27 @@ def test_memory_add_truncates_tool_result_validly(isolated_db):
 
 
 def test_long_text_message_is_truncated_as_before(isolated_db):
-    """Обычный текст (не JSON) режется как прежде — многоточием."""
+    """
+    Обычный текст (не JSON) режется многоточием, как и прежде.
+
+    Длина при этом не превышает лимит: до 17.10.2026 текст резался
+    ``text[:limit] + "…"``, то есть выходил на символ ДЛИННЕЕ лимита.
+    Теперь режет общий ``core.utils.text_truncate.shorten`` — по границе
+    слова и ровно в лимит.
+    """
     from core.agent.memory import AgentMemory
 
     memory = AgentMemory(repository=_NoRepository())
     message = memory.add("user", "а" * 5000)
 
-    assert len(message.content) == MEMORY_LIMIT + 1
+    assert len(message.content) <= MEMORY_LIMIT
     assert message.content.endswith("…")
+
+    spaced = memory.add("user", "слово " * 2000)
+    assert len(spaced.content) <= MEMORY_LIMIT
+    assert spaced.content.endswith("…")
+    # обрезка по границе слова: недописанного слова в конце нет
+    assert spaced.content[:-1].split()[-1] == "слово"
 
 
 class _NoRepository:

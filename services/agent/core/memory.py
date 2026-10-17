@@ -34,6 +34,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+from core.utils import text_truncate
 from core.utils.json_text import shorten_json_text
 
 logger = logging.getLogger("core.agent.memory")
@@ -118,7 +119,9 @@ def _as_text(value: Any, limit: int = 4000, role: str = "") -> str:
         return text
     if role == "tool":
         return shorten_json_text(text, limit)
-    return text[:limit] + "…"
+    # Обычный текст — по границе слова: оборванное слово модель дочитает
+    # по-своему, а оператор увидит его в панели как есть.
+    return text_truncate.shorten(text, limit)
 
 
 class AgentMemory:

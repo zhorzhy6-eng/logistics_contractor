@@ -50,6 +50,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from core.utils import text_truncate
+
 logger = logging.getLogger("core.agent.tutorial")
 
 #: Путь к папке инструкций относительно корня проекта.
@@ -394,11 +396,8 @@ def _find_guides(query: str) -> List[Tuple[int, Dict[str, Any]]]:
 
 
 def _truncate(text: str, limit: int) -> str:
-    """Обрезает текст до ``limit`` символов с многоточием."""
-    body = str(text or "").strip()
-    if len(body) <= limit:
-        return body
-    return body[: max(0, limit - 3)].rstrip() + "…"
+    """Обрезает текст до ``limit`` символов (по границе слова, с многоточием)."""
+    return text_truncate.shorten(str(text or "").strip(), limit)
 
 
 def _quoted_sections(guide: Dict[str, Any],

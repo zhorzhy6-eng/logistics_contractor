@@ -40,6 +40,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from core.utils import text_truncate
+
 logger = logging.getLogger("core.agent.legal_tools")
 
 #: Сколько фрагментов отдавать модели по умолчанию (задание: top-5).
@@ -131,12 +133,12 @@ def reset_legal_clients() -> None:
 # ─────────────────────────────────────────────────────────────
 
 def _short(value: Any, limit: int = 200) -> str:
-    """Значение строкой с ограничением длины."""
+    """Значение строкой с ограничением длины (по границе слова)."""
     if value is None:
         return ""
     text = value if isinstance(value, str) else str(value)
     text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text_truncate.shorten(text, limit)
 
 
 def _error(message: str, **extra: Any) -> Dict[str, Any]:
@@ -724,7 +726,9 @@ def _finalize_answer(answer: str, sources: List[Dict[str, Any]],
 
     budget = max(200, MAX_ANSWER_CHARS - len(tail) - 2)
     if len(text) > budget:
-        text = text[: budget - 1].rstrip() + "…"
+        # Режется по концу предложения: совет юриста — связный текст, и
+        # оборванный на полуслове он читается как сбой программы.
+        text = text_truncate.shorten(text, budget, mode=text_truncate.SENTENCE)
 
     return (f"{text}\n\n{tail}" if tail else text).strip()
 

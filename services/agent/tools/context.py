@@ -23,6 +23,8 @@
 import logging
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+from core.utils import text_truncate
+
 logger = logging.getLogger("core.agent.context_tools")
 
 #: Заголовки, которыми подписываются окна типов, если у окна нет своего.
@@ -395,7 +397,7 @@ def _short(value: Any, limit: int = 200) -> str:
         return ""
     text = value if isinstance(value, str) else str(value)
     text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text_truncate.shorten(text, limit)
 
 
 def get_form_state(context: Any, section: str = "", only_empty: bool = False,

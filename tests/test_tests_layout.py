@@ -53,7 +53,13 @@ REQUIRED_GROUPS = {
 #: 63 → 64 в шаге «вёрстка панели и плавающий кот» 17.10.2026 — добавлен
 #: `tests/ui/agent_widget/test_agent_panel_layout.py` (стражи вёрстки
 #: шапки панели и прокрутки чата).
-EXPECTED_FILES = {"unit": 66, "integration": 25, "ui": 64}
+#: 66 → 68 и ui 64 → 65 в шаге «обрезка текста и проактивность при запуске»
+#: 17.10.2026 — добавлены `tests/unit/agent/test_agent_text_truncation.py`
+#: (обрезка по границе слова), `tests/unit/agent/test_agent_hints_startup.py`
+#: (тишина при запуске и пустая форма) и
+#: `tests/ui/agent_widget/test_agent_hints_startup.py` (панель молчит при
+#: старте, но не глушит режим «Обучение»).
+EXPECTED_FILES = {"unit": 68, "integration": 25, "ui": 65}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -166,9 +172,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 155 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 158 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 155, f"тестовых файлов {len(found)}, ожидается 155"
+    assert len(found) == 158, f"тестовых файлов {len(found)}, ожидается 158"
 
 
 def test_no_test_module_name_collision():

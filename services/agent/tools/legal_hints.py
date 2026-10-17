@@ -15,7 +15,11 @@
     не повторяя тот же текст;
   * включается настройкой agent.legal_hints (по умолчанию включена) —
     оператор может выключить и больше не видеть замечаний;
-  * только по полям, которые заполняют руками (LEGAL_HINT_RULES).
+  * только по полям, которые заполняют руками (LEGAL_HINT_RULES);
+  * ПУСТАЯ ФОРМА НЕ ПОДСКАЗЫВАЕТ: пока оператор ничего не ввёл, «поле не
+    заполнено» — это состояние новой формы, а не нарушение (см.
+    ``any_filled``). Иначе панель, открытая вместе с программой, начинала
+    разговор с упрёка.
 
 Как устроено
 ------------
@@ -159,6 +163,14 @@ class LegalHintTracker:
         self._last_signature = signature
         self._pending = False
 
+        if not any_filled(flat):
+            # Пустая форма — не повод для замечания: оператор её ещё не
+            # заполнял, а «поле не заполнено» в этот момент читается как
+            # упрёк сразу после запуска программы. Проверка по кнопке
+            # «⚖» при этом работает как прежде.
+            self._last_texts = []
+            return []
+
         try:
             texts = self.texts_for(flat, contract_type=contract_type)
         except Exception as error:  # noqa: BLE001 — подсказка не должна ронять окно
@@ -192,10 +204,43 @@ def _signature(values: Dict[str, Any]) -> str:
     return "\x1e".join(parts)
 
 
+def any_filled(values: Dict[str, Any]) -> bool:
+    """
+    Есть ли в форме хоть одно введённое значение.
+
+    Нужно, чтобы отличить «оператор работает с формой» от «окно только что
+    открылось»: у пустой формы замечание «поле не заполнено» — не помощь, а
+    упрёк. Списки (машины, точки маршрута) проверяются по содержимому:
+    одна пустая строка таблицы — это всё ещё пустая форма.
+    """
+    return any(_has_content(value) for value in (values or {}).values())
+
+
+def _has_content(value: Any) -> bool:
+    """
+    Ввёл ли оператор хоть что-нибудь в это место формы.
+
+    Отличие от ``legal_rules.is_blank``: там ноль — «не заполнено»
+    (денежное поле с нулём смысла не имеет), а здесь ноль — ВВЕДЁННОЕ
+    значение: раз в поле стоит 0, оператор уже работает с формой, и
+    подсказка про другое поле приходится по делу.
+    """
+    if isinstance(value, dict):
+        return any(_has_content(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_content(item) for item in value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
 __all__ = [
     "DEFAULT_ENABLED",
     "LEGAL_HINT_INTERVAL",
     "SETTINGS_KEY",
     "LegalHintTracker",
+    "any_filled",
     "enabled_from_settings",
 ]

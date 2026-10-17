@@ -103,11 +103,18 @@ def test_hint_text_without_message_is_empty():
 
 
 def test_hint_text_is_shortened():
-    """Слишком длинное нарушение обрезается: панель — не газета."""
+    """
+    Слишком длинное нарушение обрезается — но по границе слова.
+
+    Совет «Проверьте.» сохраняется всегда: подсказка — совет проверить,
+    а не обрывок абзаца (на старом коде текст кончался на середине слова).
+    """
     violation = dict(VAT_VIOLATION, message="Очень длинное объяснение. " * 40)
     text = proactivity.legal_hint_text(violation)
     assert len(text) <= proactivity.LEGAL_HINT_MAX_CHARS
-    assert text.endswith("…")
+    assert text.endswith("Проверьте.")
+    assert text.endswith(" " + proactivity.LEGAL_HINT_SUFFIX)
+    assert "…" in text
 
 
 def test_hint_texts_skips_reference_rules():
@@ -126,6 +133,28 @@ def test_hint_texts_deduplicates():
     """Одинаковая подсказка второй раз не добавляется."""
     result = {"violations": [VAT_VIOLATION, dict(VAT_VIOLATION)]}
     assert len(proactivity.legal_hint_texts(result)) == 1
+
+
+def test_hint_texts_skips_empty_values():
+    """
+    Подсказка — про значение, а не про пустое поле.
+
+    Именно «пустые» нарушения давали при запуске предупреждение о пустом
+    маршруте: форма новая, оператор ещё ничего не вводил, а панель уже
+    ругалась. Для незаполненных полей есть проверка формы по кнопке.
+    """
+    empty_route = dict(VAT_VIOLATION, rule="route_required",
+                       title="Маршрут перевозки",
+                       message="Поле «contract_tab.route» не заполнено.",
+                       source="ПП РФ № 2200", current="")
+    empty_days = dict(VAT_VIOLATION, rule="payment_days", title="Срок оплаты",
+                      message="Поле «contract_tab.payment_days» не заполнено.",
+                      source="ГК РФ ст. 790 п. 1", current=0)
+    texts = proactivity.legal_hint_texts(
+        {"violations": [empty_route, empty_days, VAT_VIOLATION]}
+    )
+    assert len(texts) == 1
+    assert texts[0].startswith("Ставка НДС")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -179,11 +208,36 @@ def test_tracker_respects_interval():
     assert first, "первая подсказка должна показаться"
 
     clock.advance(10)
-    other = {"contract_tab.payment_days": 0}
+    # Другое неверное значение: текст другой, а пауза та же.
+    other = {"contract_tab.vat_rate": "21%"}
     assert tracker.refresh(values=other, contract_type="perevozka") == []
 
     clock.advance(300)
     assert tracker.refresh(values=other, contract_type="perevozka") != []
+
+
+def test_tracker_is_silent_on_empty_form():
+    """
+    Пустая форма не подсказывает «поле не заполнено».
+
+    Именно это происходило при запуске программы: панель открыта, форма
+    пустая, и Максимилиан начинал разговор с упрёка. Проверка по кнопке
+    «⚖» при этом работает как прежде — она явная.
+    """
+    tracker = lh.LegalHintTracker(enabled=True, clock=FakeClock())
+    empty = {"contract_tab.route": "", "contract_tab.vat_rate": "",
+             "vehicles": [{"vin": "", "brand_model": ""}]}
+    assert tracker.refresh(values=empty, contract_type="perevozka") == []
+    assert tracker.last_texts == []
+
+
+def test_tracker_speaks_once_form_has_data():
+    """Как только оператор что-то ввёл, непустая форма снова подсказывает."""
+    tracker = lh.LegalHintTracker(enabled=True, clock=FakeClock())
+    values = {"contract_tab.route": "", "contract_tab.vat_rate": "20%"}
+    hints = tracker.refresh(values=values, contract_type="perevozka")
+    assert hints, "заполненная форма с нарушением нормы должна подсказать"
+    assert any("22%" in text for text in tracker.last_texts)
 
 
 def test_tracker_skips_unchanged_form():
@@ -254,7 +308,8 @@ def test_tracker_check_error_does_not_crash():
 
 def test_tracker_last_texts_reports_all_hints():
     """last_texts отдаёт все подсказки последней проверки (журнал, тесты)."""
-    values = {"contract_tab.vat_rate": "20%", "contract_tab.payment_days": 0,
+    values = {"contract_tab.vat_rate": "20%",
+              "driver_tab.license_expiry_date": "2020-01-01",
               "contract_tab.route": ""}
     tracker = lh.LegalHintTracker(enabled=True, clock=FakeClock())
     tracker.refresh(values=values, contract_type="perevozka")

@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from core.agent.words import NON_NAME_WORDS
+from core.utils import text_truncate
 
 logger = logging.getLogger("core.agent.tools")
 
@@ -182,7 +183,7 @@ def _short(value: Any, limit: int = MAX_VALUE_CHARS) -> str:
         return ""
     text = value if isinstance(value, str) else str(value)
     text = " ".join(text.split())
-    return text if len(text) <= limit else text[:limit - 1] + "…"
+    return text_truncate.shorten(text, limit)
 
 
 def _error(message: str, **extra: Any) -> Dict[str, Any]:

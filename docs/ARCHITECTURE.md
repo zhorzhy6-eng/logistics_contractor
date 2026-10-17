@@ -59,7 +59,7 @@ main.py                  # точка входа: поднимает логи, �
 core/                    # ЯДРО: доменная логика, без Qt
   __init__.py            # реэкспорт и алиасы старых путей (см. § 6)
   data/                  # ContractData, НДС — нормализация данных
-  utils/                 # dates, fuzzy, text_normalize, address_utils, json_text
+  utils/                 # dates, fuzzy, text_normalize, address_utils, json_text, text_truncate
   validation/            # общий Validator
   contracts/             # реестр типов + генераторы + валидаторы
     contract_types.py    # ContractType (Enum)

@@ -44,6 +44,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+from core.utils import text_truncate
 from services.agent.core.llm import SafeChat
 from services.agent.persona.emotional import emotional_block
 from services.agent.core.long_memory import (
@@ -1073,7 +1074,7 @@ def _brief(data: Any, limit: int = 160) -> str:
     text = " ".join(text.split())
     if _technical_key(text):
         return ""
-    return text if len(text) <= limit else text[:limit - 1] + "…"
+    return text_truncate.shorten(text, limit)
 
 
 #: Поля, которыми инструменты описывают СЕБЯ, а не работу: имя окна, тип
@@ -1113,14 +1114,22 @@ def _technical_key(key: Any) -> bool:
     return text.isascii() and text.islower() and text.replace("_", "").isalpha()
 
 
-def _short_value(value: Any, limit: int = 60) -> str:
-    """Короткое значение поля для служебного ответа."""
+def _short_value(value: Any, limit: int = 120) -> str:
+    """
+    Короткое значение поля для служебного ответа.
+
+    Режется по границе слова (``core.utils.text_truncate``): значение,
+    оборванное на полуслове («Москва — Ту…»), оператор читает как сбой.
+    Лимит 120 вместо 60: адрес, маршрут и наименование в 60 символов не
+    влезают, а служебная строка — это ещё не полотно (их не больше
+    четырёх, см. ``_brief``).
+    """
     if value is None or isinstance(value, bool):
         return ""
     text = " ".join(str(value).split())
     if not text:
         return ""
-    return text if len(text) <= limit else text[:limit - 1] + "…"
+    return text_truncate.shorten(text, limit)
 
 
 def _cap(text: str, limit: int) -> str:

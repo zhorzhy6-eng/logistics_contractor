@@ -44,6 +44,8 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from core.utils import text_truncate
+
 logger = logging.getLogger("core.agent.dadata_tools")
 
 #: Сколько живёт ответ DaData в кэше (задание, часть 2: «кэш 1 час»).
@@ -159,12 +161,12 @@ def _client():
 
 
 def _short(value: Any, limit: int = 300) -> str:
-    """Значение строкой с ограничением длины."""
+    """Значение строкой с ограничением длины (по границе слова)."""
     if value is None:
         return ""
     text = value if isinstance(value, str) else str(value)
     text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text_truncate.shorten(text, limit)
 
 
 def _fail(exc: Exception, action: str) -> Dict[str, Any]:

@@ -1370,6 +1370,12 @@ class AgentWidget(QObject):
         self._suggestion_timer = QTimer(self)
         self._suggestion_timer.setInterval(SUGGESTION_CHECK_MS)
         self._suggestion_timer.timeout.connect(self._check_suggestions)
+        #: Тишина после запуска программы: панель, открытая вместе с ней,
+        #: не начинает разговор с замечания. Первые полминуты оператор
+        #: осматривается, форма ещё пустая — «поле не заполнено» в этот
+        #: момент читается как упрёк, а не как помощь.
+        self._startup_quiet = proactivity.StartupQuiet()
+        self._startup_quiet.start()
         #: Тишина после последнего действия оператора, прежде чем
         #: подсказывать: во время заполнения формы подсказка мешает.
         self._idle_timer = QTimer(self)
@@ -2012,15 +2018,24 @@ class AgentWidget(QObject):
         всплывание поверх формы — именно та навязчивость, которой задание
         просит избегать. И только после паузы тишины (`_idle_timer`):
         подсказка посреди заполнения формы мешает.
+
+        Первые `STARTUP_QUIET_SECONDS` секунд после запуска подсказки молчат
+        (`_startup_quiet`). Раньше панель, открытая вместе с программой,
+        через пять секунд выдавала «Маршрут перевозки: поле не заполнено» —
+        упрёк на пустом месте: оператор ещё ничего не начинал.
+
+        Режим «Обучение» тишиной не глушится: его включил сам оператор, и
+        он как раз ждёт подсказок по шагам.
         """
         if self.panel is None or not self.panel.isVisible():
             return
         if self._idle_timer.isActive():
             return
 
-        self._offer_proactive()
+        if not self._startup_quiet.active():
+            self._offer_proactive()
+            self._offer_legal_hint()
         self._offer_tutorial()
-        self._offer_legal_hint()
 
     def _offer_proactive(self) -> None:
         """Показывает проактивную подсказку, если пора (часть 4)."""
