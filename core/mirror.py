@@ -630,7 +630,12 @@ def _tab_data(window: Any, tab_key: str) -> Dict[str, Any]:
 def current_target_data(target_window: Any,
                         target_type: str) -> Dict[str, Dict[str, Any]]:
     """Текущие данные всех вкладок цели: {ключ вкладки: get_data()}."""
-    profiles = TARGET_PROFILES.get(target_type) or {}
+    # `TARGET_PROFILES` отдаётся модульным `__getattr__` (карты типов переехали
+    # в приватный модуль), а он срабатывает ТОЛЬКО на доступ к атрибуту: чтение
+    # глобального имени падало `NameError` — та же грабля, что в
+    # services/recognition/import_service.py. Ниже — тот же вызов, что и в
+    # `collect_conflicts`: ровно то, что вернул бы `__getattr__`.
+    profiles = target_profiles().get(target_type) or {}
     data: Dict[str, Dict[str, Any]] = {}
     for key in profiles:
         data[key] = _tab_data(target_window, key)
