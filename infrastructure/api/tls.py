@@ -43,10 +43,36 @@ CERTS_SUBDIR = os.path.join("resources", "certs")
 CA_ENV_VAR = "LOGISTICS_CA_BUNDLE"
 
 
+def _find_project_root() -> str:
+    """
+    Корень проекта — по маркеру (`main.py` или `pytest.ini`).
+
+    Не считаем от `__file__`: модуль переезжает (`core/tls_config.py` →
+    `infrastructure/api/tls.py`), и жёсткая глубина ломается молча — после
+    переезда два `dirname` давали `infrastructure/`, а сертификат искался
+    в `infrastructure/resources/certs`. Маркер надёжнее: он лежит в корне
+    и не зависит от глубины модуля.
+
+    Порядок:
+      1. поднимаемся вверх от `__file__`, ищем `main.py` или `pytest.ini`;
+      2. fallback — старое поведение (два `dirname` от `__file__`): он нужен
+         для собранного exe (PyInstaller), где маркера в `_MEIPASS` нет.
+         Там `certs_dir()` всё равно не главный источник — каталог сборки
+         проверяется раньше, в `_search_dirs()`.
+    """
+    here = os.path.abspath(__file__)
+    for _ in range(6):  # не больше 6 уровней вверх
+        here = os.path.dirname(here)
+        if (os.path.exists(os.path.join(here, "main.py"))
+                or os.path.exists(os.path.join(here, "pytest.ini"))):
+            return here
+    # Fallback — старое поведение (два dirname).
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def certs_dir() -> str:
     """Папка проекта с сертификатами."""
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(project_root, CERTS_SUBDIR)
+    return os.path.join(_find_project_root(), CERTS_SUBDIR)
 
 
 def _settings_ca_bundle() -> str:
