@@ -2869,6 +2869,195 @@ def build_registry(context: Optional[AgentContext] = None) -> ToolRegistry:
         summary="Скачать правовой акт в базу",
     ))
 
+    # ── 5.1. Юридическая проверка формы (уровень 1 юридической помощи) ──
+    # Логика живёт в services/agent/tools/legal_check.py: чтение формы и
+    # каталог правил (core/legal_rules.py). Форма НЕ меняется — только
+    # чтение, поэтому подтверждение оператора не требуется.
+    from services.agent.tools import legal_check as legal_check_tools
+
+    def check_contract_legal(contract_type: str = "", **_):
+        """Проверка открытой формы по каталогу юридических правил."""
+        return legal_check_tools.check_contract_legal(
+            contract_type=contract_type,
+            window=ctx.current_window(),
+        )
+
+    registry.register(Tool(
+        name="check_contract_legal",
+        description=(
+            "Проверить открытую форму на соответствие юридическим нормам: "
+            "ставка НДС, срок оплаты, маршрут, водительское удостоверение. "
+            "Возвращает список нарушений С УКАЗАНИЕМ ИСТОЧНИКА (акт, "
+            "статья) и цитатой нормы. Форму НЕ меняет — только читает. "
+            "Вызывай на вопрос «проверь форму», «всё ли верно в договоре», "
+            "«нет ли нарушений». Замечания пересказывай оператору с "
+            "источником; ничего не правь без его просьбы."
+        ),
+        parameters=_json_schema({
+            "contract_type": {
+                "type": "string",
+                "description": "ключ типа договора (perevozka, arenda_ts, "
+                               "formika, logistiks_rus, hav); пусто — у "
+                               "открытого окна",
+            },
+        }),
+        function=check_contract_legal,
+        summary="Юридическая проверка формы",
+    ))
+
+    # ── 5.2. Объяснение последствий и юридический советник ──
+    # Оба инструмента — RAG + один запрос к модели; тексты промптов лежат
+    # в services/agent/core/prompts/legal_*.txt. Источник обязателен: без
+    # него ответ не считается юридическим (см. legal.py).
+    def explain_consequences(scenario: str = "", contract_type: str = "", **_):
+        """Объясняет последствия ситуации по нормам правовой базы."""
+        return legal_tools.explain_consequences(
+            scenario=scenario, contract_type=contract_type or ctx.contract_type,
+        )
+
+    def legal_advice(question: str = "", contract_type: str = "", **_):
+        """Отвечает на юридический вопрос по нормам правовой базы."""
+        return legal_tools.legal_advice(
+            question=question, contract_type=contract_type or ctx.contract_type,
+        )
+
+    registry.register(Tool(
+        name="explain_consequences",
+        description=(
+            "Объяснить ПОСЛЕДСТВИЯ ситуации по нормам права: какая норма "
+            "относится к делу, чем это грозит и что делать. Ищет нормы в "
+            "правовой базе и отвечает с цитатой и источником. Вызывай на "
+            "«что будет, если…», «чем грозит…», «какие последствия…». "
+            "Если нормы в базе нет — так и скажет: «в базе нет». Ответ не "
+            "выдумывай и не дополняй своими словами."
+        ),
+        parameters=_json_schema({
+            "scenario": {
+                "type": "string",
+                "description": "ситуация словами оператора: «срок оплаты "
+                               "45 дней, заказчик задерживает платёж»",
+            },
+            "contract_type": {
+                "type": "string",
+                "description": "ключ типа договора; пусто — у открытого окна",
+            },
+        }, required=["scenario"]),
+        function=explain_consequences,
+        summary="Объяснить последствия ситуации",
+    ))
+    registry.register(Tool(
+        name="legal_advice",
+        description=(
+            "Юридический совет по вопросу оператора: норма с дословной "
+            "цитатой, источник, применимость к договору. Отвечает ТОЛЬКО "
+            "по нормам правовой базы; если нормы нет — «в базе нет». На "
+            "сложные вопросы (суд, спор, деньги) в конце — «Проверьте с "
+            "юристом.». Вызывай на «можно ли…», «вправе ли…», «как "
+            "правильно по закону…»."
+        ),
+        parameters=_json_schema({
+            "question": {
+                "type": "string",
+                "description": "юридический вопрос словами оператора",
+            },
+            "contract_type": {
+                "type": "string",
+                "description": "ключ типа договора; пусто — у открытого окна",
+            },
+        }, required=["question"]),
+        function=legal_advice,
+        summary="Юридический совет по норме",
+    ))
+
+    # ── 5.3. Сравнение с типовым договором ──
+    # Типовые значения — практика проекта (data/knowledge/legal/templates),
+    # а не норма права; в ответе это сказано прямо (см. legal_compare.py).
+    from services.agent.tools import legal_compare as legal_compare_tools
+
+    def compare_with_typical(contract_type: str = "", **_):
+        """Сравнение открытой формы с типовым договором проекта."""
+        return legal_compare_tools.compare_with_typical(
+            contract_type=contract_type or ctx.contract_type,
+            window=ctx.current_window(),
+        )
+
+    registry.register(Tool(
+        name="compare_with_typical",
+        description=(
+            "Сравнить открытую форму с ТИПОВЫМ договором проекта: срок "
+            "оплаты, ставка НДС, обязательные поля. Показывает расхождения "
+            "и прямо говорит, что типовой договор — практика, а не норма "
+            "права. Форму НЕ меняет. Вызывай на «сравни с типовым», «как "
+            "обычно у нас», «что отличается от бланка»."
+        ),
+        parameters=_json_schema({
+            "contract_type": {
+                "type": "string",
+                "description": "ключ типа договора; пусто — у открытого окна",
+            },
+        }),
+        function=compare_with_typical,
+        summary="Сравнение с типовым договором",
+    ))
+
+    # ── 7. Шаблоны: анализ и предложение правки (ТОЛЬКО ЧТЕНИЕ) ──
+    # Применение правки сюда НЕ выведено намеренно: агент не имеет права
+    # менять шаблон. Правка идёт через диалог подтверждения с diff
+    # (ui/template_diff_dialog.py), где каждое изменение видит оператор.
+    from services.agent.tools import template_analyzer as template_analyzer_tools
+    from services.agent.tools import template_editor as template_editor_tools
+
+    def analyze_template(template_path: str = "", **_):
+        """Анализ шаблона: плейсхолдеры, блоки, предупреждения."""
+        path = template_analyzer_tools.resolve_template_path(template_path)
+        return template_analyzer_tools.analyze_template(path)
+
+    def propose_template_fix(template_path: str = "", issue: str = "",
+                             old: str = "", new: str = "", **_):
+        """Предложение правки шаблона (файл НЕ меняется)."""
+        path = template_analyzer_tools.resolve_template_path(template_path)
+        return template_editor_tools.propose_template_fix(
+            path, issue, old=old or None, new=new or None,
+        )
+
+    registry.register(Tool(
+        name="analyze_template",
+        description=(
+            "Проанализировать шаблон договора (.docx/.xlsx): сколько в нём "
+            "плейсхолдеров и какие, парные ли условные блоки, сколько "
+            "таблиц и стилей, есть ли устаревший текст (например «НДС "
+            "20%»). Шаблон НЕ меняется. Вызывай на «проверь шаблон», "
+            "«что с шаблоном», «какие поля в шаблоне»."
+        ),
+        parameters=_json_schema({
+            "template_path": {
+                "type": "string",
+                "description": "путь к шаблону или его имя "
+                               "(например shablon_ooo.docx)",
+            },
+        }, required=["template_path"]),
+        function=analyze_template,
+        summary="Анализ шаблона",
+    ))
+    registry.register(Tool(
+        name="propose_template_fix",
+        description=(
+            "Предложить правку шаблона (например «НДС 20%» → «НДС 22%») "
+            "и показать, что изменится. Шаблон НЕ меняется: правку "
+            "применяет оператор через диалог подтверждения. Абзацы с "
+            "плейсхолдерами помечены safe=false — их не трогаем."
+        ),
+        parameters=_json_schema({
+            "template_path": {"type": "string",
+                              "description": "путь к шаблону или его имя"},
+            "issue": {"type": "string", "description": "что не так"},
+            "old": {"type": "string", "description": "заменяемый текст"},
+            "new": {"type": "string", "description": "новый текст"},
+        }, required=["template_path", "issue"]),
+        function=propose_template_fix,
+        summary="Предложить правку шаблона",
+    ))
+
     # ── 6. Обучение: инструкции по заполнению (база знаний) ──
     # Логика живёт в services/agent/tools/tutorial.py: чтение файлов и поиск по ним.
     # Здесь — только регистрация, как у правовой базы и DaData.

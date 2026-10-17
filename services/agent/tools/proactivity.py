@@ -690,6 +690,89 @@ def _history_text(step: str, last_action: str,
 # Движок подсказок: когда их показывать
 # ─────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────
+# Юридические подсказки (уровень 3 юридической помощи)
+# ─────────────────────────────────────────────────────────────
+#: Правила, по которым имеет смысл подсказывать прямо при вводе: оператор
+#: только что вписал число или дату, и норму рядом с полем он увидит.
+#: Справочные нормы сюда не входят — подсказывать «про срок претензии»
+#: посреди заполнения формы значит мешать.
+#:
+#: В задании назывались поля payment_days, penalty_rate и license_expiry.
+#: В формах проекта ставки пени нет (её проверяет сравнение с типовым
+#: договором), а ставка НДС есть и меняется законом — поэтому здесь
+#: vat_rate. Набор полей — не догадка, а состав каталога правил
+#: (core/legal_rules.py) с проверяемыми полями.
+LEGAL_HINT_RULES: Tuple[str, ...] = (
+    "vat_rate",
+    "payment_days",
+    "route_required",
+    "driver_license_valid",
+)
+
+#: Что добавляется в конец юридической подсказки. Требование задания:
+#: подсказка — совет проверить, а не приказ и не правка формы.
+LEGAL_HINT_SUFFIX = "Проверьте."
+
+#: Предел длины подсказки: длинный абзац в панели не читают.
+LEGAL_HINT_MAX_CHARS = 260
+
+
+def legal_hint_text(violation: Dict[str, Any]) -> str:
+    """
+    Текст юридической подсказки из нарушения проверки формы.
+
+    Подсказка начинается с того, что видит оператор в поле, и заканчивается
+    советом проверить: «Ставка НДС: значение 20%, а по НК РФ ст. 164 п. 3 —
+    22%. Проверьте.»
+
+    Норма без ссылки в подсказку не попадает: без источника это не
+    юридическая подсказка, а мнение программы.
+
+    :param violation: элемент violations из check_contract_legal;
+    :return: текст подсказки (пустая строка — подсказывать нечего).
+    """
+    if not isinstance(violation, dict):
+        return ""
+
+    source = str(violation.get("source") or "").strip()
+    message = " ".join(str(violation.get("message") or "").split())
+    if not source or not message:
+        return ""
+
+    title = str(violation.get("title") or violation.get("rule") or "").strip()
+    text = f"{title}: {message}" if title else message
+    if not text.casefold().endswith(LEGAL_HINT_SUFFIX.casefold()):
+        text = f"{text} {LEGAL_HINT_SUFFIX}"
+    if len(text) > LEGAL_HINT_MAX_CHARS:
+        text = text[: LEGAL_HINT_MAX_CHARS - 1].rstrip() + "…"
+    return text
+
+
+def legal_hint_texts(result: Dict[str, Any],
+                     rules: Sequence[str] = LEGAL_HINT_RULES) -> List[str]:
+    """
+    Подсказки из результата юридической проверки — по одной на правило.
+
+    Берутся только правила из rules (поля, которые оператор заполняет
+    руками) и только НАСТОЯЩИЕ нарушения: «не проверено» — не повод
+    подсказывать.
+
+    :param result: ответ check_contract_legal;
+    :param rules: какие правила подсказывать;
+    :return: список текстов в порядке нарушений.
+    """
+    allowed = {str(name) for name in rules}
+    texts: List[str] = []
+    for violation in (result or {}).get("violations") or []:
+        if str(violation.get("rule") or "") not in allowed:
+            continue
+        text = legal_hint_text(violation)
+        if text and text not in texts:
+            texts.append(text)
+    return texts
+
+
 class SuggestionEngine:
     """
     Решает, показывать ли подсказку: включена ли она и не рано ли снова.
@@ -771,6 +854,9 @@ class SuggestionEngine:
 
 __all__ = [
     "DEFAULT_WARNING_DAYS",
+    "LEGAL_HINT_MAX_CHARS",
+    "LEGAL_HINT_RULES",
+    "LEGAL_HINT_SUFFIX",
     "ORDER",
     "RECOMMENDED",
     "REQUIRED",
@@ -779,6 +865,8 @@ __all__ = [
     "HabitMemory",
     "SuggestionEngine",
     "habits",
+    "legal_hint_text",
+    "legal_hint_texts",
     "missing_required",
     "next_field",
     "order_index",

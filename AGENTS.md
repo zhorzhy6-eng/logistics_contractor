@@ -180,14 +180,37 @@ core/                    # доменная логика, без Qt
 
 services/                # прикладные сценарии поверх ядра
   recognition/           # распознавание документов (был core/document_*.py)
+  agent/                 # Максимилиан: ядро, образ, инструменты, промпты
+    core/prompts/        # maximilian.txt, legal_explain.txt, legal_advisor.txt
+    tools/               # реестр и инструменты (см. ниже)
 db/                      # SQLite + логирование запросов
 ui/                      # PyQt5: окна, вкладки, виджеты
   windows/               # окна типов (по подпакету на тип)
+  legal_check_dialog.py  # диалог юридической проверки формы
+  template_diff_dialog.py  # диалог «было / стало» для правки шаблона
+  template_tools_dialog.py # окно «Шаблоны»: анализ и правка бланка
 templates/               # DOCX/XLSX-шаблоны (только читать)
 tools/                   # make_*_template.py, make_golden.py
 tests/                   # pytest
-docs/                    # ARCHITECTURE.md, STATE.md, PRIVATE_MIGRATION.md
+docs/                    # ARCHITECTURE.md, STATE.md, LEGAL_HELP.md, …
+data/knowledge/legal/    # правовая база (text/, rules.json, templates/)
 ```
+
+### Юридическая помощь и шаблоны (шаг «юр. помощь + правка шаблонов»)
+
+| Модуль | Что делает |
+|---|---|
+| core/legal_rules.py | Каталог норм: загрузка data/knowledge/legal/rules.json, check_rule, describe_rule. Норма без цитаты в каталог не попадает |
+| services/agent/tools/legal_check.py | check_contract_legal — проверка формы по нормам, только чтение |
+| services/agent/tools/legal_hints.py | Юридические подсказки в панели (настройка agent.legal_hints) |
+| services/agent/tools/legal.py | search_legal, download_legal, explain_consequences, legal_advice |
+| services/agent/tools/legal_compare.py | compare_with_typical — сравнение с типовым договором (практика, не норма) |
+| services/agent/tools/template_analyzer.py | Анализ шаблона: плейсхолдеры, блоки, стили, устаревший текст (только чтение) |
+| services/agent/tools/template_editor.py | Предложение правки, применение через .bak + проверка + откат |
+
+Правила: шаблон меняется **только** через диалог подтверждения; агент
+правки не применяет; docs/LEGAL_HELP.md и docs/TEMPLATE_SAFETY.md —
+подробности.
 
 ## 7. Ссылки
 

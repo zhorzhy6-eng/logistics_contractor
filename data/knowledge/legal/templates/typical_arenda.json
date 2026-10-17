@@ -1,0 +1,41 @@
+{
+  "_comment": "ТИПОВОЙ договор аренды ТС с экипажем проекта. Это ПРАКТИКА, а не норма права. Норма права указывается в поле norm и только там, где она есть в правовой базе.",
+  "contract_type": "arenda_ts",
+  "title": "Типовой договор аренды ТС с экипажем",
+  "payment_days": 30,
+  "penalty_rate": 0.1,
+  "vat_rate": 22,
+  "required_fields": ["number", "date", "route", "price"],
+  "source": "типовой договор аренды проекта (шаблоны shablon_arenda_ts_*.docx)",
+  "norm": "НДС — НК РФ ст. 164 п. 3 (22%); срок оплаты и размер пени законом не установлены — это условия типового договора",
+  "note": "30 дней оплаты и пеня 0,1% в день — условия типового договора аренды. Расхождение — повод проверить условия сделки, а не ошибка формы.",
+  "severity": "warning",
+  "_fields": {
+    "payment_days": {
+      "title": "Срок оплаты",
+      "field": "price_tab.payment_days",
+      "field_aliases": ["contract_tab.payment_days"],
+      "unit": "дней",
+      "note": "в типовом договоре — 30 дней"
+    },
+    "penalty_rate": {
+      "title": "Пеня за просрочку",
+      "field": "price_tab.penalty_rate",
+      "unit": "% в день",
+      "note": "в типовом договоре — 0,1% в день; поля в форме проекта нет"
+    },
+    "vat_rate": {
+      "title": "Ставка НДС",
+      "field": "price_tab.vat_rate",
+      "field_aliases": ["contract_tab.vat_rate"],
+      "unit": "%",
+      "note": "22% — действующая основная ставка (НК РФ ст. 164 п. 3)"
+    }
+  },
+  "_required_fields": {
+    "number": {"field": "contract_tab.number", "title": "номер договора"},
+    "date": {"field": "contract_tab.date", "title": "дата договора"},
+    "route": {"field": "route_tab.route", "field_aliases": ["contract_tab.route"], "title": "маршрут"},
+    "price": {"field": "price_tab.sum_total", "field_aliases": ["price_tab.price_with_vat", "contract_tab.price_with_vat"], "title": "сумма договора"}
+  }
+}

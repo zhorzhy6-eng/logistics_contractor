@@ -71,6 +71,10 @@ DEFAULT_AGENT_SETTINGS: Dict[str, Any] = {
     #: Показано ли предложение обучения при первом запуске. False — при
     #: первом запуске предложить включить обучение и поставить True.
     "tutorial_seen": False,
+    #: Юридические подсказки (уровень 3 юридической помощи): замечание в
+    #: панели, когда в форме значение расходится с нормой права. Подсказка
+    #: только текст — форма не меняется, поэтому включена по умолчанию.
+    "legal_hints": True,
 }
 
 #: Режимы показа агента: только иконка, только панель, и то и другое.
@@ -101,7 +105,7 @@ def normalize_agent_settings(values: Optional[Dict[str, Any]] = None) -> Dict[st
         result.update(values)
 
     for key in ("enabled", "show_floating", "show_panel_on_start", "proactive",
-                "tutorial_mode", "tutorial_seen"):
+                "tutorial_mode", "tutorial_seen", "legal_hints"):
         value = result.get(key)
         if not isinstance(value, bool):
             result[key] = str(value).strip().lower() in ("1", "true", "yes", "да", "on")

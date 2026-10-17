@@ -37,7 +37,8 @@
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger("core.agent.legal_tools")
 
@@ -113,10 +114,16 @@ def get_legal_parser() -> Any:
 
 
 def reset_legal_clients() -> None:
-    """Забывает созданные RAG и парсер (нужно тестам и перезапуску)."""
+    """
+    Забывает созданные RAG, парсер и обработчик модели.
+
+    Нужно тестам (подменить на подставные объекты и вернуть как было) и
+    перезапуску после смены ключа или настроек модели.
+    """
     global _rag, _parser
     _rag = None
     _parser = None
+    reset_legal_llm()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -450,16 +457,521 @@ def _is_in_base(parser: Any, document: Any) -> bool:
         return False
 
 
+
+
+# ─────────────────────────────────────────────────────────────
+# Модель для объяснений (RAG + запрос к GigaChat)
+# ─────────────────────────────────────────────────────────────
+#: Папка промптов агента: оттуда берутся тексты юридических помощников.
+PROMPTS_DIR = Path(__file__).resolve().parent.parent / "core" / "prompts"
+
+#: Промпт «объясни последствия» (три пункта: норма, последствия, что делать).
+EXPLAIN_PROMPT_FILE = "legal_explain.txt"
+
+#: Промпт «юридический советник» (цитата, источник, применимость).
+ADVISOR_PROMPT_FILE = "legal_advisor.txt"
+
+#: Обязательная фраза для сложных вопросов. Требование задания: совет
+#: проверки у юриста — не опция, а часть ответа.
+LAWYER_NOTE = "Проверьте с юристом."
+
+#: Признаки СЛОЖНОГО вопроса: спор, суд, деньги, ответственность. По ним
+#: ответ обязательно заканчивается советом проверить у юриста.
+COMPLEX_MARKERS = (
+    "суд", "иск", "спор", "штраф", "убыт", "расторж", "неустойк",
+    "претензи", "арест", "уголовн", "ответствен", "взыск", "пени",
+)
+
+#: Сколько норм считать «сложным» вопросом, даже если слов-маркеров нет.
+COMPLEX_SOURCES = 3
+
+#: Предел длины ответа: длинный текст в панели и в диалоге не читают.
+MAX_ANSWER_CHARS = 4000
+
+#: Готовый обработчик запросов к модели: (messages) -> текст ответа.
+#: Создаётся при первом обращении и подменяется в тестах.
+_llm: Optional[Any] = None
+
+
+def set_legal_llm(llm: Optional[Any]) -> Optional[Any]:
+    """
+    Подставляет обработчик запроса к модели (тесты, пробы).
+
+    :param llm: вызываемый объект, принимающий список сообщений и
+        возвращающий текст ответа; None — «как было».
+    :return: прежний обработчик (чтобы вернуть его обратно).
+    """
+    global _llm
+    previous, _llm = _llm, llm
+    return previous
+
+
+def get_legal_llm() -> Any:
+    """
+    Обработчик запроса к модели (создаётся при первом обращении).
+
+    Сеть и ключ живут в клиенте GigaChat, как и у остальных инструментов:
+    здесь только один запрос с готовыми сообщениями.
+    """
+    global _llm
+    if _llm is None:
+        _llm = _default_llm
+    return _llm
+
+
+def _default_llm(messages: List[Dict[str, str]]) -> str:
+    """
+    Один запрос к GigaChat по текущим настройкам.
+
+    Ключ клиент берёт из системного хранилища сам (core/secrets_store.py).
+    Исключение отсюда не глотается: вызывающий код решает, показать
+    оператору нормы без объяснения или честно сказать «модель недоступна».
+    """
+    from core.gigachat_client import GigaChatClient
+    from core.settings_service import get_settings_service
+
+    settings = get_settings_service()
+    client = GigaChatClient(
+        scope=settings.get_str("gigachat_scope", "GIGACHAT_API_PERS"),
+        model=settings.get_str("gigachat_model", "GigaChat-3-Pro"),
+        timeout=settings.get_int("gigachat_timeout", 150),
+        verify_ssl=settings.get_bool("gigachat_verify_ssl", True),
+        ca_bundle=settings.get_str("gigachat_ca_bundle", "") or None,
+    )
+    reply = client.complete_chat(messages, tools=None, temperature=0.1)
+    content = reply.get("content") if isinstance(reply, dict) else None
+    return str(content or "")
+
+
+def reset_legal_llm() -> None:
+    """Забывает созданный обработчик модели (тесты, перезапуск)."""
+    global _llm
+    _llm = None
+
+
+# ─────────────────────────────────────────────────────────────
+# Промпты и текст ответа
+# ─────────────────────────────────────────────────────────────
+
+#: Запасной промпт «объясни последствия»: если файл потерялся, объяснение
+#: всё равно остаётся с источниками и без выдуманных норм.
+FALLBACK_EXPLAIN_PROMPT = (
+    "Ты — юридический помощник. Объясни: 1) какая норма относится к "
+    "вопросу и что она требует; 2) какие последствия; 3) что делать. "
+    "Цитируй нормы дословно и указывай источник. Нормы не выдумывай: если "
+    "ответа в нормах нет — скажи «в правовой базе нет»."
+)
+
+#: Запасной промпт советника: те же границы, короче.
+FALLBACK_ADVISOR_PROMPT = (
+    "Ты — юридический помощник. Отвечай только на основе данных норм. "
+    "Цитируй дословно, указывай источник. Если нормы нет — скажи «в базе "
+    "нет». Не выдумывай."
+)
+
+
+def load_legal_prompt(name: str, fallback: str = "") -> str:
+    """
+    Читает текст промпта из папки промптов агента.
+
+    Нет файла или он пуст — берётся запасной текст: юридический ответ не
+    должен пропадать из-за потерянного файла.
+    """
+    target = PROMPTS_DIR / str(name)
+    try:
+        text = target.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        logger.warning("Промпт %s не прочитан: %s", name, type(error).__name__)
+        return fallback
+    return text or fallback
+
+
+def _sources_of(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Источники найденных норм в том виде, в каком их видит оператор.
+
+    Каждая запись несёт цитату: без неё ответ нельзя сверить с актом.
+    """
+    sources: List[Dict[str, Any]] = []
+    for chunk in chunks:
+        sources.append({
+            "source": _source_title(chunk),
+            "article": _article_text(chunk),
+            "number": _short(chunk.get("doc_number"), 40),
+            "date": _short(chunk.get("doc_date"), 20),
+            "url": _short(chunk.get("doc_url"), MAX_URL_CHARS),
+            "quote": _short(chunk.get("text"), MAX_CHUNK_CHARS),
+        })
+    return sources
+
+
+def _sources_line(sources: List[Dict[str, Any]]) -> str:
+    """Строка «ГК РФ ч.2 — ст. 790; УАТ — ст. 34» для конца ответа."""
+    parts: List[str] = []
+    for item in sources:
+        text = str(item.get("source") or "")
+        article = str(item.get("article") or "")
+        parts.append(f"{text} — {article}" if article else text)
+    return "; ".join(part for part in parts if part)
+
+
+def _norms_block(sources: List[Dict[str, Any]]) -> str:
+    """
+    Нормы для модели и для запасного ответа: цитаты с реквизитами.
+
+    Формат тот же, что у RAG.get_context: модель видит норму и источник
+    рядом, поэтому не может «потерять» ссылку.
+    """
+    lines: List[str] = []
+    for number, item in enumerate(sources, start=1):
+        head = f"[{number}] {item.get('source')}"
+        if item.get("article"):
+            head += f" — {item['article']}"
+        requisites = []
+        if item.get("number"):
+            requisites.append(str(item["number"]))
+        if item.get("date"):
+            requisites.append(f"от {item['date']}")
+        if requisites:
+            head += f" ({' '.join(requisites)})"
+        lines.append(head)
+        if item.get("url"):
+            lines.append(f"    Источник: {item['url']}")
+        lines.append(f"    «{item.get('quote')}»")
+    return "\n".join(lines)
+
+
+def is_complex_question(question: str, sources: Sequence[Dict[str, Any]] = ()) -> bool:
+    """
+    Сложный ли вопрос: спор, деньги, ответственность, несколько норм.
+
+    Для сложного ответа обязателен совет «Проверьте с юристом»: программа
+    не заменяет юриста там, где решается судьба денег.
+    """
+    text = str(question or "").casefold()
+    if any(marker in text for marker in COMPLEX_MARKERS):
+        return True
+    return len(list(sources)) >= COMPLEX_SOURCES
+
+
+def _ask_llm(system: str, user: str) -> Dict[str, Any]:
+    """
+    Один запрос к модели: текст ответа или причина отказа.
+
+    :return: {"answer": текст, "error": причина}; ровно одно из двух непустое.
+    """
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    try:
+        answer = get_legal_llm()(messages)
+    except Exception as error:  # noqa: BLE001 — сеть и ключ бывают недоступны
+        logger.warning("Юридический ответ: модель недоступна (%s)",
+                       type(error).__name__)
+        return {"answer": "", "error": type(error).__name__}
+
+    text = str(answer or "").strip()
+    if not text:
+        return {"answer": "", "error": "модель вернула пустой ответ"}
+    return {"answer": text, "error": ""}
+
+
+def _answer_names_source(answer: str,
+                         sources: List[Dict[str, Any]]) -> bool:
+    """Назван ли в ответе хотя бы один источник из найденных."""
+    text = answer.casefold()
+    for item in sources:
+        title = str(item.get("source") or "").casefold()
+        if title and title in text:
+            return True
+    return False
+
+
+def _quotes_present(answer: str, sources: List[Dict[str, Any]]) -> bool:
+    """Есть ли в ответе дословная цитата хотя бы одной найденной нормы."""
+    text = " ".join(answer.split())
+    for item in sources:
+        quote = " ".join(str(item.get("quote") or "").split())
+        # Сравниваем заметный кусок: модель вправе привести норму не целиком,
+        # но не вправе переписать её в кавычках.
+        probe = quote[:60]
+        if len(probe) >= 20 and probe in text:
+            return True
+    return False
+
+
+def _finalize_answer(answer: str, sources: List[Dict[str, Any]],
+                     needs_lawyer: bool) -> str:
+    """
+    Приводит ответ модели к виду, который можно показать оператору.
+
+    Три проверки: длина, источник и (для дословных цитат — в советнике)
+    наличие цитаты. Всё, чего не хватает, дописывается программой:
+    юридический ответ без источника — не юридический ответ.
+    """
+    text = str(answer or "").strip()
+
+    # Хвост (совет юриста и источники) собирается ДО обрезки: иначе длинный
+    # ответ обрезался бы вместе с источником, а юридический ответ без
+    # источника — не ответ. Обрезается только тело ответа модели.
+    tail_parts: List[str] = []
+    if needs_lawyer and "с юристом" not in text.casefold():
+        tail_parts.append(LAWYER_NOTE)
+    if sources and not _answer_names_source(text, sources):
+        tail_parts.append(f"Источники: {_sources_line(sources)}")
+    tail = "\n\n".join(tail_parts)
+
+    budget = max(200, MAX_ANSWER_CHARS - len(tail) - 2)
+    if len(text) > budget:
+        text = text[: budget - 1].rstrip() + "…"
+
+    return (f"{text}\n\n{tail}" if tail else text).strip()
+
+
+def _fallback_answer(sources: List[Dict[str, Any]], error: str) -> str:
+    """
+    Ответ, когда модель недоступна: только нормы и их источники.
+
+    Ничего не додумывается — оператор получает цитаты и сам решает. Это
+    честнее, чем правдоподобный, но ничем не подтверждённый текст.
+    """
+    reason = f" ({error})" if error else ""
+    return (
+        f"Модель недоступна{reason}, поэтому объяснения нет — вот нормы "
+        f"по вопросу, как они есть в правовой базе:\n\n"
+        f"{_norms_block(sources)}\n\n{LAWYER_NOTE}"
+    )
+
+
+def _no_norms_answer(question: str) -> str:
+    """Ответ «в базе нет»: пустой результат не превращается в догадку."""
+    return (
+        f"В правовой базе нет нормы по вопросу «{question}». "
+        f"Не додумывайте ответ: скажите оператору, что в базе нет, и "
+        f"предложите скачать нужный акт (инструмент download_legal). "
+        f"{LAWYER_NOTE}"
+    )
+
+
+def _search_norms(query: str) -> Dict[str, Any]:
+    """
+    Ищет нормы и возвращает состояние базы.
+
+    Общий шаг двух инструментов (объяснение и советник): иначе проверки
+    «собрана ли база» и «нашлось ли что-нибудь» разъехались бы.
+
+    :return: {"ok": bool, "error": ответ инструмента, "sources": [...],
+        "chunks": [...]}.
+    """
+    rag = get_legal_rag()
+    try:
+        indexed = bool(rag.available())
+    except Exception as error:  # noqa: BLE001 — состояние базы не роняет ответ
+        logger.warning("Правовая база: состояние не прочитано (%s)",
+                       type(error).__name__)
+        indexed = False
+
+    if not indexed:
+        return {
+            "ok": False,
+            "error": _error(
+                "правовая база не собрана: индекс пуст. Откройте "
+                "«Настройки → Правовая база» и нажмите «Индексировать».",
+                indexed=False, query=query,
+            ),
+            "sources": [], "chunks": [],
+        }
+
+    try:
+        found = list(rag.search(query, top_k=LEGAL_TOP_K))
+    except Exception as error:  # noqa: BLE001 — внешний слой не роняет ответ
+        logger.warning("Правовая база: поиск не выполнен (%s)",
+                       type(error).__name__)
+        return {
+            "ok": False,
+            "error": _error(
+                f"поиск по правовой базе не выполнился ({type(error).__name__})",
+                indexed=True, query=query,
+            ),
+            "sources": [], "chunks": [],
+        }
+
+    return {
+        "ok": True, "error": None,
+        "sources": _sources_of(found), "chunks": found,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# 3. explain_consequences — объяснение последствий
+# ─────────────────────────────────────────────────────────────
+
+def explain_consequences(scenario: str = "", contract_type: str = "",
+                         **_) -> Dict[str, Any]:
+    """
+    Объясняет последствия ситуации: норма, последствия, что делать.
+
+    Ответ строится ТОЛЬКО на нормах правовой базы: они ищутся RAG-поиском,
+    затем модель пересказывает их, сохраняя цитаты и источник. Если нормы
+    не нашлись — «в базе нет»; если модель недоступна — цитаты как есть.
+    Для сложного вопроса (спор, суд, деньги) в конце обязательная фраза
+    «Проверьте с юристом.»
+
+    :param scenario: ситуация словами оператора («срок оплаты 45 дней,
+        заказчик не платит»);
+    :param contract_type: тип договора (perevozka, arenda_ts…) — сужает круг
+        применимых норм;
+    :return: {"ok": True, "answer": …, "sources": […], "needs_lawyer": bool,
+        "found": bool, "llm_used": bool}.
+    """
+    text = _short(scenario, 500)
+    if not text:
+        return _error(
+            "не указана ситуация: передайте scenario — например "
+            "«срок оплаты 45 дней, заказчик задерживает платёж»"
+        )
+
+    query = f"{text} {contract_type}".strip() if contract_type else text
+    search = _search_norms(query)
+    if not search["ok"]:
+        return search["error"]
+
+    sources = search["sources"]
+    if not sources:
+        logger.info("Юридическое объяснение: норм не найдено (запрос %s)",
+                    text[:40])
+        return _ok(
+            {"answer": _no_norms_answer(text), "sources": [],
+             "needs_lawyer": True, "found": False, "llm_used": False},
+            found=False, count=0, query=text,
+            message="в правовой базе нет нормы по этому вопросу",
+        )
+
+    needs_lawyer = is_complex_question(text, sources)
+    system = load_legal_prompt(EXPLAIN_PROMPT_FILE, FALLBACK_EXPLAIN_PROMPT)
+    user = (
+        f"Вопрос оператора: {text}\n"
+        f"Тип договора: {contract_type or 'не указан'}\n\n"
+        f"НОРМЫ ИЗ ПРАВОВОЙ БАЗЫ:\n{_norms_block(sources)}"
+    )
+    reply = _ask_llm(system, user)
+    answer = reply["answer"]
+    llm_used = bool(answer)
+    if not answer:
+        answer = _fallback_answer(sources, reply["error"])
+
+    answer = _finalize_answer(answer, sources, needs_lawyer)
+    logger.info(
+        "Юридическое объяснение: норм %s, модель %s, юрист %s",
+        len(sources), "использована" if llm_used else "недоступна", needs_lawyer,
+    )
+    return _ok(
+        {"answer": answer, "sources": sources, "needs_lawyer": needs_lawyer,
+         "found": True, "llm_used": llm_used},
+        found=True, count=len(sources), query=text,
+        message=f"нормы найдены: {len(sources)}. Источники: "
+                f"{_sources_brief(search['chunks'])}",
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# 4. legal_advice — юридический советник
+# ─────────────────────────────────────────────────────────────
+
+def legal_advice(question: str = "", contract_type: str = "",
+                 **_) -> Dict[str, Any]:
+    """
+    Отвечает на юридический вопрос по нормам правовой базы.
+
+    Формат ответа задан промптом (legal_advisor.txt) и проверяется здесь:
+    норма с цитатой, источник, применимость, а для сложного вопроса —
+    «Проверьте с юристом.» Если модель переписала цитату или не назвала
+    источник, программой дописываются нормы дословно: оператор обязан
+    видеть текст, который сможет сверить с актом.
+
+    :param question: вопрос оператора («можно ли не платить, если груз
+        пришёл на день позже?»);
+    :param contract_type: тип договора — для пункта «применимость»;
+    :return: {"ok": True, "answer": …, "sources": […], "needs_lawyer": bool,
+        "found": bool, "llm_used": bool}.
+    """
+    text = _short(question, 500)
+    if not text:
+        return _error(
+            "не указан вопрос: передайте question — например "
+            "«можно ли не платить, если груз пришёл на день позже?»"
+        )
+
+    search = _search_norms(text)
+    if not search["ok"]:
+        return search["error"]
+
+    sources = search["sources"]
+    if not sources:
+        logger.info("Юридический совет: норм не найдено (запрос %s)", text[:40])
+        return _ok(
+            {"answer": _no_norms_answer(text), "sources": [],
+             "needs_lawyer": True, "found": False, "llm_used": False},
+            found=False, count=0, query=text,
+            message="в правовой базе нет нормы по этому вопросу",
+        )
+
+    needs_lawyer = is_complex_question(text, sources)
+    system = load_legal_prompt(ADVISOR_PROMPT_FILE, FALLBACK_ADVISOR_PROMPT)
+    user = (
+        f"Вопрос оператора: {text}\n"
+        f"Тип договора: {contract_type or 'не указан'}\n\n"
+        f"НАЙДЕННЫЕ НОРМЫ:\n{_norms_block(sources)}"
+    )
+    reply = _ask_llm(system, user)
+    answer = reply["answer"]
+    llm_used = bool(answer)
+    if not answer:
+        answer = _fallback_answer(sources, reply["error"])
+
+    # Цитата дословно — главное правило советника. Если модель переписала
+    # норму «своими словами», оператор получит текст акта отдельным блоком.
+    if llm_used and not _quotes_present(answer, sources):
+        answer = (f"{answer.rstrip()}\n\nНормы дословно:\n"
+                  f"{_norms_block(sources)}")
+
+    answer = _finalize_answer(answer, sources, needs_lawyer)
+    logger.info(
+        "Юридический совет: норм %s, модель %s, юрист %s",
+        len(sources), "использована" if llm_used else "недоступна", needs_lawyer,
+    )
+    return _ok(
+        {"answer": answer, "sources": sources, "needs_lawyer": needs_lawyer,
+         "found": True, "llm_used": llm_used},
+        found=True, count=len(sources), query=text,
+        message=f"нормы найдены: {len(sources)}. Источники: "
+                f"{_sources_brief(search['chunks'])}",
+    )
+
 __all__ = [
+    "ADVISOR_PROMPT_FILE",
+    "COMPLEX_MARKERS",
+    "EXPLAIN_PROMPT_FILE",
+    "LAWYER_NOTE",
     "LEGAL_SEARCH_LIMIT",
     "LEGAL_TOP_K",
+    "MAX_ANSWER_CHARS",
     "MAX_CHUNK_CHARS",
     "MAX_URL_CHARS",
+    "PROMPTS_DIR",
     "download_legal",
+    "explain_consequences",
+    "get_legal_llm",
     "get_legal_parser",
     "get_legal_rag",
+    "is_complex_question",
+    "legal_advice",
+    "load_legal_prompt",
     "reset_legal_clients",
+    "reset_legal_llm",
     "search_legal",
+    "set_legal_llm",
     "set_legal_parser",
     "set_legal_rag",
 ]

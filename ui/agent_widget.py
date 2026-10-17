@@ -645,6 +645,14 @@ class AgentPanel(QFrame):
     diagnostics_requested = pyqtSignal()
     #: Оператор включил/выключил режим «Обучение» (подсказки на каждом шаге).
     tutorial_toggled = pyqtSignal(bool)
+    #: Оператор просит юридическую проверку формы (уровень 1 юр. помощи).
+    #: Панель только сообщает о нажатии: проверку и диалог открывает
+    #: AgentWidget — у панели нет ни формы, ни каталога правил.
+    legal_check_requested = pyqtSignal()
+    #: Оператор просит открыть окно «Шаблоны» (анализ и правка бланков).
+    #: Панель сигналит, окно открывает AgentWidget: у панели нет доступа к
+    #: файлам шаблонов и каталогу правок.
+    templates_requested = pyqtSignal()
 
     def __init__(self, agent_name: str = "Максимилиан",
                  persona_key: str = DEFAULT_PERSONA,
@@ -755,6 +763,31 @@ class AgentPanel(QFrame):
         self.btn_tutorial.setCheckable(True)
         self.btn_tutorial.toggled.connect(self.tutorial_toggled)
         row.addWidget(self.btn_tutorial)
+
+        #: Кнопка юридической проверки формы: нормы права против заполненного.
+        #: Стоит до «закрыть», рядом с диагностикой и обучением: это такие же
+        #: вспомогательные действия панели, а не часть диалога.
+        self.btn_legal = QToolButton()
+        self.btn_legal.setText("⚖")
+        self.btn_legal.setObjectName("agentToolButton")
+        self.btn_legal.setToolTip(
+            "Юридическая проверка формы: ставка НДС, срок оплаты, маршрут, "
+            "водительское удостоверение"
+        )
+        self.btn_legal.setAutoRaise(True)
+        self.btn_legal.clicked.connect(self.legal_check_requested)
+        row.addWidget(self.btn_legal)
+
+        #: Кнопка «Шаблоны»: анализ бланка и правка через диалог «было / стало».
+        self.btn_templates = QToolButton()
+        self.btn_templates.setText("📄")
+        self.btn_templates.setObjectName("agentToolButton")
+        self.btn_templates.setToolTip(
+            "Шаблоны договоров: анализ бланка и правка через подтверждение"
+        )
+        self.btn_templates.setAutoRaise(True)
+        self.btn_templates.clicked.connect(self.templates_requested)
+        row.addWidget(self.btn_templates)
 
         self.btn_close = QToolButton()
         self.btn_close.setText("✕")
@@ -1001,6 +1034,9 @@ class AgentWidget(QObject):
         #: Подсказки режима «Обучение» (система обучения): отдельный движок
         #: с нулевым интервалом — подсказка меняется на каждом шаге.
         self._tutorial_engine: Optional[Any] = None
+        #: Юридические подсказки (уровень 3): отдельный движок со своей
+        #: паузой. Создаётся при первом apply_settings — как остальные.
+        self._legal_hints: Optional[Any] = None
         self._suggestion_timer = QTimer(self)
         self._suggestion_timer.setInterval(SUGGESTION_CHECK_MS)
         self._suggestion_timer.timeout.connect(self._check_suggestions)
@@ -1065,6 +1101,9 @@ class AgentWidget(QObject):
         self._apply_proactive(values if enabled else {"proactive": False})
         # Режим «Обучение» (система обучения): подсказки на каждом шаге.
         self._apply_tutorial(values if enabled else {"tutorial_mode": False})
+        # Юридические подсказки: замечание, когда значение расходится с
+        # нормой права. Только у включённого помощника.
+        self._apply_legal_hints(values if enabled else {"legal_hints": False})
 
         if self.icon_button is not None:
             self.icon_button.setVisible(show_icon)
@@ -1137,6 +1176,8 @@ class AgentWidget(QObject):
             self.panel.settings_requested.connect(self.on_open_settings)
             self.panel.diagnostics_requested.connect(self.on_open_diagnostics)
             self.panel.tutorial_toggled.connect(self.on_tutorial_toggled)
+            self.panel.legal_check_requested.connect(self.on_open_legal_check)
+            self.panel.templates_requested.connect(self.on_open_templates)
             #: Просьба инструмента `diagnose` (из рабочего потока) открыть
             #: тот же диалог: связь сигналом — диалог создаётся в потоке
             #: интерфейса, а не в потоке агента.
@@ -1553,11 +1594,37 @@ class AgentWidget(QObject):
 
         self._update_suggestion_timer()
 
+    def _apply_legal_hints(self, values: Dict[str, Any]) -> None:
+        """
+        Включает или выключает юридические подсказки по настройкам.
+
+        Настройка — agent.legal_hints. Подсказка только текст: форма не
+        меняется, поэтому пауза (5 минут) и запрет повторов делаются
+        движком SuggestionEngine, как у обычных подсказок.
+        """
+        enabled = bool(values.get("legal_hints", True))
+        try:
+            interval = float(values.get("proactive_interval",
+                                        proactivity.SUGGESTION_INTERVAL))
+        except (TypeError, ValueError):
+            interval = proactivity.SUGGESTION_INTERVAL
+
+        if self._legal_hints is None:
+            from services.agent.tools.legal_hints import LegalHintTracker
+
+            self._legal_hints = LegalHintTracker(enabled=enabled,
+                                                 interval=interval)
+        else:
+            self._legal_hints.configure(enabled, interval)
+
+        self._update_suggestion_timer()
+
     def _update_suggestion_timer(self) -> None:
         """Таймер подсказок работает, пока включён хотя бы один вид подсказок."""
         active = (
             (self._suggestions is not None and self._suggestions.enabled)
             or (self._tutorial_engine is not None and self._tutorial_engine.enabled)
+            or (self._legal_hints is not None and self._legal_hints.enabled)
         )
         if active:
             self._suggestion_timer.start()
@@ -1618,6 +1685,7 @@ class AgentWidget(QObject):
 
         self._offer_proactive()
         self._offer_tutorial()
+        self._offer_legal_hint()
 
     def _offer_proactive(self) -> None:
         """Показывает проактивную подсказку, если пора (часть 4)."""
@@ -1633,6 +1701,30 @@ class AgentWidget(QObject):
             logger.warning("Подсказка не собрана: %s", e)
             return
         self._show_hint(engine.offer(text))
+
+    def _offer_legal_hint(self) -> None:
+        """
+        Показывает юридическую подсказку, если пора (уровень 3).
+
+        Проверка идёт по открытой форме; текст — совет проверить, а не
+        правка. Ошибка проверки не должна мешать работе окна: подсказка
+        вспомогательная.
+        """
+        tracker = self._legal_hints
+        if tracker is None or not tracker.enabled:
+            return
+
+        try:
+            hints = tracker.refresh(
+                window=self.window,
+                contract_type=self._context().contract_type,
+            )
+        except Exception as error:  # noqa: BLE001 — подсказка не ломает окно
+            logger.warning("Юридическая подсказка не показана: %s", error)
+            return
+
+        for text in hints:
+            self._show_hint(text)
 
     def _offer_tutorial(self) -> None:
         """Показывает подсказку режима «Обучение» (система обучения)."""
@@ -1799,6 +1891,66 @@ class AgentWidget(QObject):
         from ui.diagnostics_menu import window_diagnostics
 
         window_diagnostics(self.window)
+
+    def legal_check_result(self) -> Dict[str, Any]:
+        """
+        Результат юридической проверки текущей формы (без диалога).
+
+        Чтение формы и каталог правил — в
+        services/agent/tools/legal_check.py; здесь только вызов с окном.
+        Отдельный метод нужен тестам: они проверяют результат, не открывая
+        модальный диалог.
+        """
+        from services.agent.tools.legal_check import check_contract_legal
+
+        context = self._context()
+        return check_contract_legal(
+            contract_type=context.contract_type, window=self.window
+        )
+
+    def on_open_legal_check(self) -> None:
+        """
+        Кнопка «⚖ Юридическая проверка» в панели.
+
+        Показывает диалог с нарушениями и источниками. Форма НЕ меняется:
+        проверка только читает. Ошибка проверки не роняет окно — оператор
+        видит причину в строке состояния панели.
+        """
+        try:
+            result = self.legal_check_result()
+        except Exception as error:  # noqa: BLE001 — панель не должна падать
+            logger.exception("Юридическая проверка формы не выполнена")
+            if self.panel is not None:
+                self.panel.set_status(
+                    f"Юридическая проверка не выполнена: {type(error).__name__}"
+                )
+            return
+
+        logger.info(
+            "Юридическая проверка формы: %s", str(result.get("summary") or "")
+        )
+        from ui.legal_check_dialog import open_legal_check_dialog
+
+        open_legal_check_dialog(result, parent=self.window)
+
+    def on_open_templates(self) -> None:
+        """
+        Кнопка «📄 Шаблоны» в панели: анализ бланков и безопасная правка.
+
+        Окно показывает анализ выбранного шаблона; правка применяется только
+        после подтверждения в диалоге «было / стало» (с .bak и проверкой).
+        Ошибка открытия не роняет окно — причина уходит в строку состояния.
+        """
+        try:
+            from ui.template_tools_dialog import open_template_tools
+
+            open_template_tools(self.window)
+        except Exception as error:  # noqa: BLE001 — панель не должна падать
+            logger.exception("Окно «Шаблоны» не открылось")
+            if self.panel is not None:
+                self.panel.set_status(
+                    f"Шаблоны не открылись: {type(error).__name__}"
+                )
 
     def on_clear_history(self) -> None:
         """Очищает историю диалога (пункт меню панели)."""

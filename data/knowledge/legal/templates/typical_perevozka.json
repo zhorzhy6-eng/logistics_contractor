@@ -1,0 +1,41 @@
+{
+  "_comment": "ТИПОВОЙ договор перевозки проекта. Это ПРАКТИКА, а не норма права: значения взяты из типового бланка, которым пользуется оператор. Норма права указывается в поле norm и только там, где она действительно есть в правовой базе. Расхождение с типовым — повод посмотреть, а не автоматическая ошибка.",
+  "contract_type": "perevozka",
+  "title": "Типовой договор перевозки груза",
+  "payment_days": 30,
+  "penalty_rate": 0.1,
+  "vat_rate": 22,
+  "required_fields": ["number", "date", "route", "price"],
+  "source": "типовой договор проекта (шаблоны templates/shablon_ooo.docx, shablon_ip_*.docx)",
+  "norm": "НДС — НК РФ ст. 164 п. 3 (22%); срок оплаты и размер пени законом не установлены — это условия типового договора",
+  "note": "30 дней оплаты и пеня 0,1% в день — условия типового договора, а не требование закона. Отличающееся значение — предмет решения оператора и юриста, поэтому сравнение даёт замечание, а не ошибку.",
+  "severity": "warning",
+  "_fields": {
+    "payment_days": {
+      "title": "Срок оплаты",
+      "field": "contract_tab.payment_days",
+      "field_aliases": ["price_tab.payment_days"],
+      "unit": "дней",
+      "note": "в типовом договоре — 30 дней"
+    },
+    "penalty_rate": {
+      "title": "Пеня за просрочку",
+      "field": "contract_tab.penalty_rate",
+      "unit": "% в день",
+      "note": "в типовом договоре — 0,1% в день; поля в форме проекта нет, сравнение пропускается"
+    },
+    "vat_rate": {
+      "title": "Ставка НДС",
+      "field": "contract_tab.vat_rate",
+      "field_aliases": ["price_tab.vat_rate", "carrier_tab.vat_rate"],
+      "unit": "%",
+      "note": "22% — действующая основная ставка (НК РФ ст. 164 п. 3)"
+    }
+  },
+  "_required_fields": {
+    "number": {"field": "contract_tab.number", "title": "номер договора"},
+    "date": {"field": "contract_tab.date", "title": "дата договора"},
+    "route": {"field": "contract_tab.route", "field_aliases": ["route_tab.route"], "title": "маршрут"},
+    "price": {"field": "contract_tab.price_with_vat", "field_aliases": ["price_tab.sum_total", "price_tab.price_with_vat"], "title": "сумма договора"}
+  }
+}

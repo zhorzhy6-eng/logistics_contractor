@@ -43,8 +43,14 @@ REQUIRED_GROUPS = {
 #: unit: 57 → 58 в ЧАСТИ 3 пост-рефакторинга — добавлен
 #: `tests/unit/core/test_checksums.py` (общий модуль контрольных сумм);
 #: 58 → 59 в фиксе TLS 17.10.2026 — добавлен
-#: `tests/unit/core/test_tls_config.py` (регресс на поиск корня по маркеру).
-EXPECTED_FILES = {"unit": 59, "integration": 25, "ui": 60}
+#: `tests/unit/core/test_tls_config.py` (регресс на поиск корня по маркеру);
+#: 59 → 66 в шаге «юридическая помощь и правка шаблонов» 17.10.2026 —
+#: добавлены test_legal_rules.py (core) и шесть файлов в unit/agent:
+#: test_legal_check, test_legal_hints, test_legal_advice, test_legal_compare,
+#: test_template_analyzer, test_template_editor.
+#: ui: 60 → 63 — три диалога шага: legal_check_dialog,
+#: template_diff_dialog, template_tools_dialog (все в ui/widgets).
+EXPECTED_FILES = {"unit": 66, "integration": 25, "ui": 63}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -157,9 +163,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 144 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 154 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 144, f"тестовых файлов {len(found)}, ожидается 144"
+    assert len(found) == 154, f"тестовых файлов {len(found)}, ожидается 154"
 
 
 def test_no_test_module_name_collision():
