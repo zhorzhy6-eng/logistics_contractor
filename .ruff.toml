@@ -53,17 +53,24 @@ ignore = [
 "ui/widgets/__init__.py" = ["F401"]
 
 # Ложные F821 — там, где имя появляется ЛЕНИВО, через модульный
-# `__getattr__` (разрыв цикла импорта, Этапы 2 и 4), и ruff этого не видит:
-#   * `services/recognition/import_service.py` — `read_document` и
-#     `DataMapper` резолвятся при первом обращении (иначе цикл
-#     `reader → core/__init__ → import_service → reader`);
-#   * `core/mirror.py` — `TARGET_PROFILES` приходит из приватного соседа
-#     `core/mirror_targets.py` после `attach_private_root()`;
+# `__getattr__` (разрыв цикла импорта, Этапы 2 и 4), и ruff этого не видит.
+#
+# ⚠️ 17.10.2026 («мощные тесты»): здесь стояли ЕЩЁ ДВА исключения —
+# `services/recognition/import_service.py` и `core/mirror.py`. Оба оказались
+# НЕ ложными: F821 показывал НАСТОЯЩИЙ дефект — `read_document` и
+# `TARGET_PROFILES` читались как обычные глобальные имена, а модульный
+# `__getattr__` их не подставлял, и в работе это давало `NameError`
+# (импорт документа через диалог не работал вовсе). Исключения сняты
+# вместе с исправлением кода; оба файла теперь чисты и с `--isolated`,
+# то есть без этой конфигурации.
+#
+# Урок: исключение для F821 ставить только после запуска кода в СВЕЖЕМ
+# процессе, а не по рассуждению о том, «как имя появится».
+#
+# Оставшееся исключение — про аннотацию, а не про значение:
 #   * `core/contracts/base/postprocess.py` — тип `BaseContractGenerator`
 #     назван СТРОКОЙ в аннотации (так разорван цикл
 #     `generator → postprocess → generator`), импортировать его нельзя.
-"services/recognition/import_service.py" = ["F821"]
-"core/mirror.py" = ["F821"]
 "core/contracts/base/postprocess.py" = ["F821"]
 
 # Инструменты разработки и одноразовые скрипты: неиспользуемые импорты и

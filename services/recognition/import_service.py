@@ -310,7 +310,10 @@ def extract_local_fields(text):
     flush()
     # Unlabelled complete VINs remain separate vehicles, never joined by list order.
     known = {v.get("vin") for v in result.get("vehicles", [])}
-    for vin in DataMapper.VIN_PATTERN.findall(text):
+    # `DataMapper` приходит лениво (см. шапку), поэтому берётся через
+    # `sys.modules[__name__]` — обычное чтение глобального имени его не видит.
+    # Промежуточный `_MAPPER` здесь НЕ годится: он удалён строкой 203.
+    for vin in _sys.modules[__name__].DataMapper.VIN_PATTERN.findall(text):
         if vin not in known:
             result.setdefault("vehicles", []).append({"vin": vin})
             known.add(vin)
