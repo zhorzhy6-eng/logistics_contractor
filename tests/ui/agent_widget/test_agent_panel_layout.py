@@ -267,6 +267,22 @@ def test_long_message_is_not_clipped(panel, qapp):
     )
 
 
+def fill_history(panel: AgentPanel, count: int = 15) -> None:
+    """
+    Наполняет историю так, чтобы она ГАРАНТИРОВАННО была выше окна.
+
+    Длина сообщения и их число выбраны с запасом: в CI (offscreen без
+    шрифтов) метрики текста меньше, и на десяти коротких строках история
+    могла бы уместиться в окно — тогда тест про прокрутку проверял бы не то.
+    """
+    for index in range(count):
+        panel.append_message(
+            f"Строка {index}: сообщение длиной в две строки панели, "
+            "чтобы история точно не поместилась в окно просмотра.",
+            "agent",
+        )
+
+
 def test_history_scrolls_when_longer_than_view(panel, qapp):
     """
     История прокручивается: у полосы есть диапазон, и низ достижим.
@@ -275,24 +291,27 @@ def test_history_scrolls_when_longer_than_view(panel, qapp):
     двенадцать сообщений требовали 1000 px, виджет был 378 px, а максимум
     полосы — 0. Последние сообщения оператор не видел вовсе.
     """
-    for index in range(10):
-        panel.append_message(f"Сообщение номер {index} в истории.", "agent")
+    fill_history(panel)
     panel.parentWidget().grab()
     qapp.processEvents()
     panel.scroll_to_bottom_now()
     qapp.processEvents()
 
+    viewport = panel.scroll.viewport().height()
+    need = panel.history_layout.heightForWidth(
+        panel.scroll.viewport().width())
+    assert need > viewport, (
+        f"тест бессмыслен: истории нужно {need} px, а окно просмотра {viewport} px"
+    )
     bar = panel.scroll.verticalScrollBar()
     assert bar.maximum() > 0, "история не прокручивается (максимум полосы 0)"
     assert bar.value() == bar.maximum(), "прокрутка не дошла до последнего сообщения"
-    assert panel.history.height() >= panel.scroll.viewport().height()
+    assert panel.history.height() >= viewport
 
 
 def test_clear_messages_resets_history_height(panel, qapp):
     """Очистка истории убирает и высоту прокрутки (пустой список не «длинный»)."""
-    for index in range(12):
-        panel.append_message(
-            f"Строка {index}: сообщение длиной в две строки панели.", "agent")
+    fill_history(panel)
     panel.parentWidget().grab()
     qapp.processEvents()
     assert panel.scroll.verticalScrollBar().maximum() > 0
