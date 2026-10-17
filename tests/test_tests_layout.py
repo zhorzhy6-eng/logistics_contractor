@@ -50,7 +50,10 @@ REQUIRED_GROUPS = {
 #: test_template_analyzer, test_template_editor.
 #: ui: 60 → 63 — три диалога шага: legal_check_dialog,
 #: template_diff_dialog, template_tools_dialog (все в ui/widgets).
-EXPECTED_FILES = {"unit": 66, "integration": 25, "ui": 63}
+#: 63 → 64 в шаге «вёрстка панели и плавающий кот» 17.10.2026 — добавлен
+#: `tests/ui/agent_widget/test_agent_panel_layout.py` (стражи вёрстки
+#: шапки панели и прокрутки чата).
+EXPECTED_FILES = {"unit": 66, "integration": 25, "ui": 64}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -163,9 +166,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 154 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 155 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 154, f"тестовых файлов {len(found)}, ожидается 154"
+    assert len(found) == 155, f"тестовых файлов {len(found)}, ожидается 155"
 
 
 def test_no_test_module_name_collision():

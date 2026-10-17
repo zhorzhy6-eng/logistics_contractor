@@ -8,6 +8,9 @@
 Кот — окно верхнего уровня (`Qt.Tool` + `WindowStaysOnTopHint`) и создавался
 БЕЗ родителя: `FloatingCat(persona_key)` попадал строкой в параметр `parent`.
 Главное окно закрывалось, программа выключалась, а кот оставался на экране.
+Вторая часть бага: родитель у кота появился, но на настоящей Windows
+`Qt.Tool`-окно НЕ прячется вместе с родителем, и кот продолжал висеть поверх
+всех программ после того, как окно скрыли или свернули.
 
 Что проверяется
 ---------------
@@ -23,6 +26,12 @@
 5. **Страховка.** `close_floating_cats()` закрывает всех оставшихся котов:
    это вызов из `main._do_exit`.
 6. **Таймеры.** После закрытия анимация аватара остановлена.
+7. **Кот не висит на экране.** Он прячется, когда окно программы скрыто
+   (крестик), свёрнуто, когда оператор ушёл в другое приложение, когда
+   открыт модальный диалог и когда открыта панель Максимилиана. Причина:
+   `Qt.Tool`-окно верхнего уровня НЕ скрывается вместе с родителем на
+   настоящей Windows (на offscreen скрывается — из-за этого баг #18 не
+   ловился тестами; живая проба `tests/_tmp/cat_visibility_probe.py`).
 
 Qt — в offscreen-режиме; база — изолированная.
 """
@@ -256,7 +265,109 @@ def test_close_floating_cats_without_qt(monkeypatch, qapp):
 
 
 # ─────────────────────────────────────────────────────────────
-# 6. Живая проверка: окно программы закрывается — кот исчезает
+# 6. Кот не висит на экране: окно скрыли, свернули, ушли в другое приложение
+# ─────────────────────────────────────────────────────────────
+
+def test_cat_hides_when_owner_window_is_hidden(qapp, window, agent,
+                                              settings_service):
+    """
+    Окно скрыли (крестик) — кот спрятался САМ, а не «силами платформы».
+
+    На платформе `offscreen` Qt скрывает дочернее окно-кот вместе с
+    родителем, поэтому обычный `window.hide()` скрыл бы кота и без
+    исправления. На настоящей Windows этого НЕ происходит (живая проба
+    `tests/_tmp/cat_visibility_probe.py`: после `window.hide()` кот
+    оставался видимым — это и был баг #18). Здесь кот показывается заново
+    уже после скрытия окна (так ведёт себя платформа), и проверяется, что
+    событие Hide окна его прячет.
+    """
+    from PyQt5.QtGui import QHideEvent
+
+    settings_service.update_agent({"show_floating": True})
+    agent.apply_settings()
+    cat = agent.floating
+    assert cat is not None
+
+    window.hide()
+    cat.show()                      # как на Windows: платформа не прячет
+    assert cat.isVisible() is True
+
+    QApplication.sendEvent(window, QHideEvent())
+    assert cat.isVisible() is False, "кот остался на экране после скрытия окна"
+    assert cat.is_closed is False, "скрытие окна не закрывает кота навсегда"
+
+
+def test_cat_hides_when_window_minimized(qapp, window, agent, settings_service):
+    """Окно свернули — кот не должен висеть поверх чужих окон."""
+    settings_service.update_agent({"show_floating": True})
+    agent.apply_settings()
+    cat = agent.floating
+    assert cat is not None
+
+    window.showMinimized()
+    qapp.processEvents()
+    assert cat._is_wanted_visible() is False
+    assert cat.isVisible() is False
+
+
+def test_cat_hides_when_application_is_inactive(qapp, window, agent,
+                                                settings_service, monkeypatch):
+    """Оператор ушёл в другую программу — кот прячется, а не «мешает»."""
+    from PyQt5.QtCore import Qt
+
+    settings_service.update_agent({"show_floating": True})
+    agent.apply_settings()
+    cat = agent.floating
+    assert cat is not None and cat.isVisible() is True
+
+    monkeypatch.setattr(QApplication, "applicationState",
+                        staticmethod(lambda: Qt.ApplicationInactive))
+    cat.on_application_state_changed(Qt.ApplicationInactive)
+    assert cat.isVisible() is False
+
+    monkeypatch.setattr(QApplication, "applicationState",
+                        staticmethod(lambda: Qt.ApplicationActive))
+    cat.on_application_state_changed(Qt.ApplicationActive)
+    assert cat.isVisible() is True
+
+
+def test_cat_hides_while_panel_is_open(qapp, window, agent, settings_service):
+    """Пока панель открыта, кот уступает место её полю ввода и кнопке."""
+    settings_service.update_agent({"show_floating": True})
+    agent.apply_settings()
+    cat = agent.floating
+    assert cat is not None and cat.isVisible() is True
+
+    agent.show_panel()
+    agent.finish_panel_animation()
+    qapp.processEvents()
+    assert agent.is_panel_visible() is True
+    assert cat.isVisible() is False, "кот закрывает поле ввода панели"
+
+    agent.hide_panel()
+    qapp.processEvents()
+    assert cat.isVisible() is True
+
+
+def test_cat_hides_while_modal_dialog_is_open(qapp, window, agent,
+                                              settings_service):
+    """Модальный диалог перекрывает кота: на время диалога прячемся."""
+    from PyQt5.QtCore import QEvent
+
+    settings_service.update_agent({"show_floating": True})
+    agent.apply_settings()
+    cat = agent.floating
+    assert cat is not None and cat.isVisible() is True
+
+    QApplication.sendEvent(cat, QEvent(QEvent.WindowBlocked))
+    assert cat.isVisible() is False
+
+    QApplication.sendEvent(cat, QEvent(QEvent.WindowUnblocked))
+    assert cat.isVisible() is True
+
+
+# ─────────────────────────────────────────────────────────────
+# 7. Живая проверка: окно программы закрывается — кот исчезает
 # ─────────────────────────────────────────────────────────────
 
 #: На раннере GitHub этот тест роняет процесс НАТИВНО (junit пустой, сводки
@@ -274,7 +385,10 @@ def test_main_window_force_close_closes_cat(qapp, isolated_db, settings_service)
     """
     from ui.main_window import MainWindow
 
-    settings_service.update_agent({"show_floating": True})
+    # Панель «при старте» выключается ЯВНО: с ней кот по построению прячется
+    # (уступает место полю ввода), а тест про закрытие окна, а не про старт.
+    settings_service.update_agent(
+        {"show_floating": True, "show_panel_on_start": False})
     main = MainWindow()
     main.show()
     try:
@@ -299,12 +413,16 @@ def test_main_window_hide_hides_cat(qapp, isolated_db, settings_service):
     """Закрытие крестиком (скрытие окна) тоже прячет кота."""
     from ui.main_window import MainWindow
 
-    settings_service.update_agent({"show_floating": True})
+    # Как и в предыдущем тесте: панель «при старте» выключена, иначе кот
+    # спрятан панелью, и проверка «крестик прячет кота» ничего не значит.
+    settings_service.update_agent(
+        {"show_floating": True, "show_panel_on_start": False})
     main = MainWindow()
     main.show()
     try:
         cat = getattr(main.agent_widget, "floating", None)
         assert cat is not None
+        assert cat.isVisible() is True
 
         main.close()          # крестик: окно прячется (ЭТАП 2B)
         assert cat.isVisible() is False

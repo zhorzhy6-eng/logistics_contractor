@@ -60,6 +60,16 @@ PANEL_ANIMATION_MS = 200
 ICON_SIZE = 32
 PANEL_AVATAR_SIZE = 64
 FLOATING_SIZE = 96
+#: Кнопка-иконка в шапке панели: строго квадрат 32×32 (см. `_tool_button`).
+#: Было «как получится»: QToolButton сжимался до 25 px, эмодзи в нём
+#: обрезались, а шесть кнопок в одном ряду с именем отнимали у имени
+#: 57 px из 99 нужных — «Максимилиан» превращался в «Максим».
+PANEL_TOOL_SIZE = 32
+#: Расстояние между кнопками действий в шапке панели. 8 px — тот же шаг,
+#: что в истории сообщений: вплотную кнопки читались одной серой полосой.
+PANEL_TOOL_SPACING = 8
+#: Расстояние между аватаром и текстом в шапке панели.
+PANEL_HEADER_SPACING = 12
 #: Как часто проверять, есть ли что подсказать без вопроса (часть 4), мс.
 #: Сама подсказка показывается не чаще, чем разрешает настройка
 #: `proactive_interval` (по умолчанию 5 минут) — см. proactivity.py.
@@ -518,6 +528,22 @@ class FloatingCat(QWidget):
     жив процесс (баг #18). Поэтому `parent` передаётся ЯВНО и по имени
     (`FloatingCat(persona_key=…, parent=window)`): позиционный вызов
     `FloatingCat(persona_key)` попадал в `parent` и родителя не ставил.
+
+    Видимость кота — не «показывать всегда», а «показывать, когда уместно»
+    (`_sync_visibility`). Причина: `Qt.Tool` + `WindowStaysOnTopHint` — это
+    отдельное окно верхнего уровня, и Qt НЕ прячет его вместе с родителем.
+    На платформе `offscreen` кот при `window.hide()` исчезал, поэтому тесты
+    были зелёными, а на настоящей Windows — оставался висеть поверх всех
+    программ, даже когда окно программы скрыто или свёрнуто (баг #18 в
+    отчёте оператора: «после закрытия программы кот остаётся на экране»).
+    Теперь кот прячется, когда:
+      * окно программы скрыто (крестик) или свёрнуто;
+      * программа неактивна (оператор ушёл в другое приложение);
+      * окно заблокировано модальным диалогом;
+      * открыта панель Максимилиана (иначе кот накрывает её поле ввода);
+      * настройка `show_floating` выключена или кот уже закрыт.
+    Показать/спрятать кота по этим причинам — `set_enabled`, `set_panel_open`,
+    `close_cat`: прямой `show()`/`hide()` в обход состояния не используется.
     """
 
     #: Кот нажат (открыть панель).
@@ -549,6 +575,78 @@ class FloatingCat(QWidget):
         self._moved = False
         #: Кот закрыт по-настоящему (нужно панели и тестам).
         self._closed = False
+        #: Окно программы, за которым кот следит (родитель).
+        self._owner: Optional[QWidget] = parent
+        #: Настройка «показывать кота» (agent.show_floating).
+        self._enabled = False
+        #: Панель Максимилиана открыта — кот уступает ей место.
+        self._panel_open = False
+        #: Окно заблокировано модальным диалогом (QEvent.WindowBlocked).
+        self._blocked = False
+        #: Кота перетащил оператор: в угол окна больше не переставляем.
+        self._moved_by_user = False
+
+        # Окно программы сообщает о скрытии, сворачивании и показе — кот
+        # обязан это слышать: своего механизма «спрятаться с родителем»
+        # у окна верхнего уровня нет.
+        if parent is not None:
+            parent.installEventFilter(self)
+
+        app = QApplication.instance()
+        if app is not None:
+            # Программа ушла в фон — кот не должен висеть поверх чужих окон.
+            app.applicationStateChanged.connect(self.on_application_state_changed)
+
+    # ── Состояние видимости ──
+    def set_enabled(self, enabled: bool) -> None:
+        """Включает и выключает показ кота (настройка show_floating)."""
+        self._enabled = bool(enabled)
+        self._sync_visibility()
+
+    def set_panel_open(self, opened: bool) -> None:
+        """
+        Сообщает коту, открыта ли панель Максимилиана.
+
+        Пока панель открыта, кот прячется: он стоит в правом нижнем углу
+        окна, а там — поле ввода и кнопка «Отправить». Кот, лежащий поверх
+        кнопки отправки, — это и есть «плавает по экрану, мешает».
+        """
+        self._panel_open = bool(opened)
+        self._sync_visibility()
+
+    def on_application_state_changed(self, state: Any = None) -> None:
+        """Программа стала активной или ушла в фон — пересматриваем видимость."""
+        self._sync_visibility()
+
+    def _sync_visibility(self) -> None:
+        """Показывает или прячет кота по обстановке (см. докстроку класса)."""
+        if not self._is_wanted_visible():
+            if self.isVisible():
+                self.hide()
+            return
+        self._place_at_corner()
+        self.show()
+        self.raise_()
+
+    def _is_wanted_visible(self) -> bool:
+        """Уместно ли сейчас показывать кота."""
+        if self._closed or not self._enabled:
+            return False
+        if self._panel_open or self._blocked:
+            return False
+        owner = self._owner
+        if owner is not None and (not owner.isVisible() or owner.isMinimized()):
+            return False
+        app = QApplication.instance()
+        if app is not None and app.applicationState() == Qt.ApplicationInactive:
+            return False
+        return True
+
+    def _place_at_corner(self) -> None:
+        """Ставит кота в угол окна, если оператор его не перетаскивал."""
+        if self._moved_by_user or self._owner is None:
+            return
+        self.move_to_corner(self._owner)
 
     def close_cat(self) -> None:
         """
@@ -565,6 +663,23 @@ class FloatingCat(QWidget):
             self.avatar.stop_animation()
         except RuntimeError:
             pass
+        # Подписки снимаются ЗДЕСЬ, а не «когда-нибудь»: живая связь
+        # «сигнал приложения → метод Python», дожившая до завершения
+        # интерпретатора, роняет процесс (0xC0000005, см. shutdown).
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.applicationStateChanged.disconnect(
+                    self.on_application_state_changed
+                )
+            except (TypeError, RuntimeError):
+                pass
+        if self._owner is not None:
+            try:
+                self._owner.removeEventFilter(self)
+            except (TypeError, RuntimeError):
+                pass
+            self._owner = None
         self.hide()
         self.close()
         logger.info("Плавающий кот закрыт вместе с окном")
@@ -582,6 +697,43 @@ class FloatingCat(QWidget):
         """«Думает» — глаза широко открыты."""
         self.avatar.set_thinking(thinking)
 
+    # ── Реакция на окно программы и модальные диалоги ──
+    def eventFilter(self, source, event) -> bool:  # noqa: N802 — имя метода Qt
+        """
+        Окно программы скрылось, свернулось или показалось — кот следом.
+
+        Это и есть лечение бага #18 на настоящей Windows: `Qt.Tool`-окно
+        с родителем НЕ скрывается вместе с ним (проверено живой пробой
+        `tests/_tmp/cat_native_probe.py`: после `window.hide()` кот остался
+        видимым). Фильтр стоит на окне-родителе, поэтому ловит и крестик
+        (там `closeEvent` прячет окно), и сворачивание, и возврат.
+        """
+        if source is self._owner:
+            kind = event.type()
+            if kind in (QEvent.Show, QEvent.Hide, QEvent.Close,
+                        QEvent.WindowStateChange):
+                self._sync_visibility()
+            elif kind in (QEvent.Move, QEvent.Resize):
+                # Окно подвинули или растянули — кот остаётся в его углу.
+                self._place_at_corner()
+        return super().eventFilter(source, event)
+
+    def event(self, event) -> bool:  # noqa: N802 — имя метода Qt
+        """
+        Модальный диалог перекрывает кота — на время диалога прячемся.
+
+        `WindowStaysOnTopHint` ставит кота выше и диалога: без этого он
+        закрывал бы собой кнопки «Да / Нет» в подтверждении действия агента.
+        """
+        kind = event.type()
+        if kind == QEvent.WindowBlocked:
+            self._blocked = True
+            self._sync_visibility()
+        elif kind == QEvent.WindowUnblocked:
+            self._blocked = False
+            self._sync_visibility()
+        return super().event(event)
+
     # ── Перетаскивание и клик ──
     def mousePressEvent(self, event) -> None:  # noqa: N802 — имя метода Qt
         if event.button() == Qt.LeftButton:
@@ -593,6 +745,8 @@ class FloatingCat(QWidget):
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
             self.move(event.globalPos() - self._drag_offset)
             self._moved = True
+            # Оператор поставил кота сам — в угол окна больше не двигаем.
+            self._moved_by_user = True
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
@@ -669,6 +823,11 @@ class AgentPanel(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         layout.addWidget(self._build_header(agent_name, persona_key))
+        #: Разделитель под шапкой: отделяет «кто говорит» от «что сказано».
+        divider = QFrame()
+        divider.setObjectName("divider")
+        divider.setFixedHeight(1)
+        layout.addWidget(divider)
 
         # ── История диалога ──
         self.scroll = QScrollArea()
@@ -681,6 +840,10 @@ class AgentPanel(QFrame):
         self.history_layout.setSpacing(8)
         self.history_layout.addStretch()
         self.scroll.setWidget(self.history)
+        #: Защита от рекурсии при подгонке высоты списка: подгонка меняет
+        #: высоту виджета, а это снова присылает событие Resize окна
+        #: просмотра (см. _fit_history).
+        self._fitting = False
         layout.addWidget(self.scroll, 1)
 
         # ── Строка состояния агента ──
@@ -703,101 +866,161 @@ class AgentPanel(QFrame):
 
         self.btn_send = theme.primary_button("Отправить")
         self.btn_send.clicked.connect(self.emit_submitted)
+        #: Подсказка о клавишах рядом с «Отправить». Enter отправляет,
+        #: Shift+Enter переносит строку (см. eventFilter) — без подписи
+        #: оператор узнаёт об этом случайно, потеряв перенос строки.
+        self.hint_label = QLabel(self.SEND_HINT)
+        self.hint_label.setObjectName("agentHint")
+        self.hint_label.setToolTip(
+            "Enter — отправить сообщение, Shift+Enter — перенос строки"
+        )
         row = QHBoxLayout()
-        row.addStretch()
-        row.addWidget(self.btn_send)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(self.hint_label, 1)
+        row.addWidget(self.btn_send, 0)
         layout.addLayout(row)
+
+        # Фильтр ставится ПОСЛЕ построения всех виджетов: окно просмотра
+        # присылает Resize уже во время сборки панели, а обработчику нужны
+        # self.history_layout и self.history (см. _fit_history).
+        self.scroll.viewport().installEventFilter(self)
 
         self._pending = 0
 
     # ── Построение шапки панели ──
     def _build_header(self, agent_name: str, persona_key: str) -> QWidget:
-        """Шапка панели: аватар, имя, кнопки «настройки» и «закрыть»."""
+        """
+        Шапка панели: аватар с именем и ДВА ряда кнопок.
+
+        Почему два ряда. Раньше аватар, имя с подписью и шесть кнопок стояли
+        в одном `QHBoxLayout`: на 350 px панели имени доставалось 57 px из
+        99 нужных («Максимилиан» → «Максим»), подписи образа — 34 из 68
+        («Кот-логист» → «Кот-логи»), а кнопки сжимались до 25 px, и эмодзи
+        в них обрезались. Строка была переполнена ВСЕГДА, при любом наборе
+        настроек, поэтому «подвинуть» её было нельзя — только разложить.
+
+        Теперь: верхний ряд — аватар (64), имя с подписью (занимают всё
+        свободное место) и «✕»; нижний ряд — действия панели (⚙ 🔧 🎓 ⚖ 📄)
+        с фиксированным размером кнопок и отступом между ними. Имя и подпись
+        центрируются по вертикали относительно аватара, а не прижимаются
+        к его верхнему краю.
+        """
         frame = QFrame()
         frame.setObjectName("agentHeader")
-        row = QHBoxLayout(frame)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+
+        column = QVBoxLayout(frame)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(10)
+
+        # ── Верхний ряд: аватар, имя с подписью, «закрыть» ──
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(PANEL_HEADER_SPACING)
 
         self.avatar = CatAvatar(PANEL_AVATAR_SIZE, persona_key, frame)
-        row.addWidget(self.avatar)
+        top.addWidget(self.avatar, 0, Qt.AlignTop | Qt.AlignLeft)
 
         titles = QVBoxLayout()
+        titles.setContentsMargins(0, 0, 0, 0)
         titles.setSpacing(2)
+        # Имя и подпись не переносятся: это две строки шапки. Место под них
+        # считается раскладкой (stretch 1), а не фиксированной шириной.
         self.name_label = QLabel(agent_name)
         self.name_label.setObjectName("agentName")
         self.role_label = QLabel(persona(persona_key).title)
-        self.role_label.setObjectName("mutedLabel")
+        self.role_label.setObjectName("agentRole")
+        titles.addStretch()
         titles.addWidget(self.name_label)
         titles.addWidget(self.role_label)
-        row.addLayout(titles)
-        row.addStretch()
+        titles.addStretch()
+        top.addLayout(titles, 1)
 
-        self.btn_settings = QToolButton()
-        self.btn_settings.setText("⚙")
-        self.btn_settings.setObjectName("agentToolButton")
-        self.btn_settings.setToolTip("Настройки Максимилиана")
-        self.btn_settings.setAutoRaise(True)
+        self.btn_close = self._tool_button(
+            "✕", "Закрыть панель", "Закрыть панель"
+        )
+        self.btn_close.clicked.connect(self._on_close_clicked)
+        top.addWidget(self.btn_close, 0, Qt.AlignTop | Qt.AlignRight)
+
+        column.addLayout(top)
+
+        # ── Нижний ряд: действия панели ──
+        # Кнопки стоят справа, под «✕»: это вспомогательные действия, а не
+        # часть диалога. Отступ между ними задан явно (PANEL_TOOL_SPACING):
+        # вплотную друг к другу они читались как одна серая полоса.
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(PANEL_TOOL_SPACING)
+        actions.addStretch()
+
+        self.btn_settings = self._tool_button(
+            "⚙", "Настройки Максимилиана", "Настройки Максимилиана"
+        )
         self.btn_settings.clicked.connect(self.settings_requested)
-        row.addWidget(self.btn_settings)
+        actions.addWidget(self.btn_settings)
 
         #: Кнопка диагностики (задание, часть 3, пункт A.3): панель — то
         #: место, куда оператор приходит сказать «сломалось».
-        self.btn_diagnostics = QToolButton()
-        self.btn_diagnostics.setText("🔧")
-        self.btn_diagnostics.setObjectName("agentToolButton")
-        self.btn_diagnostics.setToolTip(
-            "Диагностика программы: проверить состояние и собрать отчёт"
+        self.btn_diagnostics = self._tool_button(
+            "🔧",
+            "Диагностика программы: проверить состояние и собрать отчёт",
+            "Диагностика программы",
         )
-        self.btn_diagnostics.setAutoRaise(True)
         self.btn_diagnostics.clicked.connect(self.diagnostics_requested)
-        row.addWidget(self.btn_diagnostics)
+        actions.addWidget(self.btn_diagnostics)
 
         #: Кнопка режима «Обучение» (задание: система обучения): подсказки
         #: на каждом шаге заполнения. Состояние хранится в настройках.
-        self.btn_tutorial = QToolButton()
-        self.btn_tutorial.setText("🎓")
-        self.btn_tutorial.setObjectName("agentToolButton")
-        self.btn_tutorial.setToolTip("Обучение: подсказки на каждом шаге заполнения")
-        self.btn_tutorial.setAutoRaise(True)
+        self.btn_tutorial = self._tool_button(
+            "🎓", "Обучение: подсказки на каждом шаге заполнения", "Обучение"
+        )
         self.btn_tutorial.setCheckable(True)
         self.btn_tutorial.toggled.connect(self.tutorial_toggled)
-        row.addWidget(self.btn_tutorial)
+        actions.addWidget(self.btn_tutorial)
 
         #: Кнопка юридической проверки формы: нормы права против заполненного.
-        #: Стоит до «закрыть», рядом с диагностикой и обучением: это такие же
+        #: Стоит рядом с диагностикой и обучением: это такие же
         #: вспомогательные действия панели, а не часть диалога.
-        self.btn_legal = QToolButton()
-        self.btn_legal.setText("⚖")
-        self.btn_legal.setObjectName("agentToolButton")
-        self.btn_legal.setToolTip(
+        self.btn_legal = self._tool_button(
+            "⚖",
             "Юридическая проверка формы: ставка НДС, срок оплаты, маршрут, "
-            "водительское удостоверение"
+            "водительское удостоверение",
+            "Юридическая проверка формы",
         )
-        self.btn_legal.setAutoRaise(True)
         self.btn_legal.clicked.connect(self.legal_check_requested)
-        row.addWidget(self.btn_legal)
+        actions.addWidget(self.btn_legal)
 
         #: Кнопка «Шаблоны»: анализ бланка и правка через диалог «было / стало».
-        self.btn_templates = QToolButton()
-        self.btn_templates.setText("📄")
-        self.btn_templates.setObjectName("agentToolButton")
-        self.btn_templates.setToolTip(
-            "Шаблоны договоров: анализ бланка и правка через подтверждение"
+        self.btn_templates = self._tool_button(
+            "📄",
+            "Шаблоны договоров: анализ бланка и правка через подтверждение",
+            "Шаблоны договоров",
         )
-        self.btn_templates.setAutoRaise(True)
         self.btn_templates.clicked.connect(self.templates_requested)
-        row.addWidget(self.btn_templates)
+        actions.addWidget(self.btn_templates)
 
-        self.btn_close = QToolButton()
-        self.btn_close.setText("✕")
-        self.btn_close.setObjectName("agentToolButton")
-        self.btn_close.setToolTip("Закрыть панель")
-        self.btn_close.setAutoRaise(True)
-        self.btn_close.clicked.connect(self._on_close_clicked)
-        row.addWidget(self.btn_close)
-
+        column.addLayout(actions)
         return frame
+
+    def _tool_button(self, symbol: str, tooltip: str,
+                     accessible_name: str) -> QToolButton:
+        """
+        Кнопка-иконка шапки панели: квадрат PANEL_TOOL_SIZE.
+
+        Размер задан ЖЁСТКО, а не через `sizeHint`: у эмодзи-подписи разная
+        ширина в разных шрифтах Windows, и кнопки «плясали» по ширине,
+        сжимая текст рядом. Здесь же задаётся и доступное имя: иконка без
+        подписи должна читаться программой чтения с экрана.
+        """
+        button = QToolButton()
+        button.setText(symbol)
+        button.setObjectName("agentToolButton")
+        button.setToolTip(tooltip)
+        button.setAccessibleName(accessible_name)
+        button.setAutoRaise(True)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setFixedSize(QSize(PANEL_TOOL_SIZE, PANEL_TOOL_SIZE))
+        return button
 
     def _on_close_clicked(self) -> None:
         """
@@ -831,11 +1054,24 @@ class AgentPanel(QFrame):
         Добавляет сообщение в историю.
 
         :param author: «user», «agent» или «system» (служебная строка).
+
+        Высота пузыря считается по ширине (``setHeightForWidth``), а не
+        берётся из ``sizeHint``: у QLabel с переносом строк sizeHint — это
+        «одна строка», и длинный ответ обрезался снизу. Замер до правки:
+        текст на 386 символов занимал 116 px при нужных 209, а ответ на
+        2240 символов — те же 116 px при нужных 1539. Оператор видел, что
+        длинные юридические предупреждения обрываются, хотя ни `…`, ни
+        многоточия в коде панели нет: обрезала РАСКЛАДКА, а не текст.
         """
         bubble = QLabel(text)
         bubble.setWordWrap(True)
         bubble.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        bubble.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        # QSizePolicy(w, h) НЕ выставляет флаг heightForWidth — его надо
+        # включить явно, иначе раскладка снова возьмёт высоту из sizeHint.
+        policy = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        policy.setHeightForWidth(True)
+        bubble.setSizePolicy(policy)
+        bubble.setMinimumWidth(1)
 
         if author == "user":
             bubble.setObjectName("agentBubbleUser")
@@ -847,7 +1083,37 @@ class AgentPanel(QFrame):
             bubble.setToolTip("Инструменты: " + ", ".join(tool_names))
 
         self.history_layout.insertWidget(self.history_layout.count() - 1, bubble)
+        self._fit_history()
         self._scroll_to_bottom()
+
+    def _fit_history(self) -> None:
+        """
+        Подгоняет высоту списка сообщений под содержимое.
+
+        `QScrollArea` с `widgetResizable` держит внутренний виджет ровно по
+        размеру окна просмотра. Список длиннее окна от этого НЕ
+        прокручивался: полоса прокрутки оставалась с максимумом 0 (замер
+        до правки: 12 сообщений, раскладке нужно 1000 px, виджет — 378 px,
+        максимум полосы — 0). Оператор видел последние сообщения
+        обрезанными, а до предыдущих не мог добраться вовсе — это и есть
+        жалоба «текст в чате обрезается».
+
+        Минимальная высота берётся из `heightForWidth` раскладки: она
+        учитывает перенос строк в каждом пузыре. Вызывается при добавлении
+        сообщения, очистке истории и изменении ширины окна просмотра.
+        """
+        if self._fitting:
+            return
+        width = self.scroll.viewport().width()
+        if width <= 0:
+            return
+        self._fitting = True
+        try:
+            need = self.history_layout.heightForWidth(width)
+            if need > 0 and self.history.minimumHeight() != need:
+                self.history.setMinimumHeight(need)
+        finally:
+            self._fitting = False
 
     def set_history(self, messages) -> None:
         """Показывает историю диалога (после загрузки из базы)."""
@@ -868,6 +1134,13 @@ class AgentPanel(QFrame):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        # Высота возвращается к нулю требований: иначе пустой список
+        # остался бы «длинным», и полоса прокрутки висела бы зря.
+        self._fitting = True
+        try:
+            self.history.setMinimumHeight(0)
+        finally:
+            self._fitting = False
 
     # ── Состояние ──
     def set_status(self, text: str, busy: bool = False) -> None:
@@ -890,6 +1163,8 @@ class AgentPanel(QFrame):
     # ── Ввод ──
     #: Что показывается при попытке отправить пустое сообщение.
     EMPTY_INPUT_HINT = "Введите запрос."
+    #: Подсказка о клавишах рядом с кнопкой «Отправить».
+    SEND_HINT = "Enter — отправить"
 
     def emit_submitted(self) -> None:
         """
@@ -915,12 +1190,19 @@ class AgentPanel(QFrame):
 
         Фильтр, а не подкласс QTextEdit: поведение поля нужно только здесь,
         и отдельный класс ради двух строк кода не нужен.
+
+        Второй фильтр — на окне просмотра истории: панель выезжает
+        анимацией, её ширина меняется, и перенос строк в сообщениях должен
+        пересчитываться вместе с ней (иначе высота списка «застыла» бы на
+        ширине первого показа).
         """
         if source is self.input and event.type() == QEvent.KeyPress:
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 if not (event.modifiers() & Qt.ShiftModifier):
                     self.emit_submitted()
                     return True
+        elif source is self.scroll.viewport() and event.type() == QEvent.Resize:
+            self._fit_history()
         return super().eventFilter(source, event)
 
     def _scroll_to_bottom(self) -> None:
@@ -936,6 +1218,17 @@ class AgentPanel(QFrame):
 
     def scroll_to_bottom_now(self) -> None:
         """Прокрутка вниз немедленно (вызывается по таймеру и тестами)."""
+        self._fit_history()
+        bar = self.scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        # Диапазон полосы QScrollArea пересчитывает по LayoutRequest, то есть
+        # уже ПОСЛЕ этого прохода. Замер: после первой прокрутки значение
+        # 164 при максимуме 183 — последняя строка оставалась под краем.
+        # Поэтому второй проход, а не «на всякий случай».
+        QTimer.singleShot(0, self._scroll_to_bottom_end)
+
+    def _scroll_to_bottom_end(self) -> None:
+        """Доводит прокрутку до конца после пересчёта раскладки."""
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
 
@@ -1090,7 +1383,7 @@ class AgentWidget(QObject):
         if not enabled:
             self.hide_panel()
             if self.floating is not None:
-                self.floating.hide()
+                self.floating.set_enabled(False)
 
         self._ensure_icon(show_icon, persona_key)
         self._ensure_floating(
@@ -1151,6 +1444,10 @@ class AgentWidget(QObject):
 
         Родитель — окно программы, и передаётся по имени: кот обязан
         закрыться вместе с ним, а не остаться на экране.
+
+        Видимость задаётся `set_enabled`, а не `show()`: кот показывается
+        только когда это уместно (окно видимо, программа активна, панель
+        закрыта) — см. `FloatingCat._sync_visibility`.
         """
         if self.floating is None:
             if not needed:
@@ -1158,12 +1455,13 @@ class AgentWidget(QObject):
             self.floating = FloatingCat(persona_key=persona_key,
                                         parent=self.window)
             self.floating.clicked.connect(self.toggle_panel)
+            # Кот может создаваться при УЖЕ открытой панели (оператор включил
+            # настройку на ходу после выключенного агента): ему сразу
+            # сообщается, что место занято, иначе он появится поверх поля
+            # ввода и кнопки «Отправить».
+            self.floating.set_panel_open(self.is_panel_visible())
         self.floating.set_persona(persona_key)
-        if needed:
-            self.floating.move_to_corner(self.window)
-            self.floating.show()
-        else:
-            self.floating.hide()
+        self.floating.set_enabled(bool(needed))
 
     def _ensure_panel(self, name: str, persona_key: str,
                       max_history: int, max_tool_steps: int) -> None:
@@ -2031,8 +2329,11 @@ class AgentWidget(QObject):
         # раз, сообщением в панели, а не диалогом.
         self.offer_tutorial_on_first_run()
 
-        if self.floating is not None and self.floating.isVisible():
-            self.floating.raise_()
+        # Кот уступает панели место. Он стоит в правом нижнем углу окна —
+        # там же, где панель рисует поле ввода и кнопку «Отправить»; поверх
+        # них он и был «котом, который мешает». Характер никуда не девается:
+        # тот же аватар виден в шапке самой панели.
+        self._set_floating_panel_open(True)
 
     def hide_panel(self) -> None:
         """
@@ -2043,18 +2344,33 @@ class AgentWidget(QObject):
         второй клик по иконке не сработал бы (toggle смотрит на isVisible).
         """
         if self.panel is None or not self.panel.isVisible():
+            self._set_floating_panel_open(False)
             return
 
         self._animation.stop()
         self.panel.setMaximumWidth(0)
         self._layout_panel(0)
         self.panel.hide()
+        self._set_floating_panel_open(False)
 
         # Анимация сворачивания: панель уже скрыта, поэтому движение видно
         # только у её содержимого — этого достаточно, чтобы уход не был рывком.
         self._animation.setStartValue(PANEL_WIDTH)
         self._animation.setEndValue(0)
         self._animation.start()
+
+    def _set_floating_panel_open(self, opened: bool) -> None:
+        """
+        Сообщает плавающему коту, открыта ли панель.
+
+        Кот стоит в правом нижнем углу окна — ровно над полем ввода и
+        кнопкой «Отправить» панели. Пока панель открыта, он прячется; когда
+        панель закрывается, возвращается на место. Вызов один на обе ветки
+        (`show_panel` и `hide_panel`), чтобы состояние кота не разъехалось
+        с состоянием панели.
+        """
+        if self.floating is not None:
+            self.floating.set_panel_open(bool(opened))
 
     def _on_panel_width(self, value: Any) -> None:
         """

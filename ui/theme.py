@@ -514,7 +514,21 @@ QFrame#agentPanel {{
     background: {panel_bg}; border-left: 1px solid {panel_border};
 }}
 QFrame#agentHeader {{ background: transparent; }}
-QLabel#agentName {{ color: {heading}; font-weight: 600; }}
+QLabel#agentName {{ color: {heading}; font-size: 15px; font-weight: 600; }}
+QLabel#agentRole {{ color: {text_muted}; font-size: {font_size_small}; }}
+QLabel#agentHint {{ color: {text_muted}; font-size: {font_size_small}; }}
+/* Кнопки-иконки шапки панели: квадрат 32×32 задан кодом (ui/agent_widget.py),
+   здесь — только вид. Без hover-фона кнопка-эмодзи не читается как кнопка. */
+QToolButton#agentToolButton {{
+    border: none; border-radius: {radius_small};
+    background: transparent; color: {text};
+    font-size: 18px; padding: 0px;
+}}
+QToolButton#agentToolButton:hover {{ background: {hover_bg}; }}
+QToolButton#agentToolButton:pressed {{ background: {nav_item_active_bg}; }}
+QToolButton#agentToolButton:checked {{
+    background: {nav_item_active_bg}; border: 1px solid {nav_item_active_border};
+}}
 QToolButton#agentIconButton {{
     border: none; border-radius: {radius_small}; padding: 2px;
     background: transparent;
