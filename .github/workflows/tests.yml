@@ -161,29 +161,43 @@ jobs:
           # файл, конвейер рвётся, и pytest падает «internal error» на записи
           # в закрытый stdout — именно это случилось в прогоне №14.
           New-Item -ItemType Directory -Force -Path tests/_tmp | Out-Null
-          # `-v`, а не `-q`: UI-слой однажды ОБОРВАЛСЯ нативно (junit пустой,
-          # сводки нет). По точкам видно только «сколько успело пройти», а по
-          # строкам `-v` в хвосте вывода видно, НА КАКОМ тесте процесс умер —
-          # хвост печатает шаг «Publish failures».
-          python -m pytest tests/ui/ -o addopts="" -v -rf --tb=line --basetemp=tests/_tmp/_ci `
-            --junitxml=tests/_tmp/junit-ui.xml 2>&1 |
-            Tee-Object -FilePath tests/_tmp/ui-output.txt
-          $code = $LASTEXITCODE
-          Write-Output "pytest вернул: $code"
-          exit $code
+          # UI-слой идёт ЧАСТЯМИ, по папкам. Локально он проходит одним
+          # процессом (16 минут), а на раннере GitHub процесс обрывался
+          # нативно (0xC0000409) после ~390 тестов — ровно там, где впервые
+          # строится настоящее окно MainWindow (junit пустой, сводки нет).
+          # Это та же болезнь окружения, из-за которой в проекте не гоняют
+          # весь набор одним процессом; лечение то же — своя часть, свой
+          # процесс, свой `--basetemp`. Плюс `-v`: если часть всё-таки
+          # оборвётся, в хвосте вывода видно, НА КАКОМ тесте.
+          $groups = @('agent_widget', 'main_window', 'tabs', 'widgets', 'windows')
+          $failed = 0
+          foreach ($group in $groups) {
+            Write-Output "=== tests/ui/$group ==="
+            python -m pytest "tests/ui/$group" -o addopts="" -v -rf --tb=line `
+              --basetemp="tests/_tmp/_ci_$group" `
+              --junitxml="tests/_tmp/junit-ui-$group.xml" 2>&1 |
+              Tee-Object -FilePath "tests/_tmp/ui-$group-output.txt"
+            $code = $LASTEXITCODE
+            Write-Output "pytest (${group}) вернул: $code"
+            if ($code -ne 0) { $failed = 1 }
+          }
+          exit $failed
 
       - name: Publish failures
         if: always()
         shell: pwsh
         run: |
-          . ./.ci/publish_failures.ps1 -Layer ui
+          foreach ($group in @('agent_widget', 'main_window', 'tabs', 'widgets', 'windows')) {
+            . ./.ci/publish_failures.ps1 -Layer "ui-$group"
+          }
 
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-ui
-          path: tests/_tmp/junit-ui.xml
+          # Частей пять (по папкам) — отчётов тоже пять.
+          path: tests/_tmp/junit-ui-*.xml
           if-no-files-found: ignore
 
   lint:
