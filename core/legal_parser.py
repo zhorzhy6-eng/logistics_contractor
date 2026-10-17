@@ -40,6 +40,7 @@ PDF на портале опубликования — отсканирован�
 """
 
 import hashlib
+import html as _html_module
 import json
 import logging
 import os
@@ -329,6 +330,42 @@ def category_items(sources: Dict[str, Any], category: Optional[str] = None) -> L
 # Извлечение текста
 # ─────────────────────────────────────────────────────────────
 
+#: Блоки, содержимое которых текстом документа НЕ является. Тег и его
+#: внутренность выбрасываются целиком: иначе в акт попадут «p{color:red}»
+#: и «var a=1;» из <style> и <script>.
+_NON_TEXT_BLOCKS = re.compile(
+    r"<(script|style|noscript|head)\b[^>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+#: Блочные теги: их границы становятся переводом строки, иначе абзацы акта
+#: склеиваются в одну строку.
+_BLOCK_TAGS = re.compile(
+    r"</?(?:p|div|br|tr|li|ul|ol|table|thead|tbody|h[1-6]|section|article|"
+    r"header|footer|blockquote|pre|hr)\b[^>]*>",
+    re.IGNORECASE,
+)
+
+
+def _html_to_text_without_bs4(html: str) -> str:
+    """
+    HTML в текст без bs4 — с тем же результатом, что и разбор через bs4.
+
+    Запасной путь нужен не «на всякий случай»: `beautifulsoup4` и `lxml`
+    не входят в `requirements.txt`, поэтому на машине без них приложение
+    обязано читать акты так же, как с ними. Прежняя однострочная замена
+    тегов оставляла ВНУТРЕННОСТЬ <script> и <style> прямо в тексте
+    («var a=1;», «p{color:red}») — это и поймал тест
+    `test_html_to_text_drops_scripts` в CI, где bs4 не установлен.
+    """
+    text = _NON_TEXT_BLOCKS.sub(" ", html)
+    text = _BLOCK_TAGS.sub("\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = _html_module.unescape(text)
+    lines = [re.sub(r"[ \t]{2,}", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
 def html_to_text(html: str) -> str:
     """
     Превращает HTML в плоский текст без разметки.
@@ -343,8 +380,10 @@ def html_to_text(html: str) -> str:
         return ""
     try:
         from bs4 import BeautifulSoup
-    except ImportError:  # pragma: no cover — bs4 есть в окружении проекта
-        return re.sub(r"<[^>]+>", " ", html)
+    except ImportError:
+        # bs4 нет (он не в requirements.txt) — читаем запасным разбором,
+        # который даёт тот же результат.
+        return _html_to_text_without_bs4(html)
 
     soup = BeautifulSoup(html, "lxml")
     for tag in soup(["script", "style", "noscript", "head"]):

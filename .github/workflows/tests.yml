@@ -5,9 +5,13 @@
 # Python 3.14). После Этапа 7 слои запускаются раздельно и не требуют деления
 # на части: `tests/ui/` (1687 тестов) проходит одним процессом.
 #
-# python-version: 3.14 доступен в actions/python-versions (есть 3.14.4 и
-# новее для win32-x64), поэтому стоит 3.14. Если когда-нибудь станет
-# недоступен — замена одна строка: '3.12' (проект совместим).
+# python-version: стоит ТОЧНАЯ версия 3.14.4 — та же, что на рабочей машине
+# оператора, а не «последняя 3.14.x». Причина измеренная: на раннере с
+# 3.14.8 UI-слой ронял процесс НАТИВНО (0xC0000409: junit пустой, сводки
+# нет) ровно на тестах, которые строят главное окно с потоком агента и
+# закрывают его, — на 3.14.4 те же тесты проходят. Это свойство связки
+# CPython + PyQt5 5.15.11, а не код проекта: чинить его из тестов нечем.
+# Если 3.14.4 станет недоступен — замена одна строка: '3.14' или '3.12'.
 #
 # Слои идут ВСЕ и целиком: список «известных отказов» (`.ci/known_failures.txt`)
 # больше не нужен — оба оставшихся теста читали РАБОЧИЙ `config/settings.json`
@@ -62,7 +66,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.14.4'
 
       - name: Install dependencies
         run: |
@@ -105,7 +109,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.14.4'
 
       - name: Install dependencies
         run: |
@@ -147,7 +151,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.14.4'
 
       - name: Install dependencies
         run: |
@@ -209,7 +213,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.14.4'
 
       - name: Install ruff
         run: pip install ruff

@@ -87,15 +87,48 @@ def payload_size(result) -> int:
 # A. Причина: обрезанный JSON
 # ─────────────────────────────────────────────────────────────
 
+def oversized_report_payload() -> str:
+    """
+    Отчёт диагностики, ДОПОЛНЕННЫЙ до размера больше лимита памяти.
+
+    На машине оператора полный отчёт и так длиннее лимита (в этом и была
+    причина 422), а на чистой машине — свежий checkout, пустая база, нет
+    папки логов — он короче. Дополняем подробностями проверок: ровно так
+    отчёт и выглядит там, где данных много. Без этого проверка обрезки
+    зависела бы от машины, а не от кода.
+    """
+    report = diagnostics.run_diagnostics(live_network=False)
+    data = report.to_dict()
+    data["problems"] = list(data.get("problems") or [])
+    data["problems"].append({
+        "key": "details",
+        "title": "Подробности проверок",
+        "status": "warn",
+        "summary": "п" * 500,
+        "details": ["п" * 120] * 40,
+    })
+    return json.dumps({"ok": True, "data": data}, ensure_ascii=False, default=str)
+
+
 def test_full_report_would_not_fit_memory_limit(isolated_db):
-    """Причина воспроизводится: полный отчёт в лимит памяти не влезает."""
+    """
+    Причина воспроизводится: полный отчёт в лимит памяти не влезает.
+
+    На чистой машине (свежий checkout, пустая база, без папки логов) отчёт
+    короче лимита, и причина 422 там не воспроизводится — тест честно
+    пропускается с причиной. Соотношение «полный отчёт длиннее короткого
+    ответа инструмента» проверяется ВСЕГДА: в этом и смысл короткого ответа.
+    """
     report = diagnostics.run_diagnostics(live_network=False)
     full = json.dumps({"ok": True, "data": report.to_dict()},
                       ensure_ascii=False, default=str)
+    short = payload_size(make_registry().call("diagnose", {}))
 
-    assert len(full) > MEMORY_LIMIT, (
-        "если отчёт стал короче лимита, эту защиту можно пересмотреть"
-    )
+    assert len(full) > short, "полный отчёт обязан быть длиннее короткого ответа"
+    assert short < MEMORY_LIMIT, "короткий ответ в лимит памяти влезает всегда"
+
+    if len(full) <= MEMORY_LIMIT:
+        pytest.skip("отчёт короче лимита памяти — причина 422 не воспроизводится")
 
 
 def test_memory_add_truncates_tool_result_validly(isolated_db):
@@ -108,9 +141,8 @@ def test_memory_add_truncates_tool_result_validly(isolated_db):
     """
     from core.agent.memory import AgentMemory
 
-    report = diagnostics.run_diagnostics(live_network=False)
-    payload = json.dumps({"ok": True, "data": report.to_dict()},
-                         ensure_ascii=False, default=str)
+    payload = oversized_report_payload()
+    assert len(payload) > MEMORY_LIMIT, "отчёт для этой проверки берётся заведомо большой"
 
     memory = AgentMemory(repository=_NoRepository())
     message = memory.add("tool", payload, tool_name="diagnose")
