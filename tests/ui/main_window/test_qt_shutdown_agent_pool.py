@@ -388,6 +388,7 @@ def _run_exit_scenario(tmp_path, scenario: str, expected_mark: str):
     return result
 
 
+@pytest.mark.runner_crash
 def test_exit_after_agent_request_is_clean(tmp_path):
     """
     Выход, пока агент ещё думает: код 0 и никаких следов падения.
@@ -398,6 +399,7 @@ def test_exit_after_agent_request_is_clean(tmp_path):
     _run_exit_scenario(tmp_path, "agent", "AGENT-REQUESTED")
 
 
+@pytest.mark.runner_crash
 def test_exit_is_clean_without_any_activity(tmp_path):
     """
     Выход «на пустом месте»: ничего не запускали, просто закрыли.

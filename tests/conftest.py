@@ -76,8 +76,9 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "runner_crash: тест роняет процесс НАТИВНО на раннере GitHub "
-        "(локально идёт; разбор — docs/STATE.md, ЧАСТЬ 4)",
+        "runner_crash: тест не проходит на раннере GitHub из-за нативного "
+        "обрыва Qt при закрытии главного окна (локально идёт; разбор — "
+        "docs/STATE.md, ЧАСТЬ 4)",
     )
 
 
