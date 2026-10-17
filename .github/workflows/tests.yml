@@ -89,7 +89,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          . ./.ci/publish_failures.ps1 -Layer unit
+          . ./.ci/publish_failures.ps1 -Parts unit
 
       - name: Upload test report
         if: always()
@@ -131,7 +131,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          . ./.ci/publish_failures.ps1 -Layer integration
+          . ./.ci/publish_failures.ps1 -Parts integration
 
       - name: Upload test report
         if: always()
@@ -211,10 +211,9 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          foreach ($part in @('agent_widget', 'main_window_a', 'main_window_b',
-                              'tabs', 'widgets', 'windows')) {
-            . ./.ci/publish_failures.ps1 -Layer "ui-$part"
-          }
+          # ОДИН вызов на все части: GitHub принимает не больше 10 аннотаций
+          # на шаг, а скрипт печатает по одной на часть плюс общую сводку.
+          . ./.ci/publish_failures.ps1 -Parts ui-agent_widget,ui-main_window_a,ui-main_window_b,ui-tabs,ui-widgets,ui-windows
 
       - name: Upload test report
         if: always()
