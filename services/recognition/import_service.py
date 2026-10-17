@@ -429,6 +429,20 @@ class DocumentImportService:
 
     def process(self, paths, cancel, on_result, on_text=None):
         logger.info("Импорт документов: начат, файлов=%s", len(paths))
+        # `read_document` приходит в этот модуль ЛЕНИВО, через `__getattr__`
+        # (см. шапку и `_LAZY_SIBLINGS`). Простое чтение глобального имени
+        # здесь падало `NameError` на ПЕРВОМ же файле: `__getattr__` к этому
+        # моменту никто не вызывал, и в `globals()` имени ещё не было. Баг
+        # внёс переезд 1.G (`66617df`), и тесты его не видели, потому что
+        # `monkeypatch.setattr(module, "read_document", ...)` сам вызывает
+        # `__getattr__` и тем самым имя регистрирует — то есть тест лечил
+        # дефект до его появления.
+        #
+        # Обращение через `sys.modules[__name__]` (тот же приём, что для
+        # `DataMapper` выше) решает обе задачи: имя регистрируется на месте,
+        # а подмена атрибута в тестах продолжает работать — она читается
+        # здесь, в момент вызова.
+        reader = _sys.modules[__name__].read_document
         cloud = self._cloud_state()
         with ThreadPoolExecutor(max_workers=2) as workers:
             for file_index, path in enumerate(paths, 1):
@@ -438,7 +452,7 @@ class DocumentImportService:
                 try:
                     logger.info("Импорт документов: чтение файла %s/%s", file_index, len(paths))
                     state = {"produced": False, "deep_used": 0}
-                    for page in read_document(path, cancel, self.settings.get("document_soffice", "")):
+                    for page in reader(path, cancel, self.settings.get("document_soffice", "")):
                         check_cancel(cancel)
                         logger.info("Импорт документов: файл=%s, страница=%s, чтение завершено", file_index, page.number)
                         source = page.label or f"{Path(path).name}, стр. {page.number}"

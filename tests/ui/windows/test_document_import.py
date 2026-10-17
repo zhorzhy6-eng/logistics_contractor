@@ -312,6 +312,41 @@ def test_file_failure_preserves_other_results(monkeypatch):
     assert received[1][1][0].values["full_name"] == "Тестов Тест"
 
 
+def test_process_reads_real_file_without_patching(work_file):
+    """
+    Регресс 1.G: `process()` падал `NameError` на ЛЮБОМ файле.
+
+    Причина — ленивый `read_document` (см. шапку `import_service`): имя
+    приходит через `__getattr__` модуля, а обычное чтение глобального имени
+    этого не делает. Тесты этого не видели, потому что
+    `monkeypatch.setattr(module, "read_document", ...)` сам вызывает
+    `__getattr__` и регистрирует имя — то есть тест лечил дефект до его
+    появления.
+
+    Здесь НИЧЕГО не подменяется: файл читается настоящим reader'ом, и без
+    исправления сценарий падал с «Не удалось прочитать файл: повреждение,
+    пароль или нет доступа.» — сообщением, которое уводит оператора в
+    сторону от настоящей причины.
+    """
+    from docx import Document
+
+    path = work_file("regression_1g.docx")
+    document = Document()
+    document.add_paragraph("Водитель")
+    document.add_paragraph("ФИО: Абрамян Ашот Григорьевич")
+    document.save(path)
+
+    received = []
+    DocumentImportService().process([path], Event(),
+                                    lambda *args: received.append(args))
+
+    assert received, "сервис не вернул ни одного результата"
+    _source, evidence, warning = received[0]
+    assert not warning, f"импорт вернул предупреждение: {warning}"
+    assert evidence, "импорт не нашёл ни одного поля"
+    assert evidence[0].values["full_name"] == "Абрамян Ашот Григорьевич"
+
+
 def test_cloud_vision_replaces_local_ocr(monkeypatch):
     import core.document_import_service as module
     import core.document_ocr as ocr_module
