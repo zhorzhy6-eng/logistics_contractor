@@ -710,12 +710,19 @@ class FloatingCat(QWidget):
         """
         if source is self._owner:
             kind = event.type()
-            if kind in (QEvent.Show, QEvent.Hide, QEvent.Close,
-                        QEvent.WindowStateChange):
-                self._sync_visibility()
-            elif kind in (QEvent.Move, QEvent.Resize):
-                # Окно подвинули или растянули — кот остаётся в его углу.
-                self._place_at_corner()
+            try:
+                if kind in (QEvent.Show, QEvent.Hide, QEvent.Close,
+                            QEvent.WindowStateChange):
+                    self._sync_visibility()
+                elif kind in (QEvent.Move, QEvent.Resize):
+                    # Окно подвинули или растянули — кот остаётся в его углу.
+                    self._place_at_corner()
+            except RuntimeError:
+                # Окно или кот уже разрушены (выход из программы, удаление
+                # окна в тестах). Исключение, вылетевшее из фильтра событий
+                # Qt, обработчик не ждёт — это путь к нативному обрыву
+                # процесса, поэтому молчим осознанно.
+                return False
         return super().eventFilter(source, event)
 
     def event(self, event) -> bool:  # noqa: N802 — имя метода Qt
@@ -728,10 +735,16 @@ class FloatingCat(QWidget):
         kind = event.type()
         if kind == QEvent.WindowBlocked:
             self._blocked = True
-            self._sync_visibility()
+            try:
+                self._sync_visibility()
+            except RuntimeError:
+                return False
         elif kind == QEvent.WindowUnblocked:
             self._blocked = False
-            self._sync_visibility()
+            try:
+                self._sync_visibility()
+            except RuntimeError:
+                return False
         return super().event(event)
 
     # ── Перетаскивание и клик ──
@@ -844,6 +857,13 @@ class AgentPanel(QFrame):
         #: высоту виджета, а это снова присылает событие Resize окна
         #: просмотра (см. _fit_history).
         self._fitting = False
+        #: Второй проход прокрутки (см. scroll_to_bottom_now). Таймер —
+        #: ребёнок панели: умирает вместе с ней и не выстреливает в удалённый
+        #: виджет. `QTimer.singleShot(0, метод)` такой гарантии не даёт.
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.setInterval(0)
+        self._scroll_timer.timeout.connect(self._scroll_to_bottom_end)
         layout.addWidget(self.scroll, 1)
 
         # ── Строка состояния агента ──
@@ -1195,15 +1215,25 @@ class AgentPanel(QFrame):
         анимацией, её ширина меняется, и перенос строк в сообщениях должен
         пересчитываться вместе с ней (иначе высота списка «застыла» бы на
         ширине первого показа).
+
+        Исключения из фильтра не выпускаются наружу: событие может прийти,
+        когда окно уже разрушается (выход из программы, удаление окна в
+        тестах), а исключение, вылетевшее из виртуального метода Qt, —
+        это путь к нативному обрыву процесса (`0xC0000409`), а не к
+        аккуратному отказу.
         """
-        if source is self.input and event.type() == QEvent.KeyPress:
-            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-                if not (event.modifiers() & Qt.ShiftModifier):
-                    self.emit_submitted()
-                    return True
-        elif source is self.scroll.viewport() and event.type() == QEvent.Resize:
-            self._fit_history()
-        return super().eventFilter(source, event)
+        try:
+            if source is self.input and event.type() == QEvent.KeyPress:
+                if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                    if not (event.modifiers() & Qt.ShiftModifier):
+                        self.emit_submitted()
+                        return True
+            elif (source is self.scroll.viewport()
+                  and event.type() == QEvent.Resize):
+                self._fit_history()
+            return super().eventFilter(source, event)
+        except RuntimeError:
+            return False
 
     def _scroll_to_bottom(self) -> None:
         """
@@ -1225,12 +1255,19 @@ class AgentPanel(QFrame):
         # уже ПОСЛЕ этого прохода. Замер: после первой прокрутки значение
         # 164 при максимуме 183 — последняя строка оставалась под краем.
         # Поэтому второй проход, а не «на всякий случай».
-        QTimer.singleShot(0, self._scroll_to_bottom_end)
+        # Таймер — ЧЛЕН панели, а не `QTimer.singleShot`: таймер-ребёнок
+        # умирает вместе с панелью и не может выстрелить в удалённый виджет
+        # (в тестах и при выходе панель удаляется сразу после сообщения).
+        self._scroll_timer.start()
 
     def _scroll_to_bottom_end(self) -> None:
         """Доводит прокрутку до конца после пересчёта раскладки."""
-        bar = self.scroll.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        try:
+            bar = self.scroll.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        except RuntimeError:
+            # Панель уже разрушена — прокручивать нечего.
+            return
 
 
 # ─────────────────────────────────────────────────────────────
