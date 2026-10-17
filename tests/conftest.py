@@ -10,6 +10,7 @@
     pytest tests/test_dates.py -v
 """
 
+import os
 import shutil
 import sys
 import tempfile
@@ -73,6 +74,11 @@ def pytest_configure(config):
         "needs_tesseract: тест требует движка Tesseract OCR "
         "(tesseract.exe в PATH)",
     )
+    config.addinivalue_line(
+        "markers",
+        "runner_crash: тест роняет процесс НАТИВНО на раннере GitHub "
+        "(локально идёт; разбор — docs/STATE.md, ЧАСТЬ 4)",
+    )
 
 
 # ── Движок Tesseract OCR ──
@@ -104,6 +110,12 @@ def pytest_collection_modifyitems(config, items):
     обязаны проходить, а тесты, которым нужен клиентский тип или движок
     OCR, — честно пропускаться с причиной, а не падать на импорте или на
     вызове внешней программы.
+
+    Отдельно — маркер `runner_crash`: тесты, которые РОНЯЮТ процесс нативно
+    на раннере GitHub (Windows Server, offscreen) при построении и закрытии
+    настоящего главного окна. Локально они идут и проходят; пропускаются
+    только в CI (`CI=true`), с причиной в отчёте. Разбор — docs/STATE.md,
+    ЧАСТЬ 4.
     """
     if not is_private_available():
         skip_private = pytest.mark.skip(
@@ -120,6 +132,15 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "needs_tesseract" in item.keywords:
                 item.add_marker(skip_tesseract)
+
+    if os.environ.get("CI", "").strip().lower() == "true":
+        skip_runner = pytest.mark.skip(
+            reason="на раннере GitHub этот тест роняет процесс нативно; "
+                   "локально идёт (docs/STATE.md, ЧАСТЬ 4)"
+        )
+        for item in items:
+            if "runner_crash" in item.keywords:
+                item.add_marker(skip_runner)
 
 
 # ─────────────────────────────────────────────────────────────

@@ -175,18 +175,10 @@ def test_wait_for_threads_reports_timeout(qt_app, caplog):
 # ─────────────────────────────────────────────────────────────
 #: Четыре теста ниже строят НАСТОЯЩЕЕ главное окно, поднимают поток агента и
 #: закрывают окно. На раннере GitHub (Windows Server, offscreen) это роняет
-#: процесс НАТИВНО: junit пустой, сводки pytest нет, в выводе строка теста без
-#: результата — проверено прогонами №13–№18 (в том числе на Python 3.14.4,
-#: той же версии, что на рабочей машине). Воспроизвести локально НЕ удалось:
-#: и отдельный файл, и вся папка `tests/ui/main_window` проходят и в рабочей
-#: папке, и в свежем клоне без приватной части. Поэтому в CI они
-#: пропускаются с этой причиной, а на машине оператора идут: разбор —
-#: `docs/STATE.md`, ЧАСТЬ 4.
-RUNNER_CRASHES_ON_MAIN_WINDOW = pytest.mark.skipif(
-    os.environ.get("CI", "").strip().lower() == "true",
-    reason="на раннере GitHub построение главного окна с потоком агента "
-           "роняет процесс нативно; локально тест идёт (docs/STATE.md, ЧАСТЬ 4)",
-)
+#: процесс НАТИВНО: junit пустой, сводки pytest нет. Локально те же тесты
+#: идут и проходят (и по одному, и всей папкой, и в свежем клоне). Поэтому
+#: они помечены `runner_crash`: в CI пропускаются, на машине оператора
+#: работают. Разбор — `docs/STATE.md`, ЧАСТЬ 4.
 
 
 @pytest.fixture
@@ -213,7 +205,7 @@ def agent_widget(qt_app, isolated_db, monkeypatch):
         pass
 
 
-@RUNNER_CRASHES_ON_MAIN_WINDOW
+@pytest.mark.runner_crash
 def test_agent_thread_has_parent(agent_widget):
     """
     Рабочий поток агента — Qt-ребёнок виджета.
@@ -232,7 +224,7 @@ def test_agent_thread_has_parent(agent_widget):
     assert thread in threads_of(widget), "поток не виден через findChildren"
 
 
-@RUNNER_CRASHES_ON_MAIN_WINDOW
+@pytest.mark.runner_crash
 def test_agent_thread_is_found_from_window(agent_widget):
     """Поток агента видно и от окна: одного дерева достаточно."""
     window, widget = agent_widget
@@ -241,7 +233,7 @@ def test_agent_thread_is_found_from_window(agent_widget):
     assert widget._thread in threads_of(window)
 
 
-@RUNNER_CRASHES_ON_MAIN_WINDOW
+@pytest.mark.runner_crash
 def test_shutdown_stops_agent_thread(agent_widget):
     """`shutdown()` останавливает поток и не оставляет его висеть."""
     _window, widget = agent_widget
@@ -254,7 +246,7 @@ def test_shutdown_stops_agent_thread(agent_widget):
     assert thread.isRunning() is False
 
 
-@RUNNER_CRASHES_ON_MAIN_WINDOW
+@pytest.mark.runner_crash
 def test_wait_for_threads_stops_agent_thread(agent_widget):
     """
     Ожидание потоков из `qt_shutdown` работает и для потока агента.
