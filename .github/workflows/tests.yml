@@ -173,16 +173,36 @@ jobs:
           # весь набор одним процессом; лечение то же — своя часть, свой
           # процесс, свой `--basetemp`. Плюс `-v`: если часть всё-таки
           # оборвётся, в хвосте вывода видно, НА КАКОМ тесте.
-          $groups = @('agent_widget', 'main_window', 'tabs', 'widgets', 'windows')
+          # Части по папкам, а `main_window` — ещё на две по файлам: именно
+          # он обрывался нативно. Разделение по файлам заодно проверяет
+          # догадку «обрыв связан с тестами, которые шли ПЕРЕД ним»
+          # (`test_qt_crash_handler.py` запускает `main.py` подпроцессом).
+          $parts = [ordered]@{
+            'agent_widget'  = @('tests/ui/agent_widget')
+            'main_window_a' = @('tests/ui/main_window/test_action_logging.py',
+                                'tests/ui/main_window/test_main_window_selector.py',
+                                'tests/ui/main_window/test_qt_crash_handler.py')
+            'main_window_b' = @('tests/ui/main_window/test_qt_shutdown_agent_pool.py',
+                                'tests/ui/main_window/test_ui_floating_cat_exit.py',
+                                'tests/ui/main_window/test_ui_main_window_carrier_match.py',
+                                'tests/ui/main_window/test_ui_main_window_layout.py',
+                                'tests/ui/main_window/test_ui_main_window_load_driver_carrier.py',
+                                'tests/ui/main_window/test_ui_main_window_save_organizations.py',
+                                'tests/ui/main_window/test_ui_theme.py',
+                                'tests/ui/main_window/test_vehicle_recognition_list.py')
+            'tabs'          = @('tests/ui/tabs')
+            'widgets'       = @('tests/ui/widgets')
+            'windows'       = @('tests/ui/windows')
+          }
           $failed = 0
-          foreach ($group in $groups) {
-            Write-Output "=== tests/ui/$group ==="
-            python -m pytest "tests/ui/$group" -o addopts="" -v -rf --tb=line `
-              --basetemp="tests/_tmp/_ci_$group" `
-              --junitxml="tests/_tmp/junit-ui-$group.xml" 2>&1 |
-              Tee-Object -FilePath "tests/_tmp/ui-$group-output.txt"
+          foreach ($part in $parts.Keys) {
+            Write-Output "=== $part ==="
+            python -m pytest @($parts[$part]) -o addopts="" -v -rf --tb=line `
+              --basetemp="tests/_tmp/_ci_$part" `
+              --junitxml="tests/_tmp/junit-ui-$part.xml" 2>&1 |
+              Tee-Object -FilePath "tests/_tmp/ui-$part-output.txt"
             $code = $LASTEXITCODE
-            Write-Output "pytest (${group}) вернул: $code"
+            Write-Output "pytest (${part}) вернул: $code"
             if ($code -ne 0) { $failed = 1 }
           }
           exit $failed
@@ -191,8 +211,9 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          foreach ($group in @('agent_widget', 'main_window', 'tabs', 'widgets', 'windows')) {
-            . ./.ci/publish_failures.ps1 -Layer "ui-$group"
+          foreach ($part in @('agent_widget', 'main_window_a', 'main_window_b',
+                              'tabs', 'widgets', 'windows')) {
+            . ./.ci/publish_failures.ps1 -Layer "ui-$part"
           }
 
       - name: Upload test report
