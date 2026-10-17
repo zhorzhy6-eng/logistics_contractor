@@ -108,6 +108,60 @@ def _choose_contract_type():
     return dialog.selected_type()
 
 
+def _ask_keys_if_missing() -> bool:
+    """
+    Первый запуск: спрашивает ключи API, если ключа GigaChat нет.
+
+    Окно (ui/keys_dialog.py) показывается САМО и только тогда, когда ключа
+    нет: настроенный компьютер не получает лишнего шага при каждом запуске.
+    Ключи хранятся в системном хранилище Windows (core.secrets_store),
+    поэтому в файлах проекта их по-прежнему нет.
+
+    Отказ оператора — не ошибка: программа работает в ограниченном режиме
+    (генерация по шаблонам и ручное заполнение формы), а ключи можно
+    ввести позже из настроек кнопкой «Ключи API…».
+
+    :return: True, если ключи введены (или уже были).
+    """
+    from core import secrets_store
+
+    # Хранилище недоступно — спрашивать некуда сохранять: окно только
+    # пообещало бы сохранить ключ и не смогло. Причина уже в журнале
+    # (infrastructure/secrets/store.py пишет её сам).
+    if not secrets_store.keyring_available():
+        logger.warning(
+            "Системное хранилище ключей недоступно — окно ввода ключей "
+            "не показывается"
+        )
+        return False
+
+    if secrets_store.has_gigachat_key():
+        return True
+
+    # Qt импортируется внутри функции: main.py импортируется и в тестах
+    # (tests/.../test_logging_config.py), где поднимать Qt не нужно.
+    from PyQt5.QtWidgets import QDialog
+
+    from ui.keys_dialog import KeysDialog, should_prompt_on_startup
+
+    if not should_prompt_on_startup():
+        return False
+
+    dialog = KeysDialog(require_gigachat=True)
+    try:
+        accepted = dialog.exec_() == QDialog.Accepted
+    finally:
+        dialog.deleteLater()
+
+    if accepted:
+        logger.info("Ключи API введены при первом запуске")
+    else:
+        logger.info(
+            "Ключи API не введены — программа работает в ограниченном режиме"
+        )
+    return accepted
+
+
 def _load_contract_types() -> None:
     """
     Прогревает реестр типов договоров (загрузка изолирована по типам).
@@ -406,6 +460,11 @@ def main() -> int:
         from ui.system_theme import preferred_theme
         from ui.theme import apply_theme
         apply_theme(app, preferred_theme(get_settings_service()))
+
+        # ── Первый запуск: ключи API (Часть 2 задания от 18.10.2026) ──
+        # Окно появляется само, только если ключа GigaChat нет; отказ
+        # ничего не ломает — программа работает в ограниченном режиме.
+        _ask_keys_if_missing()
 
         # ── Реестр типов договоров (ЭТАП 1) ──
         _load_contract_types()

@@ -59,7 +59,9 @@ REQUIRED_GROUPS = {
 #: (тишина при запуске и пустая форма) и
 #: `tests/ui/agent_widget/test_agent_hints_startup.py` (панель молчит при
 #: старте, но не глушит режим «Обучение»).
-EXPECTED_FILES = {"unit": 68, "integration": 25, "ui": 65}
+#: ui 65 → 66 в шаге «окно ввода ключей API» 18.10.2026 — добавлен
+#: `tests/ui/widgets/test_keys_dialog.py` (окно ключей GigaChat и DaData).
+EXPECTED_FILES = {"unit": 68, "integration": 25, "ui": 66}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -172,9 +174,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 158 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 159 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 158, f"тестовых файлов {len(found)}, ожидается 158"
+    assert len(found) == 159, f"тестовых файлов {len(found)}, ожидается 159"
 
 
 def test_no_test_module_name_collision():

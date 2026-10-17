@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
 from core import secrets_store
 from ui import theme
 from ui import system_theme
+from ui.keys_dialog import ask_keys
 
 logger = logging.getLogger("ui.settings_dialog")
 
@@ -144,9 +145,25 @@ class SettingsDialog(QDialog):
         self.key_status_label.setObjectName("mutedLabel")
         gigachat_layout.addRow("Ключ авторизации:", self.key_status_label)
 
+        # Ключи GigaChat и DaData вводятся в отдельном окне (Часть 2
+        # задания от 18.10.2026): здесь их значения не показываются и
+        # не хранятся — только кнопка и статус.
+        keys_row = QHBoxLayout()
+        keys_row.setContentsMargins(0, 0, 0, 0)
+
+        self.btn_edit_keys = QPushButton("Ключи API…")
+        self.btn_edit_keys.setToolTip(
+            "Ввести или заменить ключи GigaChat и DaData. "
+            "Они попадут в системное хранилище Windows, а не в настройки."
+        )
+        self.btn_edit_keys.clicked.connect(self._on_edit_keys)
+        keys_row.addWidget(self.btn_edit_keys)
+
         self.btn_check_key = QPushButton("Обновить статус ключа")
         self.btn_check_key.clicked.connect(self._on_check_key)
-        gigachat_layout.addRow("", self.btn_check_key)
+        keys_row.addWidget(self.btn_check_key)
+        keys_row.addStretch()
+        gigachat_layout.addRow("", keys_row)
 
         self.gigachat_model_edit = QLineEdit()
         self.gigachat_model_edit.setPlaceholderText("GigaChat")
@@ -272,6 +289,18 @@ class SettingsDialog(QDialog):
                 self._suppress_follow_reset = False
 
         self.theme_hint_label.setText(theme.theme_hint(system_key))
+
+    def _on_edit_keys(self) -> None:
+        """
+        Открывает окно ввода ключей API (GigaChat и DaData).
+
+        Окно само пишет ключи в системное хранилище; настройки после него
+        только перечитывают статус — значения ключей в диалог не попадают.
+        """
+        accepted = ask_keys(self)
+        self.key_status_label.setText(secrets_store.describe_key_state())
+        if accepted:
+            logger.info("Ключи API изменены из диалога настроек")
 
     def _on_check_key(self) -> None:
         """Обновляет статус ключа, не показывая его значение."""
