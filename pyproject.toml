@@ -12,7 +12,7 @@
 
 [project]
 name = "logistics-contractor"
-version = "1.4.0"
+version = "1.4.1"
 description = "Подготовка договоров перевозки, аренды и заявок"
 readme = "README.md"
 requires-python = ">=3.14"
