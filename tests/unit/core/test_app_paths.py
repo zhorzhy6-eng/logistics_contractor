@@ -235,16 +235,23 @@ def test_describe_marks_exe_mode(frozen):
 @pytest.mark.parametrize("relative", PATH_OWNER_MODULES)
 def test_module_has_no_file_based_root(relative):
     """
-    В модуле нет счёта корня от `__file__` и есть обращение к app_paths.
+    В модуле нет счёта корня от `__file__` и есть обращение к путям.
 
     Счёт уровней (`parents[3]`, `dirname(dirname(__file__))`) — ровно то,
     что ломалось в сборке: модуль лежит в архиве PyInstaller, и папки
     рядом с ним на диске нет. Проверка сторожит, чтобы при следующей
     правке старый способ не вернулся.
+
+    Корень при этом считается либо через `app_paths` (где лежат ресурсы и
+    папка программы), либо через `data_paths` (где лежат данные
+    пользователя). Оба модуля делают это одинаково — функцией в момент
+    вызова, а не константой при импорте.
     """
     source = (PROJECT_ROOT / relative).read_text(encoding="utf-8")
 
-    assert "app_paths" in source, f"{relative}: корень считается не через app_paths"
+    assert "app_paths" in source or "data_paths" in source, (
+        f"{relative}: корень считается не через app_paths/data_paths"
+    )
     forbidden = (
         "resolve().parents[",
         "dirname(os.path.dirname(os.path.abspath(__file__))",
@@ -266,34 +273,43 @@ def test_templates_dir_exists(not_frozen):
     assert contract_paths.TEMPLATES_DIR == PROJECT_ROOT / "templates"
 
 
-def test_output_dir_is_writable_side(not_frozen):
-    """Готовые договоры пишутся в `output/` рядом с программой."""
+def test_output_dir_is_in_data_folder(not_frozen):
+    """
+    Готовые договоры пишутся в папку данных (`<данные>/output`).
+
+    НЕ рядом с программой: папку установки при обновлении заменяют, и
+    договоры из неё пропадали. Путь — из core/data_paths.py.
+    """
+    from core import data_paths
     from core.contracts import paths as contract_paths
 
-    assert contract_paths.OUTPUT_DIR == PROJECT_ROOT / "output"
+    assert contract_paths.OUTPUT_DIR == data_paths.output_dir()
 
 
-def test_settings_path_is_writable_side(not_frozen, monkeypatch):
-    """Настройки читаются и пишутся в `config/settings.json` у программы."""
+def test_settings_path_is_in_data_folder(not_frozen, monkeypatch):
+    """Настройки лежат в папке данных (`<данные>/config/settings.json`)."""
     monkeypatch.delenv("LOGISTICS_SETTINGS_PATH", raising=False)
 
+    from core import data_paths
     from core.settings_service import default_settings_path
 
-    assert Path(default_settings_path()) == PROJECT_ROOT / "config" / "settings.json"
+    assert Path(default_settings_path()) == data_paths.config_path()
 
 
-def test_logs_dir_is_writable_side(not_frozen):
-    """Журналы пишутся в `logs/` рядом с программой."""
+def test_logs_dir_is_in_data_folder(not_frozen):
+    """Журналы пишутся в папку данных (`<данные>/logs`)."""
+    from core import data_paths
     from core.qt_crash_handler import default_logs_dir
 
-    assert default_logs_dir() == PROJECT_ROOT / "logs"
+    assert default_logs_dir() == data_paths.logs_dir()
 
 
-def test_database_path_is_writable_side(not_frozen):
-    """База лежит рядом с программой, а не в папке кода."""
+def test_database_path_is_in_data_folder(not_frozen):
+    """База лежит в папке данных, а не в папке программы."""
+    from core import data_paths
     from db import connection
 
-    assert Path(connection.DB_PATH) == PROJECT_ROOT / "contracts.db"
+    assert Path(connection.DB_PATH) == data_paths.db_path()
 
 
 def test_private_locations_include_bundle_and_program(monkeypatch):

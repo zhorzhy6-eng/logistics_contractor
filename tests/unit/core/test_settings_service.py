@@ -12,6 +12,7 @@ import os
 
 import pytest
 
+from core import data_paths
 from core.settings_service import (
     SettingsService,
     default_settings_path,
@@ -248,9 +249,10 @@ def test_env_var_overrides_path(work_file, monkeypatch):
     assert default_settings_path() == str(custom)
 
 
-def test_default_path_without_env(monkeypatch, project_root):
+def test_default_path_without_env(monkeypatch):
+    """Без переменной путь — из папки данных (core/data_paths.py)."""
     monkeypatch.delenv("LOGISTICS_SETTINGS_PATH", raising=False)
-    assert default_settings_path() == str(project_root / "config" / "settings.json")
+    assert default_settings_path() == str(data_paths.config_path())
 
 
 def test_real_settings_file_is_valid(project_root):

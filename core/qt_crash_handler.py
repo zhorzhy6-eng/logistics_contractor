@@ -94,15 +94,17 @@ _QT_LEVELS_BY_NAME = {
 # ─────────────────────────────────────────────────────────────
 def default_logs_dir() -> Path:
     """
-    Папка логов программы (<папка программы>/logs) — как в
-    config/logging_config.py.
+    Папка логов программы — та же, что у logging_config: папка данных.
 
-    Путь берётся из app_paths (см. core/app_paths.py): в .exe журнал
-    пишется рядом с программой, а не в архив PyInstaller.
+    Путь берётся из core/data_paths.py (`%APPDATA%\\LogisticsContractor\\
+    logs` в .exe, `tests/_tmp/_appdata/logs` в разработке). Один источник
+    правды на оба модуля: если бы faulthandler писал в один каталог, а
+    logging в другой, при разборе аварии половина картины была бы не на
+    месте.
     """
-    from core import app_paths
+    from core import data_paths
 
-    return app_paths.writable_path("logs")
+    return data_paths.logs_dir()
 
 
 def _resolve_logs_dir(logs_dir=None) -> Path:

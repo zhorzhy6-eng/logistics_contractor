@@ -2294,8 +2294,11 @@ def test_template_selection(generator, templates_dir):
     assert generator._get_template_path("что-то иное").endswith("shablon_ooo.docx")
 
 
-def test_default_output_dir(generator, project_root):
-    assert generator.default_output_dir() == str(project_root / "output")
+def test_default_output_dir(generator):
+    """Папка договоров — в папке данных пользователя (core/data_paths.py)."""
+    from core import data_paths
+
+    assert generator.default_output_dir() == str(data_paths.output_dir())
 
 
 # ─────────────────────────────────────────────────────────────

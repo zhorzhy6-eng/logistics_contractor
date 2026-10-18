@@ -394,17 +394,21 @@ def test_split_payment_works_through_the_class():
     assert split["balance_percent"] == "70"
 
 
-def test_default_output_dir_points_at_project_root():
+def test_default_output_dir_points_at_data_root():
     """
-    Папка договоров — `<корень проекта>/output`, а не `core/contracts/output`.
+    Папка договоров — `<папка данных>/output`, а не `core/contracts/output`.
 
     После переезда файл стал на папку глубже, и `parents[2]` дал бы
     `core/contracts`. Проверять это обязательно: ошибка тихая — договоры
-    просто падают не туда.
+    просто падают не туда. С перехода на `%APPDATA%` (шаг «данные в
+    %APPDATA%») путь берётся из core/data_paths.py: в .exe это
+    `%APPDATA%\\LogisticsContractor\\output`, в тестах —
+    `tests/_tmp/_appdata/output`.
     """
+    from core import data_paths
     from core.contracts.base import BaseContractGenerator
 
-    assert BaseContractGenerator.default_output_dir() == str(PROJECT_ROOT / "output")
+    assert BaseContractGenerator.default_output_dir() == str(data_paths.output_dir())
 
 
 def test_pere_vozka_generator_still_inherits():

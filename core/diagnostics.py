@@ -249,8 +249,9 @@ def project_root() -> str:
     Корень проекта в разработке (в .exe — папка программы).
 
     Диагностика показывает пути для человека, поэтому важно, чтобы они
-    были настоящими: в сборке `writable_path` — папка с .exe
-    (см. core/app_paths.py).
+    были настоящими: в сборке `app_root` — папка с .exe
+    (см. core/app_paths.py). ⚠️ Это папка ПРОГРАММЫ, а не данных: журналы
+    и база лежат отдельно, в `%APPDATA%` (см. core/data_paths.py).
     """
     from core import app_paths
 
@@ -258,8 +259,16 @@ def project_root() -> str:
 
 
 def logs_dir() -> str:
-    """Папка логов (та же, что у config/logging_config.py — по умолчанию)."""
-    return os.path.join(project_root(), "logs")
+    """
+    Папка журналов — та же, что у config/logging_config.py.
+
+    С версии 1.4.1 журналы лежат в папке данных (`%APPDATA%\\
+    LogisticsContractor\\logs` в .exe), а не рядом с программой: иначе
+    диагностика читала бы пустую папку и «теряла» свежие ошибки.
+    """
+    from core import data_paths
+
+    return str(data_paths.logs_dir())
 
 
 def database_path() -> str:

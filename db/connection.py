@@ -17,22 +17,22 @@
 
 import logging
 import sqlite3
+from pathlib import Path
 
 # Логирование SQL-запросов (Часть 2 задания): фабрика соединения пишет
 # в logs/debug.log запрос, число строк и время, а медленные запросы (>1 с)
 # помечает SLOW в logs/app.log.
-from core import app_paths
+from core import data_paths
 from db.query_logging import LoggingConnection
 
 logger = logging.getLogger("db.connection")
 
-#: Путь к файлу базы по умолчанию — рядом с ПРОГРАММОЙ, а не с кодом.
+#: Путь к файлу базы по умолчанию — в ПАПКЕ ДАННЫХ пользователя.
 #:
-#: В .exe код лежит в архиве PyInstaller, и база рядом с ним была бы
-#: недоступна для записи (а при обновлении сборки — потеряна). Поэтому путь
-#: берётся из app_paths.writable_path (см. core/app_paths.py): в разработке
-#: это корень проекта, в сборке — папка с .exe.
-DB_PATH = str(app_paths.writable_path("contracts.db"))
+#: Не рядом с программой: папку установки замена при обновлении, и база
+#: пропадала. В .exe путь ведёт в %APPDATA%\LogisticsContractor (см.
+#: core/data_paths.py), в разработке — в tests/_tmp/_appdata.
+DB_PATH = str(data_paths.db_path())
 
 #: Источник пути к базе: функция без аргументов, возвращающая путь.
 #: Ставится фасадом db.database (см. модуль-документацию).
@@ -80,7 +80,16 @@ def get_connection(foreign_keys: bool = True) -> sqlite3.Connection:
         мгновенной ошибки «database is locked»;
       * foreign_keys=ON   — контроль ссылочной целостности (как было).
     """
-    conn = sqlite3.connect(current_db_path(), timeout=30, factory=LoggingConnection)
+    path = current_db_path()
+
+    # Папку для файла создаём ДО открытия: sqlite3.connect создаёт файл, но
+    # не каталог. В свежей установке папки данных ещё нет (%APPDATA%\
+    # LogisticsContractor), и первый запуск падал бы с «unable to open
+    # database file». Каталог берётся из самого пути, поэтому подмена
+    # DB_PATH в тестах тоже работает.
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(path, timeout=30, factory=LoggingConnection)
 
     conn.execute("PRAGMA busy_timeout = 5000")
     if foreign_keys:

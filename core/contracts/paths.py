@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from core import app_paths
+from core import app_paths, data_paths
 from core.dates import parse_date
 
 #: Корень проекта: в разработке — корень исходников, в .exe — папка ресурсов
@@ -31,9 +31,10 @@ PROJECT_ROOT = app_paths.resource_path()
 TEMPLATES_DIR = app_paths.resource_path("templates")
 
 #: Папка готовых договоров (как DEFAULT_OUTPUT_DIRNAME = "output").
-#: ПИСАЕТСЯ, поэтому берётся рядом с программой, а не из папки ресурсов:
-#: сборку при обновлении заменяют целиком, и договоры из неё пропали бы.
-OUTPUT_DIR = app_paths.writable_path("output")
+#: ПИШЕТСЯ, поэтому лежит в папке данных пользователя (core/data_paths.py),
+#: а не рядом с программой: папку установки заменяют при обновлении, и
+#: договоры из неё пропадали.
+OUTPUT_DIR = data_paths.output_dir()
 
 #: Сколько символов маршрута попадает в имя папки. Длинный маршрут
 #: («Москва - Санкт-Петербург - …») в имени папки нечитаем, а полный текст

@@ -118,21 +118,21 @@ class BaseContractGenerator(ABC):
     @classmethod
     def default_output_dir(cls) -> str:
         """
-        Папка для готовых договоров: <папка программы>/output.
+        Папка для готовых договоров: `<папка данных>/output`.
 
-        Путь берётся из app_paths.writable_path (см. core/app_paths.py):
-        договоры — изменяемые файлы, и в собранном .exe они должны лежать
-        рядом с программой, а не в папке ресурсов сборки, которую заменяют
-        при обновлении.
+        Путь берётся из core/data_paths.py: в .exe это
+        `%APPDATA%\\LogisticsContractor\\output`, в разработке —
+        `tests/_tmp/_appdata/output`. Договоры — данные пользователя, и в
+        папке установки им не место: её заменяют при обновлении.
 
         История: раньше корень считался от местоположения этого файла
         (core/contracts/base/generator.py → parents[3]). После разбиения
         (Этап 4) файл стал на папку глубже (было parents[2]), поэтому счёт
         уровней здесь больше не используется.
         """
-        from core import app_paths
+        from core import data_paths
 
-        return str(app_paths.writable_path(cls.DEFAULT_OUTPUT_DIRNAME))
+        return str(data_paths.output_dir())
 
     # ─────────────────────────────────────────────────────────
     # ХУКИ (точки расширения, переопределяемые подклассом)

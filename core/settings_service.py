@@ -24,7 +24,7 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-from core import app_paths
+from core import data_paths
 
 logger = logging.getLogger("core.settings_service")
 
@@ -153,18 +153,23 @@ def normalize_agent_settings(values: Optional[Dict[str, Any]] = None) -> Dict[st
 
 def default_settings_path() -> str:
     """
-    Путь к settings.json по умолчанию (config/ рядом с программой).
+    Путь к settings.json по умолчанию — в ПАПКЕ ДАННЫХ пользователя.
 
-    ПИШЕТСЯ в работе (диалог настроек сохраняет файл), поэтому путь берётся
-    из `app_paths.writable_path`: в .exe это папка программы, а не папка
-    ресурсов сборки. Переменная окружения LOGISTICS_SETTINGS_PATH главнее
-    всего — на ней стоят тесты и портативные сборки.
+    Файл ПИШЕТСЯ в работе (диалог настроек сохраняет его), поэтому он живёт
+    там же, где база и журналы: `%APPDATA%\\LogisticsContractor\\config\\
+    settings.json` в .exe, `tests/_tmp/_appdata/config/settings.json` в
+    разработке (см. core/data_paths.py). Рядом с программой его больше нет:
+    при обновлении папка установки заменяется, и настройки оператора
+    пропадали.
+
+    Переменная окружения LOGISTICS_SETTINGS_PATH главнее всего — на ней
+    стоят тесты и портативные сборки.
     """
     env_path = os.environ.get(ENV_PATH, "").strip()
     if env_path:
         return env_path
 
-    return str(app_paths.writable_path(os.path.join("config", "settings.json")))
+    return str(data_paths.config_path())
 
 
 class SettingsService:
