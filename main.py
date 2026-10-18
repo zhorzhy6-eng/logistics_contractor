@@ -55,6 +55,14 @@ def _parse_args(argv=None):
             "(logs/app.log всегда остаётся INFO)"
         ),
     )
+    parser.add_argument(
+        "--selftest", action="store_true",
+        help=(
+            "самопроверка сборки без запуска окна: шаблоны, правовая база, "
+            "приватная часть, сертификат, база, ключи; отчёт — в selftest.txt "
+            "рядом с программой (код возврата 0 — всё в порядке)"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -431,6 +439,17 @@ def main() -> int:
         logger.info("=== Запуск приложения ===")
         if _ARGS.debug:
             logger.info("Режим отладки: в лог пишутся DEBUG-сообщения")
+
+        # ── Самопроверка сборки (--selftest) ──
+        # Выполняется ДО создания QApplication: это проверка путей и
+        # ресурсов, Qt для неё не нужен, а консоли у собранного .exe нет —
+        # отчёт пишется файлом рядом с программой (core/selftest.py).
+        if _ARGS.selftest:
+            from core.selftest import run_selftest
+
+            exit_code = run_selftest()
+            logger.info("Самопроверка завершена: код=%s", exit_code)
+            return _return_or_exit(exit_code)
 
         # Импортируем PyQt5 здесь, чтобы логирование уже работало
         from PyQt5.QtWidgets import QApplication

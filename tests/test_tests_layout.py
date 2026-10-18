@@ -63,7 +63,9 @@ REQUIRED_GROUPS = {
 #: `tests/ui/widgets/test_keys_dialog.py` (окно ключей GigaChat и DaData).
 #: unit 68 → 69 в шаге «app_paths — корень приложения и ресурсы» 18.10.2026 —
 #: добавлен `tests/unit/core/test_app_paths.py` (пути в разработке и в .exe).
-EXPECTED_FILES = {"unit": 69, "integration": 25, "ui": 66}
+#: unit 69 → 70 в шаге «PyInstaller spec + сборка exe» 18.10.2026 — добавлен
+#: `tests/unit/core/test_selftest.py` (самопроверка сборки --selftest).
+EXPECTED_FILES = {"unit": 70, "integration": 25, "ui": 66}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -176,9 +178,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 160 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 161 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 160, f"тестовых файлов {len(found)}, ожидается 160"
+    assert len(found) == 161, f"тестовых файлов {len(found)}, ожидается 161"
 
 
 def test_no_test_module_name_collision():
@@ -403,3 +405,4 @@ def test_pytest_ini_ignores_working_dirs():
     ignored = _pytest_ini().get("pytest", "norecursedirs").split()
     assert "_tmp" in ignored
     assert "data" in ignored
+
