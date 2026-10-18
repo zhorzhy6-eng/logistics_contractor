@@ -17,6 +17,7 @@ import os
 import sqlite3
 from typing import Any, Dict, List, Tuple
 
+from core import app_paths
 from db.connection import get_connection
 from db.crud.addresses import import_addresses_from_list
 
@@ -40,9 +41,13 @@ SALON_COLUMN_KEYS = (
 
 
 def salons_xlsx_path() -> str:
-    """Путь к файлу справочника салонов в папке data/ проекта."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(root, "data", SALONS_XLSX_NAME)
+    """
+    Путь к файлу справочника салонов в папке data/.
+
+    Читается из РЕСУРСОВ сборки (core/app_paths.py): в .exe файл приезжает
+    вместе с программой в `_MEIPASS`, а не рядом с модулем.
+    """
+    return str(app_paths.resource_path(os.path.join("data", SALONS_XLSX_NAME)))
 
 
 # ─────────────────────────────────────────────────────────────

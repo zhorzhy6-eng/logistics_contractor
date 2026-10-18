@@ -50,6 +50,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from core import app_paths
 from core.utils import text_truncate
 
 logger = logging.getLogger("core.agent.tutorial")
@@ -86,18 +87,17 @@ _cache: Optional[List[Dict[str, Any]]] = None
 # ─────────────────────────────────────────────────────────────
 
 def project_root() -> str:
-    """Корень проекта: services/agent/tools/tutorial.py → 4 уровня вверх.
-
-    ⚠️ Этап 5: файл лежал в `core/agent/` (три уровня до корня) и переехал
-    на уровень глубже. Без правки корнем считалась бы папка `services/`,
-    и публичные инструкции оператора перестали бы находиться — ошибка
-    тихая: список папок просто оказался бы пустым.
     """
-    return os.path.dirname(
-        os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
-    )
+    Корень ЧТЕНИЯ ресурсов: в разработке — корень проекта, в .exe — папка
+    ресурсов сборки (`_MEIPASS`, см. core/app_paths.py).
+
+    ⚠️ История: файл лежал в `core/agent/` (три уровня до корня) и переехал
+    на уровень глубже в `services/agent/tools/`. Счёт уровней от `__file__`
+    тогда дал бы папку `services/`, и публичные инструкции оператора
+    перестали бы находиться — ошибка тихая: список папок просто оказался бы
+    пустым. Поэтому корень берётся из app_paths, а не считается здесь.
+    """
+    return str(app_paths.resource_path())
 
 
 def tutorial_dir() -> str:

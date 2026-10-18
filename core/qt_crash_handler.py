@@ -93,8 +93,16 @@ _QT_LEVELS_BY_NAME = {
 # Пути
 # ─────────────────────────────────────────────────────────────
 def default_logs_dir() -> Path:
-    """Папка логов проекта (<корень>/logs) — как в config/logging_config.py."""
-    return Path(__file__).resolve().parents[1] / "logs"
+    """
+    Папка логов программы (<папка программы>/logs) — как в
+    config/logging_config.py.
+
+    Путь берётся из app_paths (см. core/app_paths.py): в .exe журнал
+    пишется рядом с программой, а не в архив PyInstaller.
+    """
+    from core import app_paths
+
+    return app_paths.writable_path("logs")
 
 
 def _resolve_logs_dir(logs_dir=None) -> Path:

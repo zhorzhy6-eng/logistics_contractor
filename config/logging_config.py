@@ -104,14 +104,18 @@ def setup_logging(log_dir: str = None, log_level: str = "INFO", debug: bool = Fa
     """
     Настраивает логирование всего приложения.
 
-    :param log_dir: папка для логов. По умолчанию <корень_проекта>/logs
+    :param log_dir: папка для логов. По умолчанию <папка программы>/logs
     :param log_level: уровень файла app.log (по умолчанию INFO)
     :param debug: включает logs/debug.log с уровнем DEBUG (флаг --debug)
     """
     # ── Папка логов ──
     if log_dir is None:
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        log_dir = os.path.join(project_root, "logs")
+        # ПИШЕТСЯ в работе, поэтому берётся рядом с программой, а не в папке
+        # ресурсов сборки: в .exe это папка с LogisticsContractor.exe
+        # (см. core/app_paths.py), а не архив PyInstaller.
+        from core import app_paths
+
+        log_dir = str(app_paths.writable_path("logs"))
 
     os.makedirs(log_dir, exist_ok=True)
 

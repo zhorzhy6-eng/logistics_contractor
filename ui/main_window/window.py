@@ -41,12 +41,12 @@
 """
 
 import logging
-import os
 from typing import Optional
 
 from PyQt5.QtCore import pyqtSignal, QThreadPool
 from PyQt5.QtWidgets import QMainWindow
 
+from core import app_paths
 from core.contract_generator import ContractGenerator
 from core.gigachat_client import GigaChatClient
 from core.mirror import SOURCE_TYPE
@@ -70,10 +70,15 @@ from ui.system_theme import SystemThemeWatcher
 # (APP_LOGGERS = "core", "ui", "db", "config", "main", "qt").
 logger = logging.getLogger("ui.main_window")
 
-_PROJECT_ROOT = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
-TEMPLATES_DIR = os.path.join(_PROJECT_ROOT, "templates")
+#: Папка шаблонов DOCX. Читается из ресурсов сборки (core/app_paths.py):
+#: в .exe шаблоны лежат в `_MEIPASS`, а не рядом с модулем в архиве.
+TEMPLATES_DIR = str(app_paths.resource_path("templates"))
+
+#: Прежнее имя корня — оставлено ради старых импортов
+#: (`from ui.main_window import _PROJECT_ROOT`). Значение прежнее по смыслу:
+#: это корень РЕСУРСОВ, от которого считается `templates/`. Владелец путей
+#: теперь один — core/app_paths.py, второй счёт корня здесь не заводится.
+_PROJECT_ROOT = str(app_paths.resource_path())
 
 
 class MainWindow(

@@ -245,8 +245,16 @@ class DiagnosticReport:
 # ─────────────────────────────────────────────────────────────
 
 def project_root() -> str:
-    """Корень проекта (рядом с пакетом core)."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    """
+    Корень проекта в разработке (в .exe — папка программы).
+
+    Диагностика показывает пути для человека, поэтому важно, чтобы они
+    были настоящими: в сборке `writable_path` — папка с .exe
+    (см. core/app_paths.py).
+    """
+    from core import app_paths
+
+    return str(app_paths.app_root())
 
 
 def logs_dir() -> str:

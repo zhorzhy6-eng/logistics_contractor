@@ -55,6 +55,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tupl
 
 import requests
 
+from core import app_paths
 from db.crud import legal_metadata
 
 logger = logging.getLogger("core.legal_parser")
@@ -85,7 +86,9 @@ DOCUMENT_TYPE_IDS = {
 #: Путь к списку источников относительно корня проекта.
 SOURCES_RELATIVE_PATH = os.path.join("config", "legal_sources.json")
 
-_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#: Корень ЧТЕНИЯ ресурсов (в .exe — папка сборки, см. core/app_paths.py):
+#: от него считаются и список источников, и папка правовой базы.
+_project_root = str(app_paths.resource_path())
 
 
 # ─────────────────────────────────────────────────────────────

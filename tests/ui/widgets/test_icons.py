@@ -9,6 +9,8 @@
 """
 
 import os
+import sys
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -69,10 +71,18 @@ def test_resource_path_points_to_project():
 
 
 def test_resource_path_uses_meipass(monkeypatch, tmp_path):
-    """В сборке PyInstaller ресурсы берутся из распакованной папки."""
-    monkeypatch.setattr(icons.sys, "_MEIPASS", str(tmp_path), raising=False)
-    assert icons.resource_path("resources/icons") == os.path.join(
-        str(tmp_path), "resources/icons"
+    """
+    В сборке PyInstaller ресурсы берутся из распакованной папки.
+
+    Путь считается общим модулем `core/app_paths.py` (Часть 3 задания
+    18.10.2026), поэтому подменяется `sys._MEIPASS` — тот же признак
+    сборки, что читает app_paths, а не модуль иконок.
+    """
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    assert Path(icons.resource_path("resources/icons")) == (
+        tmp_path / "resources" / "icons"
     )
 
 

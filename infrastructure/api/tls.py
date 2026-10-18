@@ -101,7 +101,13 @@ def _search_dirs():
     Сборка и точка входа идут раньше кода: при запуске из другой копии
     проекта или из PyInstaller-сборки актуальный сертификат лежит именно
     рядом с запущенным приложением, а не рядом с импортированным модулем.
+
+    Пути сборки берутся из общего модуля `core/app_paths.py`: там же
+    решается, где ресурсы (`_MEIPASS`) и где сама программа. Оба места
+    проверяются — сертификат кладут и внутрь сборки, и рядом с .exe.
     """
+    from core import app_paths
+
     candidates = []
     meipass = getattr(sys, "_MEIPASS", "")
     if meipass:
@@ -110,6 +116,9 @@ def _search_dirs():
     executable_dir = os.path.dirname(os.path.abspath(sys.executable or ""))
     if executable_dir:
         candidates.append(("exe", os.path.join(executable_dir, CERTS_SUBDIR)))
+        candidates.append(("exe", executable_dir))
+    candidates.append(("resources", str(app_paths.resource_path(CERTS_SUBDIR))))
+    candidates.append(("program", str(app_paths.writable_path(CERTS_SUBDIR))))
     candidates.append(("project", certs_dir()))
 
     seen, result = set(), []

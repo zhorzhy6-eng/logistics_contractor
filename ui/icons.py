@@ -13,21 +13,24 @@
 
 import logging
 import os
-import sys
 
 from PyQt5.QtGui import QIcon
 
+from core import app_paths
 from ui import theme
 
 logger = logging.getLogger("ui.icons")
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 
 def resource_path(relative: str) -> str:
-    """Путь к ресурсу в исходном проекте или сборке PyInstaller."""
-    base = getattr(sys, "_MEIPASS", _PROJECT_ROOT)
-    return os.path.join(base, relative)
+    """
+    Путь к ресурсу: в разработке — корень проекта, в .exe — папка сборки.
+
+    Считается общим модулем путей (core/app_paths.py), а не здесь: тот же
+    вопрос решают шаблоны, правовая база и настройки, и второй ответ на
+    него разошёлся бы с первым.
+    """
+    return str(app_paths.resource_path(relative))
 
 
 def themed_icon(folder: str, name: str) -> QIcon:

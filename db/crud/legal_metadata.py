@@ -28,16 +28,22 @@ import os
 import sqlite3
 from typing import Any, Dict, Iterable, List, Optional
 
+from core import app_paths
+
 logger = logging.getLogger("db.crud.legal_metadata")
 
 #: Переменная окружения для подмены пути к базе (тесты, портативные сборки).
 LEGAL_DB_ENV = "LOGISTICS_LEGAL_DB_PATH"
 
-#: Путь к файлу базы по умолчанию — рядом с пакетом db.
+#: Имя файла базы метаданных правовой базы (пишется в работе).
 DEFAULT_LEGAL_DB_NAME = "legal_metadata.db"
 
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DEFAULT_LEGAL_DB_PATH = os.path.join(_project_root, "db", DEFAULT_LEGAL_DB_NAME)
+#: Путь к базе по умолчанию — в папке ПРОГРАММЫ, а не рядом с кодом: в .exe
+#: код лежит в архиве PyInstaller, и база рядом с ним была бы недоступна для
+#: записи (см. core/app_paths.py).
+DEFAULT_LEGAL_DB_PATH = str(
+    app_paths.writable_path(os.path.join("db", DEFAULT_LEGAL_DB_NAME))
+)
 
 #: Явная подмена пути (приоритетнее переменной окружения).
 _override_path: Optional[str] = None

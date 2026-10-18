@@ -45,6 +45,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from core import app_paths
+
 logger = logging.getLogger("core.legal_rules")
 
 #: Переменная окружения с путём к каталогу правил (нужна тестам).
@@ -69,8 +71,15 @@ _CACHE_PATH: Optional[str] = None
 # ─────────────────────────────────────────────────────────────
 
 def project_root() -> Path:
-    """Корень проекта: папка core/ лежит прямо в нём."""
-    return Path(__file__).resolve().parent.parent
+    """
+    Корень ЧТЕНИЯ ресурсов: в разработке — корень проекта, в .exe — папка
+    ресурсов сборки (`_MEIPASS`).
+
+    Отсюда ищется правовая база (`data/knowledge/legal/`). Раньше корень
+    считался от `__file__`, и в собранном приложении указывал в архив
+    PyInstaller, где никаких текстов актов нет (см. core/app_paths.py).
+    """
+    return app_paths.resource_path()
 
 
 def default_rules_path() -> Path:

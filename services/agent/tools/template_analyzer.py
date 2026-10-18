@@ -37,10 +37,13 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+from core import app_paths
+
 logger = logging.getLogger("services.agent.tools.template_analyzer")
 
-#: Корень проекта: services/agent/tools/ → три уровня вверх.
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+#: Корень ЧТЕНИЯ ресурсов: в .exe — папка сборки (`_MEIPASS`), в разработке —
+#: корень проекта (см. core/app_paths.py). Отсюда берутся папки шаблонов.
+PROJECT_ROOT = app_paths.resource_path()
 
 #: Подстановка значения docxtpl: {{ имя }} или {{ объект.поле }}.
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")

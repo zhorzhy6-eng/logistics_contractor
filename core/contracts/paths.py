@@ -20,16 +20,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
+from core import app_paths
 from core.dates import parse_date
 
-#: Корень проекта: parents[2] = core/contracts/paths.py → core → корень.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+#: Корень проекта: в разработке — корень исходников, в .exe — папка ресурсов
+#: сборки (`_MEIPASS`). Отсюда читаются шаблоны (см. core/app_paths.py).
+PROJECT_ROOT = app_paths.resource_path()
 
 #: Папка шаблонов DOCX (общая для всех типов, пока без подпапок).
-TEMPLATES_DIR = PROJECT_ROOT / "templates"
+TEMPLATES_DIR = app_paths.resource_path("templates")
 
 #: Папка готовых договоров (как DEFAULT_OUTPUT_DIRNAME = "output").
-OUTPUT_DIR = PROJECT_ROOT / "output"
+#: ПИСАЕТСЯ, поэтому берётся рядом с программой, а не из папки ресурсов:
+#: сборку при обновлении заменяют целиком, и договоры из неё пропали бы.
+OUTPUT_DIR = app_paths.writable_path("output")
 
 #: Сколько символов маршрута попадает в имя папки. Длинный маршрут
 #: («Москва - Санкт-Петербург - …») в имени папки нечитаем, а полный текст

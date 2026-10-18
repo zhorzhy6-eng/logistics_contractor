@@ -16,18 +16,23 @@
 """
 
 import logging
-import os
 import sqlite3
 
 # Логирование SQL-запросов (Часть 2 задания): фабрика соединения пишет
 # в logs/debug.log запрос, число строк и время, а медленные запросы (>1 с)
 # помечает SLOW в logs/app.log.
+from core import app_paths
 from db.query_logging import LoggingConnection
 
 logger = logging.getLogger("db.connection")
 
-#: Путь к файлу базы по умолчанию — рядом с пакетом db.
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "contracts.db")
+#: Путь к файлу базы по умолчанию — рядом с ПРОГРАММОЙ, а не с кодом.
+#:
+#: В .exe код лежит в архиве PyInstaller, и база рядом с ним была бы
+#: недоступна для записи (а при обновлении сборки — потеряна). Поэтому путь
+#: берётся из app_paths.writable_path (см. core/app_paths.py): в разработке
+#: это корень проекта, в сборке — папка с .exe.
+DB_PATH = str(app_paths.writable_path("contracts.db"))
 
 #: Источник пути к базе: функция без аргументов, возвращающая путь.
 #: Ставится фасадом db.database (см. модуль-документацию).

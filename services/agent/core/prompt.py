@@ -19,12 +19,18 @@ import logging
 import os
 from typing import Iterable, Optional, Tuple
 
+from core import app_paths
 from services.agent.persona.personas import DEFAULT_PERSONA, persona
 
 logger = logging.getLogger("core.agent.prompt")
 
 #: Папка с текстами промптов агента.
-PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+#:
+#: Читается из ресурсов сборки (core/app_paths.py): в .exe модуль лежит в
+#: архиве PyInstaller, и папки промптов рядом с ним на диске нет — путь от
+#: `__file__` дал бы пустоту, а без системного промпта Максимилиан
+#: разговаривал бы запасным коротким текстом.
+PROMPTS_DIR = str(app_paths.resource_path("services/agent/core/prompts"))
 
 #: Файл системного промпта.
 PROMPT_FILE = "maximilian.txt"

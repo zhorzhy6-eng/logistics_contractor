@@ -30,14 +30,14 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from core import legal_rules
+from core import app_paths, legal_rules
 from services.agent.tools import legal_check
 
 logger = logging.getLogger("services.agent.tools.legal_compare")
 
-#: Папка типовых договоров проекта.
-TEMPLATES_DIR = (Path(__file__).resolve().parents[3]
-                 / "data" / "knowledge" / "legal" / "templates")
+#: Папка типовых договоров проекта. Читается из ресурсов сборки в .exe
+#: (см. core/app_paths.py), поэтому типовые договоры находятся и там.
+TEMPLATES_DIR = app_paths.resource_path("data/knowledge/legal/templates")
 
 #: Какой типовой файл соответствует типу договора. Клиентские типы
 #: перевозки (Формика, Логистикс Рус) идут по одному типовому договору

@@ -39,7 +39,6 @@ import os
 import re
 from abc import ABC
 from datetime import datetime
-from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Mapping, Optional
 
 from core.contract_data import ContractData
@@ -119,14 +118,21 @@ class BaseContractGenerator(ABC):
     @classmethod
     def default_output_dir(cls) -> str:
         """
-        Папка для готовых договоров: <корень проекта>/output.
+        Папка для готовых договоров: <папка программы>/output.
 
-        Корень считается от местоположения этого файла
-        (core/contracts/base/generator.py): parents[3] — корень проекта.
-        После разбиения (Этап 4) файл стал на папку глубже: было
-        core/contracts/base_generator.py с parents[2].
+        Путь берётся из app_paths.writable_path (см. core/app_paths.py):
+        договоры — изменяемые файлы, и в собранном .exe они должны лежать
+        рядом с программой, а не в папке ресурсов сборки, которую заменяют
+        при обновлении.
+
+        История: раньше корень считался от местоположения этого файла
+        (core/contracts/base/generator.py → parents[3]). После разбиения
+        (Этап 4) файл стал на папку глубже (было parents[2]), поэтому счёт
+        уровней здесь больше не используется.
         """
-        return str(Path(__file__).resolve().parents[3] / cls.DEFAULT_OUTPUT_DIRNAME)
+        from core import app_paths
+
+        return str(app_paths.writable_path(cls.DEFAULT_OUTPUT_DIRNAME))
 
     # ─────────────────────────────────────────────────────────
     # ХУКИ (точки расширения, переопределяемые подклассом)

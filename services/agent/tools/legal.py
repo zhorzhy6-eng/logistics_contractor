@@ -37,9 +37,9 @@
 """
 
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from core import app_paths
 from core.utils import text_truncate
 
 logger = logging.getLogger("core.agent.legal_tools")
@@ -465,7 +465,9 @@ def _is_in_base(parser: Any, document: Any) -> bool:
 # Модель для объяснений (RAG + запрос к GigaChat)
 # ─────────────────────────────────────────────────────────────
 #: Папка промптов агента: оттуда берутся тексты юридических помощников.
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "core" / "prompts"
+#: Путь — через ресурсы сборки (core/app_paths.py): в .exe модули лежат
+#: в архиве PyInstaller, и папки промптов рядом с ними на диске нет.
+PROMPTS_DIR = app_paths.resource_path("services/agent/core/prompts")
 
 #: Промпт «объясни последствия» (три пункта: норма, последствия, что делать).
 EXPLAIN_PROMPT_FILE = "legal_explain.txt"

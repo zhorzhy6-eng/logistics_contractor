@@ -89,14 +89,26 @@ def default_locations() -> Tuple[Path, ...]:
     если она задана, ищется ровно указанный путь. Иначе — папка рядом
     с публичным проектом, домашняя папка и подпапка ``private`` внутри
     публичного проекта.
+
+    В собранном .exe приватная часть приезжает ВНУТРЬ сборки
+    (``logistics_contractor_private`` рядом с `templates` и `data`), поэтому
+    перед поиском рядом с программой проверяются папка ресурсов сборки и
+    папка самого .exe: у ``--onedir`` это разные места, а приватная часть
+    может оказаться в любом из них (см. core/app_paths.py).
     """
     env_value = os.environ.get(ENV_VAR, "").strip()
     if env_value:
         return (Path(env_value),)
 
-    project_root = Path(__file__).resolve().parent.parent
+    from core import app_paths
+
+    project_root = app_paths.dev_root()
 
     return (
+        # Внутри сборки: <_MEIPASS>/logistics_contractor_private
+        app_paths.resource_path(PRIVATE_DIRNAME),
+        # Рядом с .exe: <папка программы>/logistics_contractor_private
+        app_paths.writable_path(PRIVATE_DIRNAME),
         project_root.parent / PRIVATE_DIRNAME,
         Path.home() / PRIVATE_DIRNAME,
         project_root / "private",
