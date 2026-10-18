@@ -65,7 +65,11 @@ REQUIRED_GROUPS = {
 #: добавлен `tests/unit/core/test_app_paths.py` (пути в разработке и в .exe).
 #: unit 69 → 70 в шаге «PyInstaller spec + сборка exe» 18.10.2026 — добавлен
 #: `tests/unit/core/test_selftest.py` (самопроверка сборки --selftest).
-EXPECTED_FILES = {"unit": 70, "integration": 25, "ui": 66}
+#: unit 70 → 72 в шаге «данные в %APPDATA%» 18.10.2026 — добавлены
+#: `tests/unit/core/test_data_paths.py` (пути к данным, миграция старых
+#: данных, WAL) и `tests/unit/core/test_main_user_data.py` (подготовка
+#: папки данных при старте main.py).
+EXPECTED_FILES = {"unit": 72, "integration": 25, "ui": 66}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -178,9 +182,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 161 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 163 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 161, f"тестовых файлов {len(found)}, ожидается 161"
+    assert len(found) == 163, f"тестовых файлов {len(found)}, ожидается 163"
 
 
 def test_no_test_module_name_collision():
