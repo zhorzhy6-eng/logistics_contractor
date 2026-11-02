@@ -665,9 +665,13 @@ def test_import_service_extracts_vision_plain_text(monkeypatch):
 
 def test_token_expiry_milliseconds_are_normalized(monkeypatch):
     """GigaChat отдаёт expires_at в миллисекундах — клиент приводит его к секундам."""
+    import base64
     import time as time_module
     import core.gigachat_client as module
-    client = module.GigaChatClient(auth_key="synthetic")
+    # Ключ обязан быть Base64: клиент проверяет формат ДО запроса токена
+    # (см. tests/unit/infrastructure/test_gigachat_key_format.py).
+    key = base64.b64encode(b"synthetic-client:synthetic-secret").decode()
+    client = module.GigaChatClient(auth_key=key)
     future_ms = int((time_module.time() + 1800) * 1000)
     response = SimpleNamespace(status_code=200,
                                json=lambda: {"access_token": "synthetic-token",

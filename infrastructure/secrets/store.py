@@ -20,7 +20,10 @@
 Модуль ничего не логирует о значении ключа: только факт наличия/отсутствия.
 """
 
+import base64
+import binascii
 import logging
+import re
 import sys as _sys
 from typing import Optional
 
@@ -53,6 +56,105 @@ KEYRING_UNAVAILABLE_MESSAGE = (
     "Windows Credential Manager недоступен: системное хранилище секретов "
     "не отвечает. Ключ не сохранён — в файлы проекта он не записывается."
 )
+
+
+# ─────────────────────────────────────────────────────────────
+# ФОРМАТ КЛЮЧА GIGACHAT
+# ─────────────────────────────────────────────────────────────
+# Ключ GigaChat существует в программе в ОДНОМ виде: Base64 от пары
+# client_id:client_secret («Authorization key» из кабинета Sber). В заголовке
+# он уходит как «Authorization: Basic <ключ>», то есть сервис первым делом
+# декодирует его из Base64. Всё, что не Base64, сервис отвергает ответом
+# 400 «Can't decode 'Authorization' header» — причём только ПОСЛЕ запроса,
+# то есть уже во время распознавания документа.
+#
+# Поэтому формат проверяется здесь, в единственной точке записи ключа, и ещё
+# раз — перед запросом токена. Причина, по которой ключ не годится, называется
+# словами: по ней видно, вставили ключ другого сервиса, скопировали половину
+# строки или прихватили лишние символы, — значение ключа никуда не попадает.
+
+#: Минимальная длина ключа: Base64 от пары UUID занимает 73 символа, но
+#: выравнивание и сокращения бывают разными — 20 символов это уже не «ключ».
+GIGACHAT_KEY_MIN_LENGTH = 20
+
+#: Заголовок «Basic », который оператор иногда копирует вместе с ключом.
+_BASIC_PREFIX_RE = re.compile(r"^\s*basic\s+", re.IGNORECASE)
+
+#: Классический алфавит Base64 с «+», «/» и хвостовыми «=».
+_BASE64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+
+#: Текст отказа для интерфейса и журнала (значение ключа в нём не участвует).
+INVALID_GIGACHAT_KEY_MESSAGE = (
+    "Ключ GigaChat неверного формата: сервис не сможет его декодировать.\n\n"
+    "Ключ GigaChat — это «Authorization key» из личного кабинета "
+    "Sber Developer Studio: проект GigaChat API → «Настройки API» → "
+    "«Получить ключ». Это строка Base64 из латинских букв, цифр, «+», «/» "
+    "и «=», обычно длиной 60–100 символов.\n\n"
+    "Вставьте ключ заново: «Настройки» → «Ключи API…» "
+    "(или python set_key.py)."
+)
+
+
+def normalize_gigachat_key(value: Optional[str]) -> str:
+    """
+    Ключ в том виде, в каком он уходит в заголовок Authorization.
+
+    Оператор копирует ключ по-разному: с заголовком «Basic », с переносом
+    строки, с пробелами по краям. В хранилище и в заголовок должен попадать
+    сам Base64, поэтому префикс снимается, а все пробелы и переводы строк
+    удаляются.
+    """
+    text = _BASIC_PREFIX_RE.sub("", str(value or ""))
+    return "".join(text.split())
+
+
+def gigachat_key_problem(value: Optional[str]) -> Optional[str]:
+    """
+    Почему значение не может быть ключом GigaChat (None — формат верный).
+
+    Проверяется ФОРМА, а не содержимое: ключ — секрет, разбирать его на части
+    незачем. Текст причины значения не содержит, поэтому его можно писать
+    в журнал и показывать оператору.
+    """
+    text = normalize_gigachat_key(value)
+    if not text:
+        return "значение пустое"
+    if text.casefold().startswith("sk-"):
+        return ("значение начинается с «sk-» — так выглядят ключи "
+                "OpenAI-совместимых сервисов, а не Authorization key GigaChat")
+    if "://" in text:
+        return "значение похоже на ссылку, а не на ключ"
+    if len(text) < GIGACHAT_KEY_MIN_LENGTH:
+        return (f"ключ короче {GIGACHAT_KEY_MIN_LENGTH} символов — "
+                "похоже, скопирована только часть строки")
+    if not _BASE64_RE.match(text):
+        return ("в значении есть символы вне алфавита Base64 (допустимы "
+                "латинские буквы, цифры, «+», «/» и «=»)")
+    try:
+        raw = base64.b64decode(text + "=" * (-len(text) % 4), validate=True)
+    except (binascii.Error, ValueError):
+        return "значение не декодируется как Base64"
+    if not raw:
+        return "значение декодируется в пустую строку"
+    return None
+
+
+def is_valid_gigachat_key(value: Optional[str]) -> bool:
+    """Годится ли значение как ключ GigaChat по форме (содержимое не проверяется)."""
+    return gigachat_key_problem(value) is None
+
+
+def gigachat_key_error_text(value: Optional[str]) -> str:
+    """
+    Полный текст отказа «ключ неверного формата» (пустая строка — формат верный).
+
+    Собирается в одном месте, чтобы окно, консоль и клиент GigaChat говорили
+    оператору одно и то же.
+    """
+    problem = gigachat_key_problem(value)
+    if problem is None:
+        return ""
+    return f"{INVALID_GIGACHAT_KEY_MESSAGE}\n\nПричина: {problem}."
 
 
 def __getattr__(name):
@@ -121,6 +223,9 @@ def get_gigachat_key() -> Optional[str]:
     """
     Читает ключ GigaChat из системного хранилища.
 
+    Значение нормализуется (без префикса «Basic» и пробелов): ключ, положенный
+    в хранилище старой версией программы вместе с заголовком, должен работать.
+
     :return: ключ или None, если он не сохранён/хранилище недоступно
     """
     kr = _keyring_module()
@@ -140,23 +245,40 @@ def get_gigachat_key() -> Optional[str]:
     if not value:
         logger.warning(MISSING_KEY_MESSAGE)
         return None
-    return value
+    normalized = normalize_gigachat_key(value)
+    if normalized != value:
+        logger.debug("Ключ GigaChat в хранилище записан с пробелами или «Basic» — нормализован")
+    return normalized
 
 
 def set_gigachat_key(key: str) -> bool:
     """
     Сохраняет ключ GigaChat в системном хранилище.
 
+    Формат проверяется ЗДЕСЬ, а не только в вызывающем коде: это единственная
+    точка, через которую ключ попадает в программу, — консольный set_key.py,
+    окно «Ключи API…» и сторонние скрипты идут через неё. Ключ неверного
+    формата в хранилище оказаться не должен: иначе распознавание узнает об
+    этом только от сервера и только в момент работы оператора.
+
+    :raises ValueError: значение не может быть ключом GigaChat (пустой ключ —
+        False, как и раньше: это «сохранять нечего», а не ошибка формата).
     :return: True при успехе
     """
     kr = _keyring_module()
     if kr is None:
         return False
 
-    key = (key or "").strip()
+    key = normalize_gigachat_key(key)
     if not key:
         logger.error("Пустой ключ GigaChat — сохранять нечего")
         return False
+
+    problem = gigachat_key_problem(key)
+    if problem is not None:
+        # Значение ключа в журнал не попадает — только причина.
+        logger.error("Ключ GigaChat не сохранён: %s", problem)
+        raise ValueError(gigachat_key_error_text(key))
 
     try:
         kr.set_password(SERVICE_NAME, GIGACHAT_KEY_NAME, key)
@@ -195,10 +317,23 @@ def has_gigachat_key() -> bool:
 
 
 def describe_key_state() -> str:
-    """Текст для интерфейса: есть ключ или нет (без самого ключа)."""
-    if has_gigachat_key():
-        return f"Ключ GigaChat сохранён в системном хранилище ({backend_name()})"
-    return MISSING_KEY_MESSAGE
+    """
+    Текст для интерфейса: есть ключ или нет (без самого ключа).
+
+    Ключ, который лежит в хранилище, но не может быть ключом GigaChat (не
+    Base64), называется именно так: иначе окно настроек бодро сообщало бы
+    «ключ сохранён», а распознавание падало бы на авторизации.
+    """
+    key = get_gigachat_key()
+    if not key:
+        return MISSING_KEY_MESSAGE
+    problem = gigachat_key_problem(key)
+    if problem is not None:
+        return (
+            f"Ключ GigaChat сохранён, но формат неверный: {problem}. "
+            f"Вставьте ключ заново."
+        )
+    return f"Ключ GigaChat сохранён в системном хранилище ({backend_name()})"
 
 
 # ─────────────────────────────────────────────────────────────

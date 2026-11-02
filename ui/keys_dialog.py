@@ -39,14 +39,14 @@ keyring — infrastructure/secrets/store.py). До этого шага их мо
 
 Проверка ввода — отдельными функциями (validate_keys, is_valid_base64_key):
 их проверяют тесты без Qt, и ими же пользуется кнопка «Сохранить», чтобы
-логика проверки не разъезжалась с показом.
+логика проверки не разъезжалась с показом. Правило формата ключа GigaChat
+при этом живёт НЕ здесь, а в хранилище (infrastructure/secrets/store.py):
+окно, консольный set_key.py и клиент GigaChat обязаны понимать «годный
+ключ» одинаково — иначе ключ, принятый одним путём, падает другим.
 """
 
-import base64
-import binascii
 import logging
 import os
-import re
 from typing import Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import Qt
@@ -76,59 +76,20 @@ MIN_SCROLL_HEIGHT = 200
 #: полоса прокрутки с диапазоном в один пиксель — она выглядит как поломка.
 LAYOUT_SLACK_PX = 4
 
-#: Префикс, который оператор иногда копирует вместе с ключом: в документации
-#: GigaChat заголовок выглядит как «Authorization: Basic <ключ>».
-_BASIC_PREFIX_RE = re.compile(r"^\s*basic\s+", re.IGNORECASE)
-
-#: Допустимые символы Base64 (классический алфавит с «+» и «/»).
-_BASE64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
-
-#: Сколько символов минимум в ключе GigaChat: «Authorization key» — это
-#: Base64 от пары client_id:client_secret, то есть десятки символов.
-#: Короткая строка Base64 формально корректна, но ключом быть не может.
-GIGACHAT_KEY_MIN_LENGTH = 20
+#: Формат ключа GigaChat: правило одно на всё приложение.
+#:
+#: Живёт оно в ХРАНИЛИЩЕ (infrastructure/secrets/store.py): одна и та же
+#: проверка нужна окну, консольному set_key.py и клиенту GigaChat, а две копии
+#: правил расходятся. Ниже — те же имена, что были у окна раньше: их держат
+#: тесты и приватная часть, поэтому имена сохранены.
+GIGACHAT_KEY_MIN_LENGTH = secrets_store.GIGACHAT_KEY_MIN_LENGTH
+normalize_key = secrets_store.normalize_gigachat_key
+is_valid_base64_key = secrets_store.is_valid_gigachat_key
 
 
 # ─────────────────────────────────────────────────────────────
 # Проверка ввода (без Qt — проверяется тестами отдельно)
 # ─────────────────────────────────────────────────────────────
-
-def normalize_key(value: Optional[str]) -> str:
-    """
-    Значение поля в том виде, в каком его принимает хранилище.
-
-    Убираются пробелы и переводы строк (ключ часто копируют с переносом),
-    а также служебный префикс «Basic »: в Credential Manager должен лежать
-    сам ключ, а не заголовок авторизации.
-    """
-    text = _BASIC_PREFIX_RE.sub("", str(value or ""))
-    return "".join(text.split())
-
-
-def is_valid_base64_key(value: Optional[str]) -> bool:
-    """
-    Похоже ли значение на Base64-ключ GigaChat.
-
-    Проверяется именно ФОРМА (алфавит Base64 и успешная расшифровка), а не
-    содержимое: ключ — секрет, и разбирать его на части незачем. Хвост «=»
-    дополняется, если оператор скопировал ключ без выравнивания, — иначе
-    честный ключ отвергался бы из-за одного недостающего символа.
-
-    :return: True, если строка — Base64 и в ней не меньше
-        ``GIGACHAT_KEY_MIN_LENGTH`` символов.
-    """
-    text = normalize_key(value)
-    if len(text) < GIGACHAT_KEY_MIN_LENGTH:
-        return False
-    if not _BASE64_RE.match(text):
-        return False
-
-    padded = text + "=" * (-len(text) % 4)
-    try:
-        raw = base64.b64decode(padded, validate=True)
-    except (binascii.Error, ValueError):
-        return False
-    return bool(raw)
 
 
 def validate_keys(gigachat: Optional[str], dadata: Optional[str],
@@ -158,10 +119,12 @@ def validate_keys(gigachat: Optional[str], dadata: Optional[str],
             "документов и Максимилиан."
         )
     if gigachat and not is_valid_base64_key(gigachat):
+        reason = secrets_store.gigachat_key_problem(gigachat)
         errors.append(
             "Ключ GigaChat должен быть Base64-строкой из личного кабинета "
             "Sber Developer Studio (раздел «Authorization key»). "
             "Скопируйте ключ заново — целиком, без заголовка «Basic»."
+            + (f" Сейчас: {reason}." if reason else "")
         )
 
     if not (gigachat or dadata or dadata_secret) and not errors:
@@ -525,14 +488,16 @@ class KeysDialog(QDialog):
         self.saved_keys = {}
 
         for name, value, title in planned:
-            saved = self._store(name, value)
+            saved, reason = self._store(name, value)
             self.saved_keys[name] = saved
             if not saved:
-                failures.append(
+                # Причина от хранилища важнее общей: «ключ неверного формата»
+                # и «keyring недоступен» — разные беды и разные действия.
+                failures.append(reason or (
                     f"{title} не сохранён: системное хранилище Windows "
                     "недоступно. Проверьте, что установлена библиотека "
                     "keyring и служба «Диспетчер учётных данных» работает."
-                )
+                ))
 
         if self.saved_keys:
             logger.info(
@@ -542,18 +507,30 @@ class KeysDialog(QDialog):
         return failures
 
     @staticmethod
-    def _store(name: str, value: str) -> bool:
-        """Один ключ в хранилище; исключение хранилища — False, не падение."""
+    def _store(name: str, value: str) -> Tuple[bool, str]:
+        """
+        Один ключ в хранилище.
+
+        :return: (сохранилось ли, причина отказа для оператора). Причина пуста,
+            когда отказало само хранилище: тогда подходит общий текст про
+            keyring. Отказ по формату ключа приходит из хранилища исключением
+            ``ValueError`` и показывается как есть.
+        """
         setters = {
             "gigachat": secrets_store.set_gigachat_key,
             "dadata": secrets_store.set_dadata_key,
             "dadata_secret": secrets_store.set_dadata_secret,
         }
         try:
-            return bool(setters[name](value))
+            return bool(setters[name](value)), ""
+        except ValueError as error:
+            # Неверный формат ключа: это не беда хранилища, и говорить про
+            # keyring было бы неправдой. Значение ключа в тексте не участвует.
+            logger.warning("Ключ %s отвергнут: неверный формат", name)
+            return False, str(error)
         except Exception as error:  # noqa: BLE001 — окно не должно падать
             logger.error("Хранилище ключей отказало (%s): %s", name, error)
-            return False
+            return False, ""
 
     # ── Ошибки ──
 

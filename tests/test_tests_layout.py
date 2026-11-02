@@ -69,7 +69,10 @@ REQUIRED_GROUPS = {
 #: `tests/unit/core/test_data_paths.py` (пути к данным, миграция старых
 #: данных, WAL) и `tests/unit/core/test_main_user_data.py` (подготовка
 #: папки данных при старте main.py).
-EXPECTED_FILES = {"unit": 72, "integration": 25, "ui": 66}
+#: unit 72 → 73 в фиксе «ключ GigaChat неверного формата» 02.11.2026 —
+#: добавлен `tests/unit/infrastructure/test_gigachat_key_format.py`
+#: (одно правило формата ключа на хранилище, консоль и клиент GigaChat).
+EXPECTED_FILES = {"unit": 73, "integration": 25, "ui": 66}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -95,12 +98,46 @@ def tests_in(directory: Path, recursive: bool = False) -> list[Path]:
 
 
 def all_test_files() -> list[Path]:
-    """Все test_*.py во всём дереве tests/."""
-    return sorted(p for p in TESTS_ROOT.rglob("test_*.py") if p.is_file())
+    """
+    Все test_*.py во всём дереве tests/, кроме папок вне сбора pytest.
+
+    Список пропускаемых папок берётся из `pytest.ini::norecursedirs`, а не
+    переписывается здесь: иначе он разъедется с настоящим сбором. Причина
+    проверки — 02.11.2026: в `tests/_tmp` остался venv (`video_tools`), в его
+    site-packages лежат файлы `test_*.py`. pytest их не собирал никогда, а
+    счётчик карты слоёв видел — и три проверки раскладки краснели на ровном
+    месте, выдавая чужой venv за «тест вне слоя».
+    """
+    ignored = set(_not_collected_directories())
+    found = []
+    for path in TESTS_ROOT.rglob("test_*.py"):
+        if not path.is_file():
+            continue
+        if ignored & set(path.relative_to(TESTS_ROOT).parts):
+            continue
+        found.append(path)
+    return sorted(found)
+
+
+def _not_collected_directories() -> tuple[str, ...]:
+    """Папки, которые pytest не собирает (`norecursedirs` из pytest.ini)."""
+    return tuple(_pytest_ini().get("pytest", "norecursedirs").split())
 
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _pytest_ini() -> configparser.ConfigParser:
+    # interpolation=None: в значениях pytest.ini встречается символ «%»
+    # (он же разделитель подстановок configparser), и разбор падал бы.
+    #
+    # Функция объявлена здесь, а не в разделе 8: `all_test_files()` вызывается
+    # на импорте модуля (parametrize для сборки компиляции ниже), и имя,
+    # объявленное позже, к этому моменту ещё не существует.
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(PROJECT_ROOT / "pytest.ini", encoding="utf-8")
+    return parser
 
 
 # ─────────────────────────────────────────────────────────────
@@ -182,9 +219,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 163 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 164 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 163, f"тестовых файлов {len(found)}, ожидается 163"
+    assert len(found) == 164, f"тестовых файлов {len(found)}, ожидается 164"
 
 
 def test_no_test_module_name_collision():
@@ -384,14 +421,6 @@ def test_every_test_file_compiles(path):
 # ─────────────────────────────────────────────────────────────
 # 8. pytest.ini: пути и маркеры слоёв
 # ─────────────────────────────────────────────────────────────
-def _pytest_ini() -> configparser.ConfigParser:
-    # interpolation=None: в значениях pytest.ini встречается символ «%»
-    # (он же разделитель подстановок configparser), и разбор падал бы.
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.read(PROJECT_ROOT / "pytest.ini", encoding="utf-8")
-    return parser
-
-
 def test_pytest_ini_testpaths():
     """`testpaths` указывает на tests."""
     assert _pytest_ini().get("pytest", "testpaths").strip() == "tests"

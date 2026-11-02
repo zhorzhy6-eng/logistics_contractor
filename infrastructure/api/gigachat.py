@@ -11,7 +11,13 @@ from core.import_cancel import interruptible_sleep
 from core.pseudonymizer import Pseudonymizer
 from core.utils.json_text import shorten_json_text
 from infrastructure.api.tls import describe_tls, resolve_ca_bundle, ssl_error_hint
-from infrastructure.secrets.store import MISSING_KEY_MESSAGE, get_gigachat_key
+from infrastructure.secrets.store import (
+    MISSING_KEY_MESSAGE,
+    gigachat_key_error_text,
+    gigachat_key_problem,
+    get_gigachat_key,
+    normalize_gigachat_key,
+)
 
 # Имя логгера задано ЯВНО, а не через __name__ (было бы
 # "infrastructure.api.gigachat"). Это часть контракта: config/logging_config.py
@@ -1003,13 +1009,13 @@ class GigaChatClient:
                  timeout: int = 300,
                  verify_ssl: bool = True,
                  ca_bundle: Optional[str] = None):
-        self.auth_key = (auth_key or "").strip()
+        self.auth_key = normalize_gigachat_key(auth_key or "")
 
         # ── Ключ: аргумент → системное хранилище (Шаг 2 задания) ──
         # В config/settings.json ключа больше нет: он лежит в Windows
         # Credential Manager (см. core/secrets_store.py, set_key.py).
         if not self.auth_key:
-            self.auth_key = (get_gigachat_key() or "").strip()
+            self.auth_key = normalize_gigachat_key(get_gigachat_key() or "")
             if self.auth_key:
                 logger.info("Ключ GigaChat получен из системного хранилища")
 
@@ -1056,6 +1062,18 @@ class GigaChatClient:
         if not self.verify_ssl:
             return False
         return self.ca_bundle or True
+
+    def key_problem(self) -> Optional[str]:
+        """
+        Почему сохранённый ключ не может быть ключом GigaChat (None — порядок).
+
+        Проверка формата, а не содержимого: сервер получает ключ в заголовке
+        «Authorization: Basic …» и первым делом декодирует его из Base64,
+        поэтому строка не из Base64 отвергается гарантированно. Нужна, чтобы
+        оператор увидел «вставлен ключ другого сервиса», а не ответ сервера
+        «Can't decode 'Authorization' header» посреди распознавания.
+        """
+        return gigachat_key_problem(self.auth_key)
 
     # Поля со значениями по умолчанию не делают ответ содержательным:
     # модель ставит их, даже когда документ прочитать не удалось.
@@ -1404,6 +1422,16 @@ class GigaChatClient:
         if self._token and time.time() < self._token_expires - 60:
             return self._token
 
+        # ── Формат ключа проверяется ДО сети ──
+        # Сервер декодирует ключ из Base64, поэтому строка не из Base64 не
+        # может дать токен ни при каких обстоятельствах. Проверка здесь
+        # превращает ответ «400 Can't decode 'Authorization' header» в
+        # понятную причину и экономит круг запроса.
+        problem = self.key_problem()
+        if problem is not None:
+            logger.error("GigaChat auth: ключ неверного формата — %s", problem)
+            raise RuntimeError(gigachat_key_error_text(self.auth_key))
+
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json",
@@ -1452,6 +1480,17 @@ class GigaChatClient:
             raise RuntimeError(
                 "GigaChat: 401 при авторизации. Ключ неверен или отозван. "
                 "Проверьте ключ: python set_key.py --check"
+            )
+        if resp.status_code == 400:
+            # 400 на /oauth — про сам запрос, а не про документ: обычно это
+            # ключ (сервер получил Base64, но не пару client_id:client_secret)
+            # или scope. Раньше сюда же попадал ответ «Can't decode
+            # 'Authorization' header» — сырым JSON на экран оператора.
+            raise RuntimeError(
+                "GigaChat отказал в авторизации (400). Проверьте ключ и scope "
+                "(GIGACHAT_API_PERS, GIGACHAT_API_B2B или GIGACHAT_API_CORP) "
+                "в настройках.\n"
+                f"Ответ сервиса: {resp.text[:200]}"
             )
         if resp.status_code != 200:
             raise RuntimeError(

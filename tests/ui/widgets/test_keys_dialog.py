@@ -514,3 +514,44 @@ def test_settings_button_opens_keys_dialog(qt_app, monkeypatch):
     finally:
         widget.close()
         widget.deleteLater()
+
+
+# ─────────────────────────────────────────────────────────────
+# 6. Формат ключа — одна проверка на все пути (02.11.2026)
+# ─────────────────────────────────────────────────────────────
+
+#: Ключ другого сервиса: «sk-» + 32 символа (так выглядят ключи
+#: OpenAI-совместимых API). Именно такой оказался в хранилище 02.11.2026 —
+#: окно его не пропускало, а консольный set_key.py пропускал.
+WRONG_SERVICE_KEY = "sk-" + "0123456789abcdef0123456789abcdef"
+
+
+def test_validate_explains_a_key_of_another_service():
+    """«sk-…» — ошибка с ПРИЧИНОЙ: видно, что это ключ не того сервиса."""
+    errors = validate_keys(WRONG_SERVICE_KEY, "", "")
+
+    assert errors and "Base64" in errors[0]
+    assert "sk-" in errors[0]
+    assert WRONG_SERVICE_KEY not in errors[0]
+
+
+def test_store_refusal_reason_is_shown_verbatim(dialog, stored, monkeypatch):
+    """
+    Отказ хранилища по формату показывается своей причиной, а не про keyring.
+
+    «Ключ неверного формата» и «Диспетчер учётных данных недоступен» — разные
+    беды с разными действиями оператора.
+    """
+    def _refuse(value):
+        raise ValueError("Ключ GigaChat неверного формата: проверьте поле.")
+
+    monkeypatch.setattr(
+        keys_dialog.secrets_store, "set_gigachat_key", _refuse
+    )
+    dialog.gigachat_edit.setText(VALID_GIGACHAT_KEY)
+
+    failures = dialog.save_keys()
+
+    assert failures and "неверного формата" in failures[0]
+    assert "keyring" not in failures[0]
+    assert dialog.saved_keys == {"gigachat": False}

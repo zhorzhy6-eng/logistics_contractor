@@ -32,20 +32,15 @@ def _validate_key(key: str) -> Optional[str]:
     """
     Проверяет ключ на очевидные проблемы.
 
-    :return: текст предупреждения или None, если ключ выглядит нормально
+    Проверка та же, что у хранилища и клиента GigaChat
+    (``secrets_store.gigachat_key_problem``): ключ — это Base64 от пары
+    client_id:client_secret, и ничего другого в заголовок Authorization
+    положить нельзя. Значение ключа в текст предупреждения не попадает —
+    только причина.
+
+    :return: текст причины или None, если ключ выглядит нормально
     """
-    if len(key) < 20:
-        return "ключ выглядит слишком коротким (обычно это длинная строка Base64)"
-
-    try:
-        key.encode("ascii")
-    except UnicodeEncodeError:
-        return (
-            "ключ содержит не-ASCII символы. Authorization key — это Base64 "
-            "(латиница, цифры, +, /, =): проверьте, что скопирована вся строка"
-        )
-
-    return None
+    return secrets_store.gigachat_key_problem(key)
 
 
 def _ask(prompt: str) -> str:
@@ -60,6 +55,14 @@ def _ask(prompt: str) -> str:
 def _check_mode() -> int:
     if secrets_store.has_gigachat_key():
         key = secrets_store.get_gigachat_key() or ""
+        problem = secrets_store.gigachat_key_problem(key)
+        if problem is not None:
+            # Ключ есть, но им нельзя авторизоваться: молчать об этом нельзя,
+            # иначе «OK» в консоли и ошибка 400 в программе выглядят
+            # несвязанными событиями.
+            print("ОШИБКА: " + secrets_store.gigachat_key_error_text(key))
+            print(f"    длина значения: {len(key)} символов (значение не показывается)")
+            return 1
         print(f"OK: {secrets_store.describe_key_state()}")
         print(f"    длина ключа: {len(key)} символов (значение не показывается)")
         return 0
@@ -98,7 +101,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("=" * 66)
     print(f" Хранилище: {secrets_store.backend_name()}")
     print(" Где взять ключ: личный кабинет Sber Developer Studio →")
-    print("   «Authorization key» (строка Base64, обычно вида MD...==).")
+    print("   проект GigaChat API → «Настройки API» → «Получить ключ».")
+    print(" Ключ — это «Authorization key», строка Base64 (латиница, цифры,")
+    print("   «+», «/», «=»). Ключи других сервисов (например, «sk-…») не подходят.")
     print(" Ключ не сохраняется в файлы проекта и не выводится на экран.")
     print("=" * 66)
 
@@ -118,14 +123,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("Пустой ввод — ключ не сохранён.")
         return 1
 
-    warning = _validate_key(key)
-    if warning:
-        print(f"ВНИМАНИЕ: {warning}")
-        if _ask("Всё равно сохранить? [y/N]: ") not in YES_ANSWERS:
-            print("Отменено — ключ не сохранён.")
-            return 1
+    key = secrets_store.normalize_gigachat_key(key)
+    problem = _validate_key(key)
+    if problem:
+        # Формат — не «вопрос вкуса»: сервер декодирует ключ из Base64 и
+        # другой ключ принять не может. Поэтому не «всё равно сохранить?»,
+        # а отказ: иначе в хранилище появится значение, с которым программа
+        # падает на авторизации.
+        print("ОШИБКА: " + secrets_store.INVALID_GIGACHAT_KEY_MESSAGE)
+        print(f"Причина: {problem}.")
+        print("Ключ не сохранён.")
+        return 1
 
-    if not secrets_store.set_gigachat_key(key):
+    try:
+        saved_ok = secrets_store.set_gigachat_key(key)
+    except ValueError as error:
+        print(f"ОШИБКА: {error}")
+        print("Ключ не сохранён.")
+        return 1
+
+    if not saved_ok:
         print("Не удалось сохранить ключ.")
         print("Проверьте, что установлена библиотека keyring: pip install keyring")
         return 1
