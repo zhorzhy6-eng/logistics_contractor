@@ -72,7 +72,10 @@ REQUIRED_GROUPS = {
 #: unit 72 → 73 в фиксе «ключ GigaChat неверного формата» 02.11.2026 —
 #: добавлен `tests/unit/infrastructure/test_gigachat_key_format.py`
 #: (одно правило формата ключа на хранилище, консоль и клиент GigaChat).
-EXPECTED_FILES = {"unit": 73, "integration": 25, "ui": 66}
+#: ui 66 → 67 в фиксе «список ТС: VIN + марка одной строкой» 05.11.2026 —
+#: добавлен `tests/ui/main_window/test_vehicle_recognition_vin_first.py`
+#: (7 машин из текста оператора, склейка перенесённого VIN, отсев мусора).
+EXPECTED_FILES = {"unit": 73, "integration": 25, "ui": 67}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -219,9 +222,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 164 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 165 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 164, f"тестовых файлов {len(found)}, ожидается 164"
+    assert len(found) == 165, f"тестовых файлов {len(found)}, ожидается 165"
 
 
 def test_no_test_module_name_collision():
