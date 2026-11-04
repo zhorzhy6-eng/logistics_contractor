@@ -2172,6 +2172,20 @@ def test_unloading_name_survives_contract_data(route_payload):
 # Машины и точки маршрута
 # ─────────────────────────────────────────────────────────────
 
+def _cars_for(count: int) -> list:
+    """
+    Синтетические машины: марка CAR N, VIN из 17 символов.
+
+    Все привязаны к первой погрузке и выгрузке — как реальный рейс
+    автовоза: 19 или 50 машин одной точки.
+    """
+    return [
+        {"vin": f"EC3TEUMB0T{n:07d}", "brand_model": f"CAR {n}",
+         "vehicle_type": "Легковой автомобиль",
+         "loading_index": 1, "unloading_index": 1}
+        for n in range(1, count + 1)
+    ]
+
 def test_cars_filled_and_emptied(generator, contract_payload):
     replacements = generator._build_replacements_map(contract_payload)
     assert replacements["car_1_brand"] == "JETOUR T2"
@@ -2183,16 +2197,23 @@ def test_cars_filled_and_emptied(generator, contract_payload):
         assert replacements[f"car_{index}_vin"] == ""
 
 
-def test_twelve_cars_limit(generator, contract_payload):
-    payload = dict(contract_payload)
-    payload["vehicles"] = [
-        {"vin": f"EC3TEUMB0T{i:06d}", "brand_model": f"CAR {i}",
-         "vehicle_type": "Легковой автомобиль"}
-        for i in range(15)
-    ]
+def test_more_than_twelve_cars_get_placeholders(generator, contract_payload):
+    """
+    Плейсхолдеры car_N заполняются для ВСЕХ машин, а не до 12-й.
+
+    В бланке 12 строк, поэтому машины сверх этого числа в готовый договор
+    попадают через постобработку (строки дописываются). Но карта замен
+    больше не обрывается на 12-й: иначе бланк с большим числом строк
+    заполнился бы наполовину.
+    """
+    payload = dict(contract_payload, vehicles=_cars_for(15))
+
     replacements = generator._build_replacements_map(payload)
-    assert replacements["car_12_brand"] == "CAR 11"
+
     assert replacements["cargo_count"] == "15"
+    assert replacements["car_12_brand"] == "CAR 12"
+    assert replacements["car_13_brand"] == "CAR 13"
+    assert replacements["car_15_brand"] == "CAR 15"
 
 
 def test_point_labels(generator, contract_payload):
@@ -2516,6 +2537,90 @@ def test_empty_vehicle_rows_removed(light_generator, contract_payload, work_file
     ]
     assert vehicle_tables, "таблица ТС не найдена"
     assert len(vehicle_tables[0].rows) < 13
+
+
+# ─────────────────────────────────────────────────────────────
+# Много машин: таблица 3.1 расширяется под весь список
+# ─────────────────────────────────────────────────────────────
+
+W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def cargo_table(doc):
+    """Таблица 3.1 «Груз» — ПЕРВАЯ таблица машин в документе."""
+    return next(table for table in doc.tables if is_vehicle_table(table))
+
+
+@pytest.mark.parametrize("count", [19, 50])
+def test_all_cars_reach_section_31_table(light_generator, contract_payload,
+                                         work_file, count):
+    """
+    19 и 50 машин: в таблице блока 3.1 столько строк, сколько машин.
+
+    Раньше в неё попадало ровно 12: плейсхолдеров car_13… в бланке нет,
+    а docxtpl строк в таблицу не добавляет. Теперь недостающие строки
+    дописывает постобработка, нумерация идёт 1…N без пропусков.
+    """
+    payload = dict(contract_payload, vehicles=_cars_for(count))
+    output = work_file(f"cars_{count}.docx")
+
+    light_generator.generate_docx(payload, str(output))
+
+    rows = vehicle_table_rows(cargo_table(Document(output)))
+    assert len(rows) == count
+    assert [row[0] for row in rows] == [
+        str(number) for number in range(1, count + 1)
+    ]
+    assert [row[2] for row in rows] == [
+        f"EC3TEUMB0T{number:07d}" for number in range(1, count + 1)
+    ]
+
+
+def test_fifty_car_table_is_ready_for_page_break(light_generator, contract_payload,
+                                                 work_file):
+    """
+    Длинная таблица переносится на следующую страницу по правилам Word:
+    шапка повторяется (`w:tblHeader`), строка не рвётся (`w:cantSplit`).
+
+    Ручной разрыв страницы не ставится — Word сам решает, где кончится
+    страница; флаги лишь делают перенос читаемым.
+    """
+    payload = dict(contract_payload, vehicles=_cars_for(50))
+    output = work_file("cars_50_flags.docx")
+
+    light_generator.generate_docx(payload, str(output))
+
+    table = cargo_table(Document(output))
+    assert table.rows[0]._tr.trPr.find(f"{W_NS}tblHeader") is not None
+    for row in table.rows:
+        assert row._tr.trPr.find(f"{W_NS}cantSplit") is not None
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 12])
+def test_short_table_has_exactly_one_row_per_car(light_generator, contract_payload,
+                                                 work_file, count):
+    """1–12 машин: как раньше — ровно столько строк, сколько машин."""
+    payload = dict(contract_payload, vehicles=_cars_for(count))
+    output = work_file(f"cars_short_{count}.docx")
+
+    light_generator.generate_docx(payload, str(output))
+
+    assert len(vehicle_table_rows(cargo_table(Document(output)))) == count
+
+
+def test_route_tables_repeat_header_too(light_generator, contract_payload, work_file):
+    """Таблицы по погрузкам/выгрузкам тоже готовы к переносу страницы."""
+    payload = dict(contract_payload, vehicles=_cars_for(19))
+    output = work_file("cars_route_flags.docx")
+
+    light_generator.generate_docx(payload, str(output))
+
+    route_tables = [
+        table for table in Document(output).tables if is_route_table(table)
+    ]
+    assert route_tables
+    for table in route_tables:
+        assert table.rows[0]._tr.trPr.find(f"{W_NS}tblHeader") is not None
 
 
 def test_real_templates_still_render(generator, contract_payload, work_file):

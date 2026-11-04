@@ -65,7 +65,8 @@ core/                    # ЯДРО: доменная логика, без Qt
     contract_types.py    # ContractType (Enum)
     registry.py          # ContractTypeRegistry, BUILTIN_TYPE_MODULES
     factory.py           # GeneratorFactory / ValidatorFactory
-    base_generator.py    # BaseContractGenerator + PostprocessStep
+    base/                # BaseContractGenerator, PostprocessStep, TableBuilder
+                         # (старый путь base_generator.py — алиас, см. § 6.1)
     base_validator.py    # BaseValidator
     paths.py             # папка output/ по дате
     perevozka/ expediciya/   # публичные типы; клиентские — в приватной части
@@ -162,6 +163,21 @@ resources/certs/         # русский корневой сертификат 
 `core/validation/validator.py` → `GeneratorFactory` →
 `core/contracts/<тип>/generator.py` (`BaseContractGenerator` + шаги
 постобработки) → DOCX/XLSX по шаблону → `output/<дата>/` → запись в SQLite.
+
+**Таблица машин: 12 строк бланка и сколько угодно машин.**
+Все DOCX-бланки содержат таблицу машин фиксированного размера (шапка +
+12 строк), и плейсхолдеров `car_13…` в них нет. Машины сверх 12-й выводятся
+в строках, которые дописываются в готовом документе: шаг
+`ExpandVehicleRowsStep` (`core/contracts/base/postprocess.py`) клонирует
+XML последней строки шаблона (`TableBuilder.expand_vehicle_rows` в
+`core/contracts/base/tables.py`), заменяет текст значениями
+`_vehicle_row_values()` и включает `w:cantSplit` / `w:tblHeader` — строка
+не рвётся между страницами, шапка повторяется на новой. Ручной разрыв
+страницы не ставится: Word переносит таблицу сам, а искусственный разрыв
+разрезал бы раздел договора. Таблица остаётся ОДНОЙ: вторая таблица
+разорвала бы нумерацию и шапку. Договоры на 1–12 машин шаг не меняет;
+порядок строк задаёт `_table_vehicles()` — тот же список, из которого
+заполняются `car_N`.
 
 **Правовая база.**
 `tools/update_legal.py`, `tools/download_legal_pre2011.py` → `original/` +

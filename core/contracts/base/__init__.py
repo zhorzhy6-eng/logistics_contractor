@@ -22,6 +22,7 @@ ConvertNewlinesStep, NormalizeSpacesStep доступны отсюда.
 from core.contracts.base.generator import BaseContractGenerator
 from core.contracts.base.postprocess import (
     ConvertNewlinesStep,
+    ExpandVehicleRowsStep,
     NormalizeSpacesStep,
     PostprocessStep,
 )
@@ -30,5 +31,6 @@ __all__ = [
     "BaseContractGenerator",
     "PostprocessStep",
     "ConvertNewlinesStep",
+    "ExpandVehicleRowsStep",
     "NormalizeSpacesStep",
 ]

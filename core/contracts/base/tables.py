@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Работа с таблицами: удаление строк и сборка таблицы машин.
+Работа с таблицами: удаление строк, сборка таблицы машин и расширение
+таблицы бланка под фактическое количество машин.
 
 Переехало из `core/contracts/base_generator.py` (Этап 4, 16.10.2026) без
 изменения логики. Методы статические: таблица и данные приходят
@@ -13,10 +14,16 @@
 модуль звал свои же функции напрямую, переопределения перестали бы
 работать. Делегаты в `BaseContractGenerator` передают сюда `self.*`, и
 цепочка переопределений сохраняется.
+
+Расширение таблицы (`expand_vehicle_rows`) добавлено, когда выяснилось,
+что бланки всех типов рассчитаны ровно на 12 машин: Word не умеет
+растянуть таблицу по данным, и строки дописывает код — клонированием
+последней строки шаблона (см. docstring метода).
 """
 
 import logging
-from typing import Any, Callable, Dict, List
+from copy import deepcopy
+from typing import Any, Callable, Dict, List, Sequence
 
 from core.contracts.base.formatting import Formatting
 
@@ -98,8 +105,169 @@ class TableBuilder:
                 )
 
         Formatting.set_grid_widths(table, column_widths_cm)
+        # Заголовок таблицы повторяется, если таблица уедет на следующую
+        # страницу: у таблиц по погрузкам строк бывает много.
+        TableBuilder.set_page_break_flags(table)
 
         return table._tbl
+
+    # ─────────────────────────────────────────────────────────
+    # Расширение таблицы машин готового документа
+    # ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def expand_vehicle_rows(
+        table,
+        vehicles: List[Dict[str, Any]],
+        *,
+        row_values: Callable[[Dict[str, Any], int], Sequence[str]],
+        start_number: int = 1,
+    ) -> int:
+        """
+        Дописывает в таблицу машин строки под машины, которым не хватило
+        строк бланка.
+
+        Во всех бланках таблица машин фиксированная — шапка и 12 строк
+        данных. Word не растягивает таблицу по данным: строки дописывает
+        код. Образец — последняя строка данных шаблона: у неё уже
+        настроены границы, заливка, отступы и ширина колонок, поэтому
+        клон выглядит как соседние строки. Новая строка встаёт В КОНЕЦ
+        таблицы, и таблица остаётся ОДНОЙ: нумерация машин сквозная (13,
+        14, 15…), а на следующую страницу Word переносит её сам
+        (`set_page_break_flags` включает повтор шапки).
+
+        Почему не вторая таблица: две таблицы разрывают нумерацию и
+        шапку, и в договоре это выглядит как два разных перечня груза.
+
+        `row_values(vehicle, number)` — правило строки конкретного типа
+        (у перевозки «номер, марка, VIN», у аренды ещё точки маршрута).
+        `start_number` — номер первой строки данных (обычно 1).
+
+        Возвращает число добавленных строк (0 — если строк хватает или
+        таблица не найдена).
+        """
+        # Заголовок последней строкой не считается: данных в таблице
+        # ровно на len(table.rows) - 1 машину.
+        rows_available = len(table.rows) - 1
+        if rows_available <= 0 or len(vehicles) <= rows_available:
+            return 0
+
+        # Оформление — из ПЕРВОЙ строки данных: при машинах сверх бланка
+        # она заведомо заполнена, и её tcPr/pPr/rPr — это середина
+        # таблицы, а не «последняя строка» с другой нижней границей.
+        samples = list(table.rows[1].cells)
+        template_tr = deepcopy(table.rows[-1]._tr)
+
+        added = 0
+        for offset in range(rows_available, len(vehicles)):
+            table._tbl.append(deepcopy(template_tr))
+            # Строка уже в теле таблицы: берём её обёртку у python-docx,
+            # а не работаем с XML напрямую — так же, как в остальных
+            # методах модуля.
+            row = table.rows[-1]
+            values = list(row_values(vehicles[offset], start_number + offset))
+            for index, cell in enumerate(row.cells):
+                value = values[index] if index < len(values) else ""
+                TableBuilder.set_cell_value(
+                    cell, value, Formatting.sample_cell(samples, index)
+                )
+            added += 1
+
+        logger.info(
+            f"Таблица машин расширена: строк в бланке {rows_available}, "
+            f"машин {len(vehicles)}, добавлено строк {added}"
+        )
+        return added
+
+    @staticmethod
+    def set_cell_value(cell, text: str, sample_cell=None) -> None:
+        """
+        ЗАМЕНЯЕТ содержимое ячейки, сохраняя оформление.
+
+        `Formatting.fill_table_cell` дописывает run к существующим — для
+        чистой ячейки это то же самое, но у клона строки в ячейке уже
+        стоит отрендеренное значение, и дописывание дало бы «12 13».
+        Поэтому сначала удаляются лишние абзацы и все run'ы, затем текст
+        пишется заново с оформлением образца (`sample_cell`) или прежним
+        шрифтом самой ячейки.
+        """
+        paragraphs = cell.paragraphs
+        first = paragraphs[0]
+        # Значение строки таблицы всегда однострочное: второй абзац в
+        # ячейке — остаток шаблона, а не данные.
+        for extra in paragraphs[1:]:
+            extra._p.getparent().remove(extra._p)
+
+        # Шрифт ячейки запоминается ДО чистки: если у образца нет run'ов,
+        # оформление берётся оттуда, а не «из воздуха».
+        own_run = first.runs[0]._r if first.runs else None
+        for run in list(first.runs):
+            run._r.getparent().remove(run._r)
+
+        if sample_cell is not None:
+            Formatting.apply_sample_cell_format(cell, sample_cell)
+
+        sample_paragraph = (
+            sample_cell.paragraphs[0]
+            if (sample_cell is not None and sample_cell.paragraphs)
+            else None
+        )
+        # Формат абзаца (выравнивание, интервалы) — из образца; если у
+        # образца его нет, остаётся формат клонированной строки.
+        Formatting.copy_paragraph_format(sample_paragraph, first)
+
+        sample_run = (
+            sample_paragraph.runs[0]._r
+            if (sample_paragraph is not None and sample_paragraph.runs)
+            else own_run
+        )
+        Formatting.set_cell_text(first, text, sample_run, bold=False)
+
+    @staticmethod
+    def set_page_break_flags(table) -> None:
+        """
+        Готовит таблицу к переносу на следующую страницу.
+
+        `w:cantSplit` — строка не разрывается между страницами (иначе VIN
+        или марка окажутся над разрывом, а номер и остаток строки —
+        под ним). `w:tblHeader` на строке шапки — Word повторяет шапку на
+        новой странице, и на второй странице таблица снова читается.
+
+        Ручной разрыв страницы (`w:br type="page"`) НЕ ставится: он
+        разрезал бы раздел договора и сдвинул подписи, а где именно
+        кончится страница, зависит от вёрстки — это работа Word.
+
+        Флаги безвредны для короткой таблицы: пока она на одной странице,
+        ни один из них не виден.
+        """
+        if not table.rows:
+            return
+
+        # OxmlElement тянет docx.oxml только ради создания двух пустых
+        # элементов — импорт внутри метода, как в set_grid_widths.
+        from docx.oxml import OxmlElement
+
+        # Порядок детей w:trPr задаёт схема WordprocessingML; элементы
+        # вставляются перед своими «последователями», а не в конец.
+        after_cant_split = (
+            "w:trHeight", "w:tblHeader", "w:tblCellSpacing", "w:jc",
+            "w:hidden", "w:ins", "w:del", "w:trPrChange",
+        )
+        after_tbl_header = (
+            "w:tblCellSpacing", "w:jc", "w:hidden", "w:ins", "w:del",
+            "w:trPrChange",
+        )
+
+        for index, row in enumerate(table.rows):
+            tr_pr = row._tr.get_or_add_trPr()
+            if tr_pr.find(Formatting.qname("cantSplit")) is None:
+                tr_pr.insert_element_before(
+                    OxmlElement("w:cantSplit"), *after_cant_split
+                )
+            if index == 0 and tr_pr.find(Formatting.qname("tblHeader")) is None:
+                tr_pr.insert_element_before(
+                    OxmlElement("w:tblHeader"), *after_tbl_header
+                )
 
     @staticmethod
     def sample_vehicle_table(doc, sample_builder: Callable[[Any], bool]):

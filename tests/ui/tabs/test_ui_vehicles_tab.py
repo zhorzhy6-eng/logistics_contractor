@@ -404,3 +404,57 @@ def test_widths_of_all_columns_are_defined(tab):
     for spec in VEHICLE_COLUMNS:
         assert spec.key in COLUMN_WIDTHS, f"{spec.key}: нет ширины"
         assert spec.key in COLUMN_MINIMUMS, f"{spec.key}: нет минимума"
+
+
+# ─────────────────────────────────────────────────────────────
+# Количество машин и спецмашины (эвакуаторы)
+# ─────────────────────────────────────────────────────────────
+
+def test_evacuator_is_in_vehicle_types():
+    """«Эвакуатор» — в списке типов ТС: его везут как обычную машину."""
+    assert "Эвакуатор" in VEHICLE_TYPES
+
+
+def test_evacuator_type_survives_round_trip(tab):
+    """Тип «Эвакуатор» доходит до данных договора, а не пустеет."""
+    tab.fill_data([{FIELD_VIN: "EC3TEUMB0T0000001", FIELD_TYPE: "Эвакуатор"}])
+
+    combo = tab.table.cellWidget(0, tab.COL_TYPE)
+
+    assert combo.currentText() == "Эвакуатор"
+    assert tab.get_data()[0][FIELD_TYPE] == "Эвакуатор"
+
+
+def test_unknown_vehicle_type_is_kept(tab):
+    """
+    Незнакомый тип (самосвал, кран) из импорта не подменяется «Легковым».
+
+    Раньше комбобокс не находил значение в списке и оставлял пустой
+    пункт — тип терялся при сохранении.
+    """
+    tab.fill_data([{FIELD_VIN: "EC3TEUMB0T0000001", FIELD_TYPE: "Самосвал"}])
+
+    assert tab.get_data()[0][FIELD_TYPE] == "Самосвал"
+
+
+def test_rows_are_not_limited_to_twelve(tab):
+    """
+    Больше 12 машин вкладка добавляет и сохраняет: предела в интерфейсе нет.
+
+    Ограничение 12 строк было только у бланка Word; в таблице оператор
+    может вести столько машин, сколько в рейсе (до 50 — ориентир, а не
+    отсечка).
+    """
+    tab.fill_data([{FIELD_VIN: f"EC3TEUMB0T{number:07d}"}
+                   for number in range(1, 13)])
+    tab._on_add_vehicle()
+
+    assert tab.table.rowCount() == 13
+
+    tab.fill_data([
+        {FIELD_VIN: f"EC3TEUMB0T{number:07d}", FIELD_BRAND: f"CAR {number}"}
+        for number in range(1, 51)
+    ])
+
+    assert tab.table.rowCount() == 50
+    assert len(tab.get_data()) == 50

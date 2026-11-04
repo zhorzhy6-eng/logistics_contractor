@@ -12,7 +12,11 @@ import pytest
 from docx import Document
 
 from core.contract_data import ContractData
-from core.contracts.base_generator import BaseContractGenerator, ConvertNewlinesStep
+from core.contracts.base_generator import (
+    BaseContractGenerator,
+    ConvertNewlinesStep,
+    ExpandVehicleRowsStep,
+)
 from core.contracts.perevozka.generator import PerevozkaGenerator
 from core.contracts.perevozka.postprocess import (
     RemoveEmptyVehicleRowsStep,
@@ -154,14 +158,155 @@ def test_remove_empty_vehicle_rows_step_ignores_foreign_tables(generator, tmp_pa
 
 
 # ─────────────────────────────────────────────────────────────
+# ExpandVehicleRowsStep: таблица машин под фактическое число машин
+# ─────────────────────────────────────────────────────────────
+
+def _cars(count: int) -> list:
+    """Синтетические машины: марка CAR N, VIN из 17 символов."""
+    return [
+        {"brand_model": f"CAR {n}", "vin": f"EC3TEUMB0T{n:07d}",
+         "vehicle_type": "Легковой автомобиль",
+         "loading_index": 0, "unloading_index": 0}
+        for n in range(1, count + 1)
+    ]
+
+
+def _template_vehicle_doc(rows: int = 12):
+    """
+    Таблица машин бланка после docxtpl: шапка и rows заполненных строк.
+
+    Именно в таком виде шаг видит документ: плейсхолдеры уже заменены
+    значениями, пустые строки ещё не удалены.
+    """
+    doc = Document()
+    table = doc.add_table(rows=rows + 1, cols=3)
+    for cell, text in zip(table.rows[0].cells, ("№", "Марка/Модель", "VIN-номер")):
+        cell.text = text
+    for index in range(1, rows + 1):
+        values = (str(index), f"CAR {index}", f"EC3TEUMB0T{index:07d}")
+        for cell, text in zip(table.rows[index].cells, values):
+            cell.text = text
+    return doc
+
+
+def _row_texts(table) -> list:
+    return [[cell.text for cell in row.cells] for row in table.rows]
+
+
+def test_expand_vehicle_rows_adds_rows_for_nineteen_cars(generator):
+    """19 машин: к 12 строкам бланка дописываются 13…19, номер — в колонке «№»."""
+    doc = _template_vehicle_doc()
+
+    added = generator._expand_vehicle_rows(doc, ContractData(vehicles=_cars(19)))
+
+    table = doc.tables[0]
+    assert added == 7
+    assert len(table.rows) == 20
+    assert [row.cells[0].text for row in table.rows[1:]] == [
+        str(number) for number in range(1, 20)
+    ]
+    assert [row.cells[2].text for row in table.rows[1:]] == [
+        f"EC3TEUMB0T{number:07d}" for number in range(1, 20)
+    ]
+
+
+def test_expanded_row_replaces_text_instead_of_appending(generator):
+    """
+    В клоне строки текст ЗАМЕНЯЕТСЯ, а не дописывается.
+
+    `Formatting.fill_table_cell` добавляет run к существующим: на строке
+    шаблона это дало бы «12 13» в колонке «№».
+    """
+    doc = _template_vehicle_doc()
+
+    generator._expand_vehicle_rows(doc, ContractData(vehicles=_cars(13)))
+
+    assert [cell.text for cell in doc.tables[0].rows[13].cells] == [
+        "13", "CAR 13", "EC3TEUMB0T0000013",
+    ]
+
+
+def test_expanded_table_repeats_header_and_keeps_rows_whole(generator):
+    """Шапка повторяется на новой странице, строки между страницами не рвутся."""
+    doc = _template_vehicle_doc()
+
+    generator._expand_vehicle_rows(doc, ContractData(vehicles=_cars(19)))
+
+    table = doc.tables[0]
+    header_props = table.rows[0]._tr.trPr
+    assert header_props.find(f"{NS}tblHeader") is not None
+    assert header_props.find(f"{NS}cantSplit") is not None
+
+    for row in table.rows[1:]:
+        assert row._tr.trPr.find(f"{NS}cantSplit") is not None
+        assert row._tr.trPr.find(f"{NS}tblHeader") is None
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 12])
+def test_twelve_or_fewer_cars_leave_table_untouched(generator, count):
+    """Договоры на 1–12 машин: ни одной новой строки, содержимое прежнее."""
+    doc = _template_vehicle_doc()
+    before = _row_texts(doc.tables[0])
+
+    added = generator._expand_vehicle_rows(doc, ContractData(vehicles=_cars(count)))
+
+    assert added == 0
+    assert _row_texts(doc.tables[0]) == before
+
+
+def test_expand_without_data_is_noop(generator):
+    """Постобработка без данных (старый путь) таблицу не трогает."""
+    doc = _template_vehicle_doc()
+
+    assert generator._expand_vehicle_rows(doc, None) == 0
+    assert len(doc.tables[0].rows) == 13
+
+
+def test_expand_without_vehicle_table_is_noop(generator):
+    """В документе нет таблицы машин — шаг молча ничего не делает."""
+    doc = Document()
+    doc.add_paragraph("документ без таблиц")
+
+    assert generator._expand_vehicle_rows(doc, ContractData(vehicles=_cars(19))) == 0
+
+
+def test_truck_is_not_counted_as_cargo(generator):
+    """
+    Тягач в таблицу 3.1 не попадает, и нумерация машин сквозная.
+
+    Иначе строка тягача съела бы номер, и машина №13 получила бы
+    нумерацию соседней строки шаблона.
+    """
+    doc = _template_vehicle_doc()
+    vehicles = [{"brand_model": "FOTON", "vin": "", "vehicle_type": "Тягач"}]
+    vehicles += _cars(13)
+
+    added = generator._expand_vehicle_rows(doc, ContractData(vehicles=vehicles))
+
+    assert added == 1
+    assert [cell.text for cell in doc.tables[0].rows[13].cells] == [
+        "13", "CAR 13", "EC3TEUMB0T0000013",
+    ]
+
+
+def test_expand_step_is_thin_wrapper(generator):
+    """Шаг — обёртка над методом генератора (стиль остальных шагов)."""
+    doc = _template_vehicle_doc()
+
+    ExpandVehicleRowsStep(generator).apply(doc, ContractData(vehicles=_cars(15)))
+
+    assert len(doc.tables[0].rows) == 16
+
+
+# ─────────────────────────────────────────────────────────────
 # Состав конвейера
 # ─────────────────────────────────────────────────────────────
 
 def test_perevozka_steps_with_data(generator):
     steps = generator.postprocess_steps(ContractData())
     assert [step.name for step in steps] == [
-        "convert_newlines", "route_tables", "remove_empty_vehicle_rows",
-        "normalize_spaces",
+        "convert_newlines", "route_tables", "expand_vehicle_rows",
+        "remove_empty_vehicle_rows", "normalize_spaces",
     ]
 
 

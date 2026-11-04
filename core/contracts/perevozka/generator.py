@@ -28,6 +28,7 @@ from core.contract_data import ContractData
 from core.contracts.base_generator import (
     BaseContractGenerator,
     ConvertNewlinesStep,
+    ExpandVehicleRowsStep,
     NormalizeSpacesStep,
     PostprocessStep,
 )
@@ -139,6 +140,12 @@ class PerevozkaGenerator(BaseContractGenerator):
     #: Стиль таблиц погрузок/выгрузок (границы — как у таблицы ТС в шаблоне).
     VEHICLE_TABLE_STYLE = "Table Grid"
 
+    #: Сколько строк под машины в бланке (шапка + 12 строк данных).
+    #: Машины сверх этого числа выводятся в строках, которые дописывает
+    #: постобработка (ExpandVehicleRowsStep): плейсхолдеров car_13… в
+    #: бланке нет, а Word таблицу по данным не растягивает.
+    TEMPLATE_VEHICLE_ROWS = 12
+
     # ─────────────────────────────────────────────────────────
     # ВЫБОР ШАБЛОНА
     # ─────────────────────────────────────────────────────────
@@ -188,9 +195,16 @@ class PerevozkaGenerator(BaseContractGenerator):
         Шаги постобработки заявки.
 
         Порядок и состав повторяют прежний код _postprocess_document:
-        переносы строк → таблицы маршрута (только с данными) → удаление
-        пустых строк таблицы ТС. Без данных (data=None) таблицы маршрута
-        не строятся — историческое поведение сохранено.
+        переносы строк → таблицы маршрута (только с данными) → строки
+        таблицы ТС под число машин → удаление пустых строк таблицы ТС.
+        Без данных (data=None) таблицы маршрута не строятся — историческое
+        поведение сохранено.
+
+        Шаг расширения таблицы (ExpandVehicleRowsStep) стоит ПОСЛЕ таблиц
+        маршрута: к этому моменту дубль таблицы ТС из блока 3.2 уже
+        удалён, и первой таблицей машин в документе остаётся 3.1 — только
+        её и нужно дополнять. Удаление пустых строк идёт последним:
+        добавленные строки заполнены, и оно их не трогает.
 
         Последним идёт шаг косметики пробелов (NormalizeSpacesStep): он
         должен видеть документ уже собранным, вместе с таблицами маршрута —
@@ -200,6 +214,7 @@ class PerevozkaGenerator(BaseContractGenerator):
         steps: List[PostprocessStep] = [ConvertNewlinesStep(self)]
         if data is not None:
             steps.append(RouteTablesStep(self))
+            steps.append(ExpandVehicleRowsStep(self))
         steps.append(RemoveEmptyVehicleRowsStep(self))
         steps.append(NormalizeSpacesStep(self))
         return steps
@@ -526,11 +541,7 @@ class PerevozkaGenerator(BaseContractGenerator):
 
         for offset, vehicle in enumerate(vehicles):
             row = table.add_row()
-            values = (
-                str(start_number + offset),
-                self._get_vehicle_brand(vehicle),
-                self._get_vehicle_vin(vehicle),
-            )
+            values = self._vehicle_row_values(vehicle, start_number + offset)
             for index, (cell, value) in enumerate(zip(row.cells, values)):
                 self._fill_table_cell(
                     cell, value,
@@ -540,6 +551,9 @@ class PerevozkaGenerator(BaseContractGenerator):
                 )
 
         self._set_grid_widths(table, self.VEHICLE_TABLE_COLUMN_WIDTHS_CM)
+        # Таблица по одной точке может занимать страницу и больше: шапка
+        # повторяется, строки между страницами не рвутся.
+        self._set_page_break_flags(table)
 
         return table._tbl
 
@@ -558,6 +572,20 @@ class PerevozkaGenerator(BaseContractGenerator):
     # ─────────────────────────────────────────────────────────
     # Форматирование и данные строк таблиц
     # ─────────────────────────────────────────────────────────
+
+    def _table_vehicles(self, contract_data: ContractData) -> List[Dict[str, Any]]:
+        """
+        Машины таблицы блока 3.1 «Груз»: все, кроме тягача и прицепа.
+
+        Тягач и полуприцеп в перевозке описаны в карточке ТС рядом с
+        таблицей, поэтому в перечень груза не попадают. Правило одно на
+        карту замен (`car_N`) и на расширение таблицы в постобработке —
+        иначе номера строк разъехались бы с номерами машин.
+        """
+        return [
+            vehicle for vehicle in contract_data.vehicles
+            if vehicle.get("vehicle_type") not in self.NON_CARGO_VEHICLE_TYPES
+        ]
 
     def _cargo_vehicles(self, vehicles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -663,6 +691,22 @@ class PerevozkaGenerator(BaseContractGenerator):
     @classmethod
     def _get_vehicle_vin(cls, vehicle: Dict[str, Any]) -> str:
         return cls._single_line(vehicle.get("vin") or "")
+
+    @classmethod
+    def _vehicle_row_values(cls, vehicle: Dict[str, Any], number: int):
+        """
+        Значения строки таблицы машин: номер, марка/модель, VIN.
+
+        Одно правило на обе таблицы типа: таблицы по погрузкам/выгрузкам
+        (их строит _make_vehicle_table) и строки, которые постобработка
+        дописывает в таблицу блока 3.1 (ExpandVehicleRowsStep). Раньше
+        сборка строки была выписана в двух местах.
+        """
+        return (
+            str(number),
+            cls._get_vehicle_brand(vehicle),
+            cls._get_vehicle_vin(vehicle),
+        )
 
     # ─────────────────────────────────────────────────────────
     # Числовые реквизиты
@@ -1444,13 +1488,18 @@ class PerevozkaGenerator(BaseContractGenerator):
 
         # ── Груз и ТС ──
         all_vehicles = contract_data.vehicles
-        vehicles = [
-            v for v in all_vehicles
-            if v.get("vehicle_type") not in ("Тягач", "Полуприцеп", "Прицеп")
-        ]
+        # Список таблицы 3.1 — тот же, что отдаёт _table_vehicles: от него
+        # же считает строки постобработка (ExpandVehicleRowsStep). Раньше
+        # фильтр был выписан здесь второй раз, и правка в одном месте
+        # молча расходилась с другим.
+        vehicles = self._table_vehicles(contract_data)
         replacements["cargo_count"] = str(len(vehicles))
 
-        for i in range(1, 13):
+        # Плейсхолдеры заполняются для ВСЕХ машин: в бланке их 12, но
+        # лишние ключи docxtpl просто игнорирует, а бланк с большим числом
+        # строк заполнится сам. Машинам сверх 12 строки дописывает
+        # постобработка — жёсткого предела в 12 машин здесь больше нет.
+        for i in range(1, max(self.TEMPLATE_VEHICLE_ROWS, len(vehicles)) + 1):
             if i <= len(vehicles):
                 v = vehicles[i - 1]
                 replacements[f"car_{i}_brand"] = v.get("brand_model", "")

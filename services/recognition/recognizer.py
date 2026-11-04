@@ -213,18 +213,34 @@ class DataMapper:
 
     @staticmethod
     def _normalize_vehicle_type(vt: Optional[str]) -> str:
+        """
+        Тип ТС из распознанного значения: известные категории — к своему
+        написанию, незнакомые — КАК ЕСТЬ.
+
+        Раньше всё, что не прицеп и не тягач, становилось «Легковым
+        автомобилем»: эвакуатор, самосвал или кран молча превращались в
+        легковую машину, и данные договора расходились с документом.
+        Фильтр не-грузовых ТС в договорах исключает только тягач и
+        прицеп — спецмашина должна пройти в таблицу со своим типом.
+        """
         if not vt:
             return "Легковой автомобиль"
-        vt_lower = str(vt).lower().strip()
-        if vt_lower in ("null", "none", "undefined"):
+        text = re.sub(r"\s+", " ", str(vt)).strip()
+        if text.lower() in ("null", "none", "undefined"):
             return "Легковой автомобиль"
+        vt_lower = text.lower()
+        if "эвакуатор" in vt_lower:
+            return "Эвакуатор"
         if "прицеп" in vt_lower:
             return "Прицеп"
         if "фургон" in vt_lower or "автобус" in vt_lower:
             return "Фургон"
         if "тягач" in vt_lower or "седл" in vt_lower:
             return "Тягач"
-        return "Легковой автомобиль"
+        if "легков" in vt_lower:
+            return "Легковой автомобиль"
+        # Незнакомый тип не подменяем: это может быть спецмашина.
+        return text
 
     @staticmethod
     def _parse_vat_rate(vat_str: Any) -> str:

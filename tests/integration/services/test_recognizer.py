@@ -141,11 +141,28 @@ def test_parse_vat_rate(value, expected):
     ("седельный тягач", "Тягач"),
     ("тягач", "Тягач"),
     ("легковой", "Легковой автомобиль"),
+    ("эвакуатор", "Эвакуатор"),
+    ("Эвакуатор на базе ГАЗ", "Эвакуатор"),
     ("", "Легковой автомобиль"),
     (None, "Легковой автомобиль"),
     ("null", "Легковой автомобиль"),
 ])
 def test_normalize_vehicle_type(value, expected):
+    assert DataMapper._normalize_vehicle_type(value) == expected
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("самосвал", "самосвал"),
+    ("  Кран   автомобильный ", "Кран автомобильный"),
+])
+def test_normalize_vehicle_type_keeps_special_machine(value, expected):
+    """
+    Спецмашина не превращается в «Легковой автомобиль».
+
+    Раньше любой незнакомый тип становился легковым, и эвакуатор (или
+    кран) из документа пропадал из данных договора. Фильтр не-грузовых
+    ТС исключает только тягач и прицеп — спецмашина должна пройти.
+    """
     assert DataMapper._normalize_vehicle_type(value) == expected
 
 
