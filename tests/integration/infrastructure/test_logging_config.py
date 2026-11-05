@@ -20,6 +20,7 @@
 """
 
 import logging
+import os
 import re
 import shutil
 import uuid
@@ -381,6 +382,113 @@ def test_main_without_flag_keeps_debug_log_off(monkeypatch, logs_dir):
 
     assert calls.get("debug") is False
     assert not (logs_dir / logging_config.DEBUG_LOG_FILENAME).exists()
+
+
+def test_locked_audit_file_falls_back_to_temp(logs_dir, monkeypatch):
+    """
+    Занятый audit.log не роняет запуск: журнал уходит в %TEMP%.
+
+    Так выглядит ошибка «Unable to configure handler 'audit_file'», когда
+    старая копия программы или антивирус держит audit.log.
+    """
+    fallback_dir = logs_dir / "fallback"
+    monkeypatch.setattr(logging_config, "FALLBACK_LOG_DIR", str(fallback_dir))
+
+    real_open = logging_config.SafeRotatingFileHandler._open
+    attempts = {"audit": 0}
+
+    def fake_open(handler):
+        if (handler.baseFilename.endswith(logging_config.AUDIT_LOG_FILENAME)
+                and attempts["audit"] == 0):
+            attempts["audit"] += 1
+            raise PermissionError(13, "Permission denied", handler.baseFilename)
+        return real_open(handler)
+
+    monkeypatch.setattr(
+        logging_config.SafeRotatingFileHandler, "_open", fake_open
+    )
+
+    logging_config.setup_logging(str(logs_dir), debug=False)  # не должно бросить
+
+    logging.getLogger("audit").info("запись в резервный журнал")
+    _flush()
+
+    fallback_files = list(fallback_dir.glob("*audit.log"))
+    assert fallback_files, "резервный audit-журнал не создан"
+    assert "запись в резервный журнал" in fallback_files[0].read_text(encoding="utf-8")
+    assert (logs_dir / logging_config.APP_LOG_FILENAME).exists()
+
+
+def test_all_log_files_locked_do_not_crash_startup(logs_dir, monkeypatch):
+    """Если заняты ВСЕ файлы, программа всё равно стартует (последний резерв)."""
+    monkeypatch.setattr(
+        logging_config, "FALLBACK_LOG_DIR", str(logs_dir / "fallback")
+    )
+
+    real_open = logging_config.SafeRotatingFileHandler._open
+
+    def always_denied(handler):
+        # NUL — последний резерв самого обработчика; его открываем, чтобы
+        # не засорять stderr ошибками logging при каждой записи.
+        if handler.baseFilename.lower().endswith("nul"):
+            return real_open(handler)
+        raise PermissionError(13, "Permission denied", handler.baseFilename)
+
+    monkeypatch.setattr(
+        logging_config.SafeRotatingFileHandler, "_open", always_denied
+    )
+
+    logging_config.setup_logging(str(logs_dir), debug=False)
+
+    # Запись в журнал тоже не должна бросить PermissionError.
+    logging.getLogger("main").info("приложение живо")
+
+    handler = next(
+        item for item in logging.getLogger("main").handlers
+        if isinstance(item, logging_config.SafeRotatingFileHandler)
+    )
+    assert handler.fallback_used is True
+    assert handler.fallback_path == os.devnull
+
+
+def test_unwritable_log_dir_uses_fallback(logs_dir, monkeypatch):
+    """Папка логов недоступна (там файл) — журналы уходят в резервную."""
+    fallback_dir = logs_dir / "fallback"
+    monkeypatch.setattr(logging_config, "FALLBACK_LOG_DIR", str(fallback_dir))
+
+    blocked = logs_dir / "blocked"
+    blocked.write_text("это файл, а не папка", encoding="utf-8")
+
+    logging_config.setup_logging(str(blocked), debug=False)  # не должно бросить
+
+    assert (fallback_dir / logging_config.APP_LOG_FILENAME).exists()
+    assert (fallback_dir / logging_config.AUDIT_LOG_FILENAME).exists()
+
+
+def test_rotation_permission_error_does_not_raise(logs_dir, monkeypatch):
+    """Ошибка ротации во время записи не должна ронять приложение."""
+    handler = logging_config.SafeRotatingFileHandler(
+        str(logs_dir / logging_config.APP_LOG_FILENAME),
+        maxBytes=1,
+        backupCount=1,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    monkeypatch.setattr(
+        handler, "handleError", lambda record: None
+    )
+    monkeypatch.setattr(
+        handler, "doRollover",
+        lambda: (_ for _ in ()).throw(
+            PermissionError(13, "Permission denied", handler.baseFilename)
+        ),
+    )
+
+    record = logging.LogRecord(
+        "test", logging.INFO, __file__, 1, "x" * 200, None, None
+    )
+    handler.emit(record)  # не должно бросить PermissionError
+    handler.close()
 
 
 def test_console_handler_survives_cp1251():
