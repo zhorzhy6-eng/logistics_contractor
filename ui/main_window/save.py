@@ -24,6 +24,8 @@ from PyQt5.QtWidgets import QMessageBox
 from core import audit
 from core.trace import filled_fields_summary
 
+from db import write_access
+from db.connection import current_db_path
 from db.database import (
     find_organization_id,
     load_organization,
@@ -283,6 +285,9 @@ class SaveMixin:
         except Exception as e:
             logger.exception("Ошибка при сохранении в базу")
             audit.log_event("database_save_failed", result="error")
+            # «attempt to write a readonly database» и «database is locked»
+            # переводятся в объяснение с шагами: вторая копия программы,
+            # атрибут «только чтение», антивирус (db/write_access.py).
             QMessageBox.critical(
-                self, "Ошибка", f"Не удалось сохранить данные:\n{e}"
+                self, "Ошибка", write_access.save_error_text(e, current_db_path())
             )

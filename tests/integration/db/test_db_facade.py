@@ -102,7 +102,8 @@ SCHEMA_COLUMNS = {
 
 #: Модули пакета db/ (кроме фасада) — в них не должно быть импорта фасада.
 DB_MODULES = (
-    "agent_queries", "connection", "schema", "migrations", "salons", "fts",
+    "agent_queries", "connection", "write_access", "schema", "migrations",
+    "salons", "fts",
     "crud.addresses", "crud.agent_history", "crud.agent_memory",
     "crud.analytics", "crud.carriers",
     "crud.contracts", "crud.customers",

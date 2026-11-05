@@ -226,6 +226,36 @@ def _ask_keys_if_missing() -> bool:
     return accepted
 
 
+#: Заголовок окна о правах на базу (текст готовит db/write_access.py).
+DATABASE_PROBLEM_TITLE = "База данных доступна только для чтения"
+
+
+def _warn_if_database_readonly() -> bool:
+    """
+    Показывает оператору причину, по которой база не принимает запись.
+
+    Проверка делается при первом соединении с базой (`init_database()` →
+    `db/connection.py`), ещё ДО создания QApplication: там же причина
+    пишется в журнал уровнем ERROR. Здесь — только показ: у собранного
+    .exe консоли нет, и `logger.error` оператору увидеть негде. Окно одно
+    на запуск: причина забирается из `db/write_access.take_startup_problem`.
+
+    :return: True, если окно показано.
+    """
+    from db.write_access import take_startup_problem
+
+    problem = take_startup_problem()
+    if not problem:
+        return False
+
+    # Qt импортируется здесь: main.py импортируется и в тестах, где Qt не нужен.
+    from PyQt5.QtWidgets import QMessageBox
+
+    logger.warning("Показываю предупреждение о правах на базу данных")
+    QMessageBox.warning(None, DATABASE_PROBLEM_TITLE, problem)
+    return True
+
+
 def _load_contract_types() -> None:
     """
     Прогревает реестр типов договоров (загрузка изолирована по типам).
@@ -541,6 +571,11 @@ def main() -> int:
         from ui.system_theme import preferred_theme
         from ui.theme import apply_theme
         apply_theme(app, preferred_theme(get_settings_service()))
+
+        # ── Права на базу: сказать оператору ДО того, как он заполнит форму ──
+        # Причина найдена при первом соединении (init_database выше):
+        # «только чтение» / запрет записи / занятая база. Окно одно на запуск.
+        _warn_if_database_readonly()
 
         # ── Первый запуск: ключи API (Часть 2 задания от 18.10.2026) ──
         # Окно появляется само, только если ключа GigaChat нет; отказ

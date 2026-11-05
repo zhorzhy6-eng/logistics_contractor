@@ -86,7 +86,12 @@ REQUIRED_GROUPS = {
 #: unit 74 → 75 в фиксе импорта салонов 05.11.2026 — добавлен
 #: `tests/unit/utils/test_address_utils.py` (правило split_salon_name:
 #: наименование в хвосте адреса, чистый адрес, идемпотентность).
-EXPECTED_FILES = {"unit": 75, "integration": 25, "ui": 70}
+#: integration 25 → 26, ui 70 → 72 в фиксе «база только для чтения»
+#: 05.11.2026 — добавлены `tests/integration/db/test_db_write_access.py`
+#: (починка атрибута, проба записи, тексты ошибок),
+#: `tests/ui/main_window/test_ui_db_readonly_save.py` (диалог сохранения) и
+#: `tests/ui/widgets/test_main_db_readonly_notice.py` (окно при старте).
+EXPECTED_FILES = {"unit": 75, "integration": 26, "ui": 72}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -233,9 +238,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 170 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 173 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 170, f"тестовых файлов {len(found)}, ожидается 170"
+    assert len(found) == 173, f"тестовых файлов {len(found)}, ожидается 173"
 
 
 def test_no_test_module_name_collision():
