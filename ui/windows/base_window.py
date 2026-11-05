@@ -34,6 +34,7 @@
 """
 
 import logging
+import os
 import weakref
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,10 +44,11 @@ from PyQt5.QtWidgets import (
     QTabWidget, QVBoxLayout, QWidget,
 )
 
+from core.contracts.factory import GeneratorFactory
 from core.contracts.picker_order import picker_title
 from core.mirror import (
-    SOURCE_TYPE, SUPPORTED_TARGETS, MirrorPlan, collect_source, is_empty,
-    source_has_data, text,
+    SOURCE_TYPE, SUPPORTED_TARGETS, MirrorPlan, collect_conflicts,
+    collect_source, is_empty, source_has_data, text,
 )
 from core.prompts import get_prompt
 from ui import theme
@@ -192,6 +194,14 @@ class BaseContractWindow(DiagnosticsMenuMixin, QMainWindow):
         self.setWindowTitle(self.WINDOW_TITLE or picker_title(self.CONTRACT_TYPE))
         self.resize(1200, 900)
         self._init_ui()
+
+        # Снимок заводских значений формы: у вкладок есть значения по
+        # умолчанию (сегодняшняя дата, имя заказчика Логистикса, дата
+        # рождения водителя). По нему `mirror_conflicts` отличает «оператор
+        # заполнил» от «форма сама поставила» — иначе вопрос «Перезаписать?»
+        # при связанном создании возникал бы на пустой форме.
+        self._default_tab_data = self._tab_data_snapshot()
+
         # Подсказка кнопки зеркала — по состоянию источника (ШАГ FIX-4):
         # кнопка живёт в шапке, а источник заполняют в другом окне.
         self._refresh_mirror_button()
@@ -702,6 +712,154 @@ class BaseContractWindow(DiagnosticsMenuMixin, QMainWindow):
         а не пустое место (правило одно с core/mirror.py::is_empty).
         """
         return not is_empty(value)
+
+    # ---------------------------------------------------------
+    # Связанные договоры: применение данных к окну-цели (задача 2)
+    # ---------------------------------------------------------
+    # Три публичные операции, которых не хватало «Экспедиторству» при
+    # создании пары договоров за один прогон: разложить план зеркала,
+    # принудительно поставить сумму в вкладку стоимости и сгенерировать
+    # документ БЕЗ собственных диалогов успеха (общий покажет источник).
+    # Кнопка «Отзеркалить» в шапке работает по-прежнему через
+    # `_on_mirror_clicked` — её поведение и диалоги не менялись.
+
+    def _tab_data_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """Снимок данных всех вкладок: заводские значения формы."""
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for key in self._TAB_KEYS:
+            tab = self._tab_by_key(key)
+            if tab is not None:
+                snapshot[key] = self._tab_data(tab)
+        return snapshot
+
+    def mirror_conflicts(self, plan: MirrorPlan) -> List[tuple]:
+        """
+        Что зеркало изменит из того, что заполнил ОПЕРАТОР.
+
+        Отличие от `core.mirror.collect_conflicts` одно: значения, равные
+        снимку заводских значений формы, конфликтом не считаются. Оператор
+        не вводил сегодняшнюю дату и имя заказчика — спрашивать о них
+        «Перезаписать?» незачем.
+
+        :return: [(вкладка, поле, старое, новое)] — пусто, если перенос
+            ничего не меняет в заполненном оператором.
+        """
+        baseline = getattr(self, "_default_tab_data", None)
+        return collect_conflicts(
+            self, plan, target_type=self.CONTRACT_TYPE, baseline=baseline
+        )
+
+    def apply_mirror_plan(self, plan: MirrorPlan,
+                          overwrite_existing: bool = True) -> None:
+        """
+        Раскладывает готовый план зеркала по вкладкам окна.
+
+        Публичная обёртка над `_apply_mirror_plan`: вызывается из окна
+        «Экспедиторство» при связанном создании. Диалогов не показывает —
+        решение «перезаписывать или нет» принимает вызывающий.
+        """
+        self._apply_mirror_plan(plan, overwrite_existing)
+
+    def apply_price_amount(self, amount: Any) -> bool:
+        """
+        Принудительно ставит сумму в вкладку стоимости цели.
+
+        Сумма идёт через общий `fill_data` вкладки — тот же путь, что у
+        распознавания и ручного ввода, поэтому «Сумма» и НДС пересчитаются
+        по правилам типа. Ключ `price_with_vat` — ИТОГ с НДС: именно его
+        вводит оператор в целевых окнах.
+
+        :return: True, если сумма подставлена.
+        """
+        try:
+            value = float(
+                str(amount).replace(" ", "").replace("\u00a0", "")
+                .replace("₽", "").replace(",", ".")
+            )
+        except (TypeError, ValueError):
+            logger.warning(
+                "Связанные договоры: сумма не распознана как число (тип=%s)",
+                self.CONTRACT_TYPE,
+            )
+            return False
+
+        if value <= 0:
+            logger.warning(
+                "Связанные договоры: сумма должна быть больше нуля (тип=%s)",
+                self.CONTRACT_TYPE,
+            )
+            return False
+
+        tab = self._tab_by_key("price_tab")
+        filler = getattr(tab, "fill_data", None)
+        if not callable(filler):
+            logger.error(
+                "Связанные договоры: у окна типа %r нет вкладки стоимости",
+                self.CONTRACT_TYPE,
+            )
+            return False
+
+        try:
+            filler({"price_with_vat": value})
+        except Exception as e:  # noqa: BLE001 — сумма не должна ронять создание
+            logger.error(
+                "Связанные договоры: вкладка стоимости не приняла сумму (%s)",
+                type(e).__name__,
+            )
+            return False
+
+        logger.info(
+            "Связанные договоры: сумма %.2f подставлена (тип=%s)",
+            value, self.CONTRACT_TYPE,
+        )
+        return True
+
+    def generate_document(self, confirm: bool = True,
+                          output_dir: Optional[str] = None) -> Optional[str]:
+        """
+        Собирает данные окна, проверяет их и генерирует документ.
+
+        Этот метод и есть «целевое окно генерирует свой документ»: тот же
+        сбор данных и тот же валидатор типа, что у кнопки «Создать договор»,
+        но БЕЗ диалога успеха — его показывает вызывающая сторона, одна на
+        оба документа.
+
+        :param confirm: спрашивать ли у оператора подтверждение при
+            замечаниях валидатора (диалог окна `_confirm_validation`).
+            False — сгенерировать молча (тесты, повторная генерация).
+        :param output_dir: корень вывода; None — общая папка договоров
+            (внутри неё документ ложится в папку рейса).
+        :return: путь готового файла или None, если генерация отменена
+            оператором.
+        """
+        collector = getattr(self, "_collect_data", None)
+        if not callable(collector):
+            logger.error(
+                "Связанные договоры: окно типа %r не умеет собирать данные",
+                self.CONTRACT_TYPE,
+            )
+            return None
+
+        data = collector()
+        validator = GeneratorFactory.get_validator(self.CONTRACT_TYPE)
+        report = validator.check(data)
+
+        if confirm:
+            confirmer = getattr(self, "_confirm_validation", None)
+            if callable(confirmer) and not confirmer(report):
+                logger.info(
+                    "Связанные договоры: генерация типа %r отменена после "
+                    "проверки данных", self.CONTRACT_TYPE,
+                )
+                return None
+
+        generator = GeneratorFactory.get_generator(self.CONTRACT_TYPE)
+        path = generator.generate(data, output_dir)
+        logger.info(
+            "Связанные договоры: документ типа %r создан (%s)",
+            self.CONTRACT_TYPE, os.path.basename(str(path)),
+        )
+        return path
 
     # ---------------------------------------------------------
     # Заглушки действий

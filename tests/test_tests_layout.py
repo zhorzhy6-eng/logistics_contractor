@@ -75,7 +75,10 @@ REQUIRED_GROUPS = {
 #: ui 66 → 67 в фиксе «список ТС: VIN + марка одной строкой» 05.11.2026 —
 #: добавлен `tests/ui/main_window/test_vehicle_recognition_vin_first.py`
 #: (7 машин из текста оператора, склейка перенесённого VIN, отсев мусора).
-EXPECTED_FILES = {"unit": 73, "integration": 25, "ui": 67}
+#: ui 67 → 69 в задаче «быстрые связанные договоры» 05.11.2026 — добавлены
+#: `test_contract_pair_dialog.py` (выбор режима и суммы) и
+#: `test_contract_pair_creation.py` (два файла, сумма, ветки «Да/Нет/Отмена»).
+EXPECTED_FILES = {"unit": 73, "integration": 25, "ui": 69}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -222,9 +225,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 165 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 167 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 165, f"тестовых файлов {len(found)}, ожидается 165"
+    assert len(found) == 167, f"тестовых файлов {len(found)}, ожидается 167"
 
 
 def test_no_test_module_name_collision():

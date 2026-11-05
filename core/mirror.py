@@ -643,7 +643,9 @@ def current_target_data(target_window: Any,
 
 
 def collect_conflicts(target_window: Any, plan: MirrorPlan,
-                      *, target_type: str) -> List[tuple]:
+                      *, target_type: str,
+                      baseline: Optional[Mapping[str, Mapping[str, Any]]] = None
+                      ) -> List[tuple]:
     """
     Возвращает [(ключ_вкладки, имя_поля, старое, новое)].
 
@@ -654,6 +656,12 @@ def collect_conflicts(target_window: Any, plan: MirrorPlan,
     Пустое текущее значение конфликтом не считается: заполнить пустое поле
     можно молча. Поля, которых в данных вкладки нет вовсе, пропускаются:
     раскладывать их некуда, и предупреждать о них не о чем.
+
+    :param baseline: снимок данных вкладок сразу после открытия окна
+        (заводские значения формы: сегодняшняя дата, имя заказчика).
+        Значение, совпадающее со снимком, оператор не вводил — конфликтом
+        оно не считается. None — сравнивать со снимком не нужно (кнопка
+        «Отзеркалить», старые вызовы): поведение прежнее.
     """
     profiles = (target_profiles().get(target_type) or {})
     if not profiles:
@@ -673,6 +681,7 @@ def collect_conflicts(target_window: Any, plan: MirrorPlan,
             continue
 
         tab_profiles = profiles.get(tab_key) or {}
+        base_tab = (baseline or {}).get(tab_key) or {}
         for name, new_value in fields.items():
             if name not in current:
                 logger.debug(
@@ -686,6 +695,17 @@ def collect_conflicts(target_window: Any, plan: MirrorPlan,
                 continue
 
             profile = tab_profiles.get(name) or FieldProfile()
+            if (baseline is not None and name in base_tab
+                    and profile.signature(old_value)
+                    == profile.signature(base_tab.get(name))):
+                # С момента открытия окна значение не менялось: это
+                # заводское значение формы, а не ввод оператора.
+                logger.debug(
+                    "Зеркало: %s.%s совпадает со значением по умолчанию — "
+                    "конфликтом не считается", tab_key, name,
+                )
+                continue
+
             if profile.signature(old_value) != profile.signature(new_value):
                 conflicts.append((tab_key, name, old_value, new_value))
 

@@ -562,8 +562,13 @@ def main() -> int:
         # Окна не уничтожаются при переключении типа: пользователь может
         # вернуться к уже заполненной форме.
         from ui.windows import WindowManager
+        from ui.windows.manager import register_window_manager
 
         manager = WindowManager(_make_factories())
+        # Менеджер нужен окну «Экспедиторство»: кнопка «Создать договор»
+        # спрашивает, какие типы умеют зеркало, и берёт окно цели отсюда
+        # (связанные договоры). Ссылка слабая — см. ui/windows/manager.py.
+        register_window_manager(manager)
 
         # Приёмник сигналов окон (ЭТАП 2C): селектор типа в шапке просит
         # переключить окно, кнопка «Выход» — завершить приложение.

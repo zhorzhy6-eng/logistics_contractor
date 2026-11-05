@@ -116,6 +116,10 @@ METHOD_HOMES = {
     "ui.main_window.data": ("_collect_data", "_confirm_validation", "_mark_saved"),
     "ui.main_window.contract": (
         "_on_create_contract", "_show_contract_created", "_open_folder",
+        # Задача 2 (05.11.2026): связанные договоры.
+        "_linked_target_titles", "_ask_linked_contract",
+        "_ask_overwrite_target", "_create_linked_contract",
+        "_show_pair_created",
     ),
     "ui.main_window.save": (
         "_sync_organization_with_db", "_safe_organization_record",
@@ -549,6 +553,8 @@ def test_method_homes_cover_all_functions():
         "RecognitionSignals.__init__", "RecognitionTask.__init__",
         "BulkPasteDialog", "BulkPasteDialog.__init__",
         "BulkPasteDialog._paste_from_clipboard", "BulkPasteDialog.get_text",
+        # Задача 2 (05.11.2026): диалог выбора режима и два результата.
+        "LinkedContractDialog", "LinkedContractChoice", "LinkedContractResult",
     }
     extra = []
     for name in EXPECTED_MODULES:
