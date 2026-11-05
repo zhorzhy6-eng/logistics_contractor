@@ -473,10 +473,19 @@ class AddressBookDialog(QDialog):
         Импорт справочника из Excel.
 
         Графы файла ищутся по ЗАГОЛОВКАМ (db.database.read_salons_rows):
-        КОД → код салона, ИНН → ИНН, «Юр. Лицо» → наименование, Город →
-        город, «Адрес доставки автомобилей» → адрес. Лишние графы
-        (e-mail, телефоны, комментарии, региональный менеджер) не читаются.
-        Если шапка не распознана, работаем как раньше — по первой колонке.
+        КОД → код салона, ИНН → ИНН, «Юр. Лицо» / «Наименование салона» →
+        наименование, Город → город, «Адрес доставки автомобилей» / «Адрес» →
+        адрес. Лишние графы (e-mail, телефоны, комментарии, региональный
+        менеджер) не читаются.
+
+        Наименование, заклеенное в хвост адреса, отделяется ещё при чтении
+        файла (core.address_utils.split_salon_name). Старые записи, куда
+        прежний импорт записал наименование вместо адреса, починяются в
+        import_addresses_from_list.
+
+        Если шапка не распознана, работаем как раньше — по первой колонке,
+        но файл с графой «Наименование» запасным путём не читаем: иначе
+        наименования снова попадут в адреса.
         """
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -512,16 +521,28 @@ class AddressBookDialog(QDialog):
         if reply != QMessageBox.Yes:
             return
 
-        added = import_addresses_from_list(self.point_type, rows)
+        stats: Dict[str, int] = {}
+        added = import_addresses_from_list(self.point_type, rows, stats=stats)
+
+        message = [
+            f"Обработано записей: {len(rows)}",
+            f"Добавлено новых: {added}",
+        ]
+        if stats.get("repaired"):
+            message.append(f"Исправлено старых записей: {stats['repaired']}")
+        if stats.get("merged"):
+            message.append(f"Слито дублей: {stats['merged']}")
+        if not stats.get("repaired"):
+            message.append(f"Уже были в справочнике: {len(rows) - added}")
 
         QMessageBox.information(
-            self, "Импорт завершён",
-            f"Обработано записей: {len(rows)}\n"
-            f"Добавлено новых: {added}\n"
-            f"Уже были в справочнике: {len(rows) - added}"
+            self, "Импорт завершён", "\n".join(message)
         )
         logger.info(
-            f"Импорт из Excel: обработано={len(rows)}, добавлено={added}"
+            f"Импорт из Excel: обработано={len(rows)}, добавлено={added}, "
+            f"починено={stats.get('repaired', 0)}, "
+            f"слито={stats.get('merged', 0)}, "
+            f"артефактов={stats.get('removed', 0)}"
         )
 
         self._reload_first_page()
@@ -534,6 +555,11 @@ class AddressBookDialog(QDialog):
         Так читались файлы прежнего формата (одна колонка «Адрес»). Если
         файл не похож на справочник салонов (нет ожидаемой шапки), этот
         путь сохраняет прежнее поведение импорта.
+
+        Исключение — файл с графой «Наименование»: это таблица салонов,
+        и первая колонка у него — наименования, а не адреса. Такой файл
+        запасным путём не читается, иначе наименования снова попадут
+        в адреса.
         """
         try:
             import openpyxl
@@ -549,6 +575,26 @@ class AddressBookDialog(QDialog):
 
         try:
             sheet = workbook.active
+            header = next(
+                sheet.iter_rows(min_row=1, max_row=1, values_only=True), None
+            )
+            header_text = " ".join(
+                str(value).strip().lower()
+                for value in (header or ())
+                if value is not None
+            )
+            # Файл с графой «Наименование» — это таблица салонов, а не
+            # список адресов. Запасной путь по первой колонке залил бы
+            # наименования в адреса (так уже было до фикса).
+            if "наименован" in header_text or (
+                "салон" in header_text and "адрес" in header_text
+            ):
+                logger.warning(
+                    "Файл похож на таблицу салонов — запасное чтение первой "
+                    "колонки не применяется"
+                )
+                return []
+
             addresses: List[Dict[str, str]] = []
             skipped_header = False
             for row in sheet.iter_rows(min_row=1, max_col=1, values_only=True):

@@ -21,6 +21,8 @@ import sqlite3
 import openpyxl
 import pytest
 
+from core.address_utils import split_salon_name
+
 from db.database import (
     SALONS_XLSX_NAME,
     count_addresses,
@@ -52,6 +54,41 @@ SALON_ROW_2 = (
     "JMR-A031", "7203229173", 'ООО "ЦС-Моторс"', "Екатеринбург",
     "г. Екатеринбург, пр-т Космонавтов, д. 3", "закрыт",
 )
+
+#: Первые строки файла result.xlsx (деловой справочник салонов, без ПДн).
+#: (наименование в колонке, адрес в файле, чистый адрес после импорта).
+RESULT_SAMPLE_ROWS = [
+    (
+        "АВТОМАГ (Нижневартовск) ООО",
+        "Нижневартовск, Мира, владение 3/п, строение 11, "
+        "АВТОМАГ (Нижневартовск) ООО",
+        "Нижневартовск, Мира, владение 3/п, строение 11",
+    ),
+    (
+        "ВМ-С-АЗИЯ ООО",
+        "Сургут, Югорский тракт, дом № 23, сооружение 1, ВМ-С-АЗИЯ ООО",
+        "Сургут, Югорский тракт, дом № 23, сооружение 1",
+    ),
+    (
+        'ООО "СК-МОТОРС ПРЕМИУМ"',
+        'Сургут, Профсоюзов, дом № 1/3, ООО "СК-МОТОРС ПРЕМИУМ"',
+        "Сургут, Профсоюзов, дом № 1/3",
+    ),
+    (
+        'АО "Моторавто"',
+        "Кировская область, г.о. город Киров, г. Киров, "
+        "ул. Московская, д. 106а",
+        "Кировская область, г.о. город Киров, г. Киров, "
+        "ул. Московская, д. 106а",
+    ),
+    (
+        'ООО "Спектр-Авто-Н"',
+        "Ярославская область, г.о. город Ярославль, г. Ярославль, "
+        "пр-кт Фрунзе, д. 34",
+        "Ярославская область, г.о. город Ярославль, г. Ярославль, "
+        "пр-кт Фрунзе, д. 34",
+    ),
+]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -103,6 +140,17 @@ def _addresses_xlsx(path, addresses):
     sheet.append(["Адрес"])
     for address in addresses:
         sheet.append([address])
+    workbook.save(str(path))
+    return str(path)
+
+
+def _two_column_salon_xlsx(path, rows):
+    """Файл оператора: две графы «Наименование салона» и «Адрес»."""
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Наименование салона", "Адрес"])
+    for name, address in rows:
+        sheet.append([name, address])
     workbook.save(str(path))
     return str(path)
 
@@ -512,3 +560,175 @@ def test_salons_file_has_no_personal_data():
     # Менеджер» в него вообще не переносится (см. tools/make_salons_reference.py),
     # а в деловых графах фамилий нет — только города и юр. лица.
     assert all("менеджер" not in row["salon_name"].lower() for row in rows)
+
+
+# ─────────────────────────────────────────────────────────────
+# Двухколоночный файл оператора и починка старых записей
+# ─────────────────────────────────────────────────────────────
+
+def test_read_salons_rows_two_column_file(work_dir):
+    """Шапка «Наименование салона» + «Адрес» читается и чистит хвост."""
+    path = _two_column_salon_xlsx(
+        work_dir / "two_columns.xlsx",
+        [(name, address) for name, address, _clean in RESULT_SAMPLE_ROWS[:3]],
+    )
+
+    rows = read_salons_rows(path)
+
+    assert len(rows) == 3
+    for parsed, (name, _address, clean) in zip(rows, RESULT_SAMPLE_ROWS[:3]):
+        assert parsed["salon_name"] == name
+        assert parsed["address"] == clean
+
+
+def test_read_salons_rows_standard_file_is_not_changed():
+    """Справочник на 192 строки читается как раньше, без обрезаний."""
+    rows = read_salons_rows(salons_xlsx_path())
+
+    assert len(rows) == 192
+    for row in rows:
+        assert split_salon_name(row["address"], row["salon_name"]) == (
+            row["address"], row["salon_name"]
+        )
+
+
+def test_read_salons_rows_result_sample(tests_data_dir):
+    """Первые 10 строк result.xlsx: наименование и адрес есть у всех."""
+    path = tests_data_dir / "salons" / "result_sample.xlsx"
+
+    rows = read_salons_rows(str(path))
+
+    assert len(rows) == 10
+    assert all(row["address"] for row in rows)
+    assert all(row["salon_name"] for row in rows)
+    assert rows[0]["address"] == RESULT_SAMPLE_ROWS[0][2]
+
+
+def test_import_result_sample_fills_name_and_cleans_address(
+    isolated_db, tests_data_dir
+):
+    """После импорта первых 10 строк в базе и адрес, и наименование."""
+    path = tests_data_dir / "salons" / "result_sample.xlsx"
+    rows = read_salons_rows(str(path))
+
+    assert import_addresses_from_list("unloading", rows) == 10
+
+    db_rows = get_addresses("unloading")
+    assert len(db_rows) == 10
+    for row in db_rows:
+        assert row["address"], "потерялся адрес"
+        assert row["salon_name"], "потерялось наименование"
+        assert row["salon_name"].casefold() not in row["address"].casefold(), (
+            f"наименование осталось в адресе: {row['address']}"
+        )
+
+    by_address = {row["address"]: row for row in db_rows}
+    for name, _raw, clean in RESULT_SAMPLE_ROWS:
+        assert by_address[clean]["salon_name"] == name
+
+
+def test_import_stats_for_new_rows(isolated_db):
+    """stats заполняется для интерфейса: что обработано и что добавлено."""
+    stats = {}
+
+    added = import_addresses_from_list(
+        "unloading",
+        [{"address": "г. Тверь, ул. Новая, д. 1"}],
+        stats=stats,
+    )
+
+    assert added == 1
+    assert stats == {
+        "processed": 1, "added": 1,
+        "repaired": 0, "merged": 0, "removed": 0,
+    }
+
+
+def test_import_repairs_old_dirty_salon_rows(isolated_db):
+    """
+    Старая запись-наименование и старая запись с хвостом сливаются в одну.
+
+    Так выглядит база после прежнего импорта result.xlsx: в address лежит
+    либо само наименование, либо адрес с наименованием в хвосте, плюс
+    строка-шапка «Наименование салона».
+    """
+    name = "АВТОМАГ (Нижневартовск) ООО"
+    raw = (
+        "Нижневартовск, Мира, владение 3/п, строение 11, "
+        "АВТОМАГ (Нижневартовск) ООО"
+    )
+    clean = "Нижневартовск, Мира, владение 3/п, строение 11"
+
+    save_address("unloading", name)                 # адрес = наименование
+    save_address("unloading", raw, salon_name=name)  # хвост в адресе
+    save_address("unloading", "Наименование салона")  # строка-шапка
+
+    stats = {}
+    added = import_addresses_from_list(
+        "unloading",
+        [{"address": raw, "salon_name": name}],
+        stats=stats,
+    )
+
+    assert added == 0, "старая запись должна быть починена, а не добавлена"
+    assert stats["repaired"] == 1
+    assert stats["merged"] == 1
+    assert stats["removed"] == 1
+
+    rows = get_addresses("unloading")
+    assert len(rows) == 1, "дубли не слились"
+    row = rows[0]
+    assert row["address"] == clean
+    assert row["salon_name"] == name
+    assert row["usage_count"] == 3, "usage_count двух старых записей не сложился"
+
+    # FTS-индекс обновлён точечно: поиск по новой части адреса работает.
+    assert get_addresses("unloading", search="Мира")[0]["address"] == clean
+
+
+def test_import_repairs_shared_salon_name_without_duplicates(isolated_db):
+    """Одно имя на несколько адресов: одна запись чинится, остальные — новые."""
+    name = 'ООО "Мэйджор Авто Комплекс"'
+    address_1 = (
+        "Московская область, г.о. Люберцы, г. Дзержинский, "
+        "ул. Алексеевская, д. 12"
+    )
+    address_2 = (
+        "Московская область, г.о. Красногорск, д Михалково, "
+        "тер. Мэйджор Сити, стр. 7"
+    )
+
+    save_address("unloading", name)  # след прежнего fallback
+
+    stats = {}
+    added = import_addresses_from_list(
+        "unloading",
+        [
+            {"address": f"{address_1}, {name}", "salon_name": name},
+            {"address": f"{address_2}, {name}", "salon_name": name},
+        ],
+        stats=stats,
+    )
+
+    assert added == 1
+    assert stats["repaired"] == 1
+
+    rows = get_addresses("unloading")
+    assert len(rows) == 2
+    assert {row["address"] for row in rows} == {address_1, address_2}
+    assert {row["salon_name"] for row in rows} == {name}
+
+
+def test_import_does_not_touch_unrelated_record(isolated_db):
+    """Чужая запись справочника не меняется и не удаляется."""
+    save_address("unloading", "г. Тверь, ул. Своя, д. 1")
+
+    import_addresses_from_list(
+        "unloading",
+        [{"address": "г. Москва, ул. Новая, д. 2", "salon_name": "ООО «Салон»"}],
+    )
+
+    rows = {row["address"]: row for row in get_addresses("unloading")}
+    assert "г. Тверь, ул. Своя, д. 1" in rows
+    assert rows["г. Тверь, ул. Своя, д. 1"]["salon_name"] in (None, "")
+    assert rows["г. Москва, ул. Новая, д. 2"]["salon_name"] == "ООО «Салон»"

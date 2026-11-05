@@ -54,6 +54,33 @@ SALON_ROW = (
     "г. Москва, ул. Складская, д. 8",
 )
 
+#: Строки файла оператора: (наименование, адрес в файле, чистый адрес).
+TWO_COLUMN_SALON_ROWS = [
+    (
+        "АВТОМАГ (Нижневартовск) ООО",
+        "Нижневартовск, Мира, владение 3/п, строение 11, "
+        "АВТОМАГ (Нижневартовск) ООО",
+        "Нижневартовск, Мира, владение 3/п, строение 11",
+    ),
+    (
+        "ВМ-С-АЗИЯ ООО",
+        "Сургут, Югорский тракт, дом № 23, сооружение 1, ВМ-С-АЗИЯ ООО",
+        "Сургут, Югорский тракт, дом № 23, сооружение 1",
+    ),
+    (
+        'ООО "СК-МОТОРС ПРЕМИУМ"',
+        'Сургут, Профсоюзов, дом № 1/3, ООО "СК-МОТОРС ПРЕМИУМ"',
+        "Сургут, Профсоюзов, дом № 1/3",
+    ),
+    (
+        'АО "Моторавто"',
+        "Кировская область, г.о. город Киров, г. Киров, "
+        "ул. Московская, д. 106а",
+        "Кировская область, г.о. город Киров, г. Киров, "
+        "ул. Московская, д. 106а",
+    ),
+]
+
 
 @pytest.fixture(scope="module")
 def qt_app():
@@ -116,6 +143,32 @@ def plain_xlsx(work_dir):
     sheet.append(["Адрес"])
     sheet.append(["г. Москва, ул. Южная, д. 2"])
     sheet.append(["г. Москва, ул. Третья, д. 3"])
+    workbook.save(str(path))
+    return str(path)
+
+
+@pytest.fixture
+def two_column_salon_xlsx(work_dir):
+    """Файл оператора: «Наименование салона» + «Адрес»."""
+    path = work_dir / "salons_two_columns.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Наименование салона", "Адрес"])
+    for name, address, _clean in TWO_COLUMN_SALON_ROWS:
+        sheet.append([name, address])
+    workbook.save(str(path))
+    return str(path)
+
+
+@pytest.fixture
+def names_without_addresses_xlsx(work_dir):
+    """Файл, где адресная графа пуста: запасной путь не должен брать имена."""
+    path = work_dir / "names_only.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["Наименование салона", "Адрес"])
+    for name, _address, _clean in TWO_COLUMN_SALON_ROWS:
+        sheet.append([name, ""])
     workbook.save(str(path))
     return str(path)
 
@@ -321,6 +374,53 @@ def test_import_falls_back_to_first_column(
         "г. Москва, ул. Южная, д. 2",
     ]
     assert {row["salon_name"] for row in rows} == {""}
+
+
+def test_import_two_column_file_fills_salon_name(
+    qt_app, isolated_db, two_column_salon_xlsx, monkeypatch, quiet_dialogs
+):
+    """Файл «Наименование салона» + «Адрес» заполняет обе колонки таблицы."""
+    _patch_file_dialog(monkeypatch, two_column_salon_xlsx)
+    dialog = AddressBookDialog("unloading")
+    monkeypatch.setattr(dialog, "_reload_first_page", lambda: None)
+
+    dialog._on_import_excel()
+
+    rows = get_addresses("unloading")
+    assert len(rows) == len(TWO_COLUMN_SALON_ROWS)
+    for row in rows:
+        assert row["address"], "потерялся адрес"
+        assert row["salon_name"], "потерялось наименование"
+        assert row["salon_name"].casefold() not in row["address"].casefold()
+
+    # Перечитываем таблицу и проверяем именно колонку «Наименование салона».
+    dialog._load_data()
+    assert dialog.table.rowCount() == len(TWO_COLUMN_SALON_ROWS)
+    names_by_address = {
+        dialog.table.item(row, COL_ADDRESS).text():
+        dialog.table.item(row, COL_SALON_NAME).text()
+        for row in range(dialog.table.rowCount())
+    }
+    for name, _address, clean in TWO_COLUMN_SALON_ROWS:
+        assert names_by_address[clean] == name
+
+
+def test_import_does_not_take_name_column_as_address(
+    qt_app, isolated_db, names_without_addresses_xlsx, monkeypatch, quiet_dialogs
+):
+    """
+    Если адресная графа пуста, запасной путь не заливает наименования.
+
+    Раньше такой файл уходил в _read_first_column и все салоны попадали
+    в адреса. Теперь файл с графой «Наименование» запасным путём не читается.
+    """
+    _patch_file_dialog(monkeypatch, names_without_addresses_xlsx)
+    dialog = AddressBookDialog("unloading")
+    monkeypatch.setattr(dialog, "_reload_first_page", lambda: None)
+
+    dialog._on_import_excel()
+
+    assert get_addresses("unloading") == []
 
 
 def test_import_cancelled_does_nothing(

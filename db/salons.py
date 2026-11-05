@@ -14,10 +14,12 @@ salons.load_if_empty). Путь передаётся параметром: фа�
 
 import logging
 import os
+import re
 import sqlite3
 from typing import Any, Dict, List, Tuple
 
 from core import app_paths
+from core.address_utils import split_salon_name
 from db.connection import get_connection
 from db.crud.addresses import import_addresses_from_list
 
@@ -31,13 +33,29 @@ SALONS_XLSX_NAME = "spravochnik_mest_vygruzki.xlsx"
 #: Сравнение идёт по подстроке в шапке (регистр не важен): «КОД (второй)»
 #: и «КОД» — одна и та же графа, а «Адрес доставки автомобилей» находится
 #: по слову «Адрес доставки».
+#:
+#: «Наименование» принимается наравне с «Юр. Лицо»: у файлов операторов
+#: встречается шапка «Наименование салона». Голый «Адрес» обрабатывается
+#: отдельно (_is_address_header), чтобы не спутать его с «Юридическим
+#: адресом» — тот в файле «Места выгрузок» идёт раньше адреса доставки.
 SALON_COLUMN_KEYS = (
     ("salon_code", ("код",)),
     ("salon_inn", ("инн",)),
-    ("salon_name", ("юр. лицо", "юридическое лицо")),
+    ("salon_name", ("юр. лицо", "юридическое лицо", "наименование")),
     ("salon_city", ("город",)),
     ("address", ("адрес доставки",)),
 )
+
+#: Слова, по которым «Адрес» — это НЕ адрес доставки (юридический/почтовый).
+ADDRESS_HEADER_STOP_WORDS = ("юридическ", "почтов", "регистрац", "жительства")
+
+#: Ключевые слова по полю — чтобы не собирать словарь на каждый заголовок.
+_SALON_COLUMN_KEYWORDS = dict(SALON_COLUMN_KEYS)
+
+#: Графы, без которых файл не считается справочником салонов: одного
+#: «Адреса» мало — иначе старый одноколоночный файл перехватывался бы
+#: этим путём вместо запасного чтения первой колонки.
+_SALON_FIELDS = {"salon_name", "salon_code", "salon_inn", "salon_city"}
 
 
 def salons_xlsx_path() -> str:
@@ -54,6 +72,40 @@ def salons_xlsx_path() -> str:
 # Чтение файла
 # ─────────────────────────────────────────────────────────────
 
+def _normalize_header(value: Any) -> str:
+    """Заголовок графы без регистра, «ё» и лишних пробелов."""
+    text = str(value or "").strip().lower().replace("ё", "е")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" .:;")
+
+
+def _is_address_header(text: str) -> bool:
+    """
+    Это заголовок адреса доставки?
+
+    «Адрес» и «Адрес салона» — да; «Юридический адрес» и «Почтовый адрес» —
+    нет: в файле «Места выгрузок» юридический адрес идёт раньше, и раньше
+    он ошибочно забирал бы графу доставки.
+    """
+    if "адрес доставки" in text:
+        return True
+    if text == "адрес":
+        return True
+    if text.startswith("адрес ") or text.endswith(" адрес"):
+        return not any(word in text for word in ADDRESS_HEADER_STOP_WORDS)
+    return False
+
+
+def _header_matches(title: Any, field: str) -> bool:
+    """Заголовок графы относится к полю справочника салонов?"""
+    text = _normalize_header(title)
+    if not text:
+        return False
+    if field == "address":
+        return _is_address_header(text)
+    return any(keyword in text for keyword in _SALON_COLUMN_KEYWORDS.get(field, ()))
+
+
 def _find_salon_columns(header: Tuple[Any, ...]) -> Dict[str, int]:
     """
     Индексы граф файла справочника салонов по ключевым словам шапки.
@@ -65,13 +117,10 @@ def _find_salon_columns(header: Tuple[Any, ...]) -> Dict[str, int]:
     """
     found: Dict[str, int] = {}
     for index, title in enumerate(header):
-        text = str(title or "").strip().lower()
-        if not text:
-            continue
-        for field, keywords in SALON_COLUMN_KEYS:
+        for field, _keywords in SALON_COLUMN_KEYS:
             if field in found:
                 continue
-            if any(keyword in text for keyword in keywords):
+            if _header_matches(title, field):
                 found[field] = index
                 break
     return found
@@ -82,10 +131,19 @@ def read_salons_rows(path: str) -> List[Dict[str, str]]:
     Читает файл «Места выгрузок» и отдаёт строки справочника салонов.
 
     Графы ищутся по ЗАГОЛОВКАМ (первая непустая строка), а не по номерам:
-    порядок колонок в файле заказчика может меняться. Ожидаемые графы —
-    КОД, ИНН, Юр. Лицо, Город, Адрес доставки автомобилей; лишние графы
-    (e-mail, телефоны, комментарии, региональный менеджер) не читаются:
-    в справочнике им места нет, а контакты — персональные данные.
+    порядок колонок в файле заказчика может меняться. Понимаются оба
+    варианта шапки:
+
+      * полный файл «Места выгрузок»: КОД, ИНН, Юр. Лицо, Город,
+        Адрес доставки автомобилей;
+      * короткий файл оператора: «Наименование салона» и «Адрес».
+
+    Лишние графы (e-mail, телефоны, комментарии, региональный менеджер) не
+    читаются: в справочнике им места нет, а контакты — персональные данные.
+
+    Перед возвратом адрес чистится правилом core.address_utils.split_salon_name:
+    наименование, заклеенное в хвост адреса, переезжает в salon_name, а
+    адрес остаётся адресом.
 
     Возвращает список словарей {address, salon_name, salon_code, salon_inn,
     salon_city, date, time_window}. Пустой список — либо файла нет, либо
@@ -121,7 +179,16 @@ def read_salons_rows(path: str) -> List[Dict[str, str]]:
         if not columns or "address" not in columns:
             logger.warning(
                 "В файле справочника салонов не найдена ожидаемая шапка "
-                "(КОД / ИНН / Юр. Лицо / Город / Адрес доставки) — импорт пропущен"
+                "(Наименование / КОД / ИНН / Город / Адрес) — импорт пропущен"
+            )
+            return []
+
+        # Одного «Адреса» мало: старый одноколоночный файл должен идти
+        # запасным путём чтения первой колонки, а не сюда.
+        if not _SALON_FIELDS & set(columns):
+            logger.warning(
+                "В файле нет ни одной графы салона (Наименование / КОД / ИНН / "
+                "Город) — импорт пропущен"
             )
             return []
 
@@ -139,9 +206,17 @@ def read_salons_rows(path: str) -> List[Dict[str, str]]:
             address = cell(row, "address")
             if not address:
                 continue
+
+            # Наименование из колонки важнее найденного в адресе: колонка
+            # заполняется оператором, хвост адреса — наследие выгрузки.
+            salon_name = cell(row, "salon_name")
+            clean_address, salon_name = split_salon_name(address, salon_name)
+            if not clean_address:
+                continue
+
             result.append({
-                "address": address,
-                "salon_name": cell(row, "salon_name"),
+                "address": clean_address,
+                "salon_name": salon_name,
                 "salon_code": cell(row, "salon_code"),
                 "salon_inn": cell(row, "salon_inn"),
                 "salon_city": cell(row, "salon_city"),

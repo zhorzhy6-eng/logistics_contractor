@@ -14,13 +14,298 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 from core import audit
-from core.address_utils import extract_city as _extract_city
+from core.address_utils import extract_city as _extract_city, split_salon_name
 
 from db import fts
 from db.connection import get_connection
 from db.crud.search import addresses_fts_count, ensure_fts_fresh
 
 logger = logging.getLogger("db.crud.addresses")
+
+#: Колонки строки справочника, которые нужны починке старых записей.
+_ADDRESS_ROW_COLUMNS = (
+    "id", "address", "salon_name", "usage_count", "city",
+    "date", "time_window", "salon_code", "salon_inn", "salon_city",
+)
+
+#: Адреса-артефакты прежнего импорта: так в справочник попадала шапка Excel.
+#: Сравнение — в Python через casefold: SQLite LOWER() не понимает кириллицу.
+_IMPORT_ARTIFACTS = frozenset({"наименование салона", "наименование", "адрес"})
+
+#: Сколько адресов запрашивать одним SELECT при починке старых записей.
+_REPAIR_QUERY_CHUNK = 400
+
+
+def _text(value: Any) -> str:
+    """Строка без None: 0.0 == falsy, поэтому только явное str(...)."""
+    return "" if value is None else str(value).strip()
+
+
+def _row_from_db(row: tuple) -> Dict[str, Any]:
+    """Строка SQLite → словарь с понятными именами колонок."""
+    return dict(zip(_ADDRESS_ROW_COLUMNS, row))
+
+
+def _prepare_import_rows(addresses: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Чистит адреса и наименования до записи в базу."""
+    prepared: List[Dict[str, str]] = []
+    for item in addresses:
+        raw_address = _text(item.get("address"))
+        if not raw_address:
+            continue
+        salon_name = _text(item.get("salon_name"))
+        clean_address, salon_name = split_salon_name(raw_address, salon_name)
+        if not clean_address:
+            continue
+        prepared.append({
+            "address": clean_address,
+            "raw_address": raw_address,
+            "salon_name": salon_name,
+            "date": _text(item.get("date")),
+            "time_window": _text(item.get("time_window")),
+            "salon_code": _text(item.get("salon_code")),
+            "salon_inn": _text(item.get("salon_inn")),
+            "salon_city": _text(item.get("salon_city")),
+            "city": _extract_city(clean_address),
+        })
+    return prepared
+
+
+def _repair_keys(item: Dict[str, str]) -> List[str]:
+    """
+    Адреса, под которыми старая запись могла лежать в справочнике.
+
+    Прежний импорт писал в address либо наименование салона, либо адрес
+    вместе с наименованием в хвосте. Оба варианта нужно узнать, чтобы
+    не завести дубль.
+    """
+    clean = item["address"]
+    name = item["salon_name"]
+    raw = item["raw_address"]
+    keys: List[str] = []
+    for key in (raw, name):
+        key = _text(key)
+        if key and key != clean and key not in keys:
+            keys.append(key)
+    if name:
+        for key in (f"{clean}, {name}", f"{clean} {name}"):
+            if key != clean and key not in keys:
+                keys.append(key)
+    return keys
+
+
+def _row_score(row: Dict[str, Any]) -> tuple:
+    """Какую из старых записей взять за основу: с наименованием и большим usage."""
+    return (
+        1 if _text(row.get("salon_name")) else 0,
+        int(row.get("usage_count") or 0),
+        -int(row.get("id") or 0),
+    )
+
+
+def _detach(by_address: Dict[str, List[Dict[str, Any]]], row: Dict[str, Any]) -> None:
+    """Убирает запись из всех адресных корзин (адрес у неё меняется)."""
+    for key, bucket in list(by_address.items()):
+        bucket[:] = [item for item in bucket if item is not row]
+        if not bucket:
+            del by_address[key]
+
+
+def _merge_values(
+    target: Dict[str, Any], item: Dict[str, str], usage: int
+) -> Dict[str, Any]:
+    """Непустые поля старой записи важнее пустых полей импорта."""
+    return {
+        "salon_name": _text(target.get("salon_name")) or _text(item.get("salon_name")),
+        "salon_code": _text(target.get("salon_code")) or _text(item.get("salon_code")),
+        "salon_inn": _text(target.get("salon_inn")) or _text(item.get("salon_inn")),
+        "salon_city": _text(target.get("salon_city")) or _text(item.get("salon_city")),
+        "date": _text(target.get("date")) or _text(item.get("date")),
+        "time_window": _text(target.get("time_window")) or _text(item.get("time_window")),
+        "usage_count": usage,
+    }
+
+
+def _fetch_existing_rows(
+    cursor, point_type: str, wanted
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Читает только те записи, чьи адреса могли совпасть с импортом."""
+    found: Dict[str, List[Dict[str, Any]]] = {}
+    values = sorted({_text(value) for value in wanted if _text(value)})
+    for start in range(0, len(values), _REPAIR_QUERY_CHUNK):
+        chunk = values[start:start + _REPAIR_QUERY_CHUNK]
+        placeholders = ", ".join("?" * len(chunk))
+        cursor.execute(
+            "SELECT " + ", ".join(_ADDRESS_ROW_COLUMNS) + " "
+            "FROM address_book WHERE point_type = ? "
+            f"AND address IN ({placeholders})",
+            (point_type, *chunk),
+        )
+        for row in cursor.fetchall():
+            item = _row_from_db(row)
+            found.setdefault(_text(item["address"]), []).append(item)
+    return found
+
+
+def _find_import_artifacts(cursor, point_type: str) -> List[tuple]:
+    """Строки, куда прежний импорт записал шапку файла вместо адреса."""
+    cursor.execute(
+        "SELECT id, address, city FROM address_book "
+        "WHERE point_type = ? AND COALESCE(salon_name, '') = '' "
+        "AND LENGTH(address) <= 40",
+        (point_type,),
+    )
+    return [
+        row for row in cursor.fetchall()
+        if _text(row[1]).casefold() in _IMPORT_ARTIFACTS
+    ]
+
+
+def _delete_import_artifacts(
+    conn, cursor, point_type: str, artifacts: List[tuple]
+) -> int:
+    """Удаляет строки-артефакты и их записи в FTS-индексе."""
+    for row_id, address, city in artifacts:
+        fts.delete_row(conn, "fts_addresses", row_id, (address, city))
+        cursor.execute("DELETE FROM address_book WHERE id = ?", (row_id,))
+    return len(artifacts)
+
+
+def _repair_existing_rows(
+    conn, cursor, point_type: str, prepared: List[Dict[str, str]]
+) -> tuple:
+    """
+    Починить записи, оставшиеся от прежнего импорта, ДО вставки новых.
+
+    Трогаются только записи, чьи адреса или наименования есть во входном
+    файле. Чужие строки справочника остаются как были.
+
+    :return: (сколько новых адресов, сколько записей починено, сколько
+             дублей слито, сколько строк-артефактов удалено)
+    """
+    artifacts = _find_import_artifacts(cursor, point_type)
+
+    wanted = set()
+    dirty_keys = set()
+    for item in prepared:
+        wanted.add(item["address"])
+        wanted.add(item["raw_address"])
+        for key in _repair_keys(item):
+            wanted.add(key)
+            dirty_keys.add(key)
+        if item["salon_name"]:
+            dirty_keys.add(item["salon_name"])
+
+    by_address = _fetch_existing_rows(cursor, point_type, wanted)
+
+    if artifacts or any(
+        _text(row["address"]) in dirty_keys
+        for bucket in by_address.values()
+        for row in bucket
+    ):
+        # FTS5 с external content: перед точечным UPDATE строка обязана уже
+        # быть в индексе, иначе 'delete' не найдёт её. Синхронизация нужна
+        # только когда действительно есть что чинить.
+        ensure_fts_fresh(conn, "fts_addresses")
+
+    removed = _delete_import_artifacts(conn, cursor, point_type, artifacts)
+    deleted = {row[0] for row in artifacts}
+    new_count = 0
+    repaired = 0
+    merged = 0
+    processed_clean = set()
+
+    def alive(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [row for row in rows if row["id"] not in deleted]
+
+    for item in prepared:
+        clean = item["address"]
+        if clean in processed_clean:
+            continue
+        processed_clean.add(clean)
+
+        clean_rows = alive(by_address.get(clean, []))
+        dirty: List[Dict[str, Any]] = []
+        seen = set()
+        for key in _repair_keys(item):
+            for row in alive(by_address.get(key, [])):
+                if row["id"] in seen:
+                    continue
+                if clean_rows and row["id"] == clean_rows[0]["id"]:
+                    continue
+                seen.add(row["id"])
+                dirty.append(row)
+
+        if not clean_rows and not dirty:
+            new_count += 1
+            continue
+
+        if clean_rows:
+            target = clean_rows[0]
+            extras = dirty
+            target_is_clean = True
+            if not extras:
+                # Обычный повторный импорт: запись уже чистая, основная
+                # вставка ниже сама обновит usage_count и поля салона.
+                # Лишний UPDATE на каждую строку здесь не нужен.
+                continue
+        else:
+            target = max(dirty, key=_row_score)
+            extras = [row for row in dirty if row["id"] != target["id"]]
+            target_is_clean = False
+
+        usage = int(target.get("usage_count") or 0)
+        for extra in extras:
+            usage += int(extra.get("usage_count") or 0)
+
+        values = _merge_values(target, item, usage)
+        city = _text(target.get("city")) or _extract_city(clean)
+
+        if target_is_clean:
+            cursor.execute(
+                "UPDATE address_book SET city = ?, salon_name = ?, "
+                "salon_code = ?, salon_inn = ?, salon_city = ?, date = ?, "
+                "time_window = ?, usage_count = ? WHERE id = ?",
+                (city, values["salon_name"], values["salon_code"],
+                 values["salon_inn"], values["salon_city"], values["date"],
+                 values["time_window"], values["usage_count"], target["id"]),
+            )
+        else:
+            old_address = _text(target.get("address"))
+            old_city = _text(target.get("city"))
+            cursor.execute(
+                "UPDATE address_book SET address = ?, city = ?, salon_name = ?, "
+                "salon_code = ?, salon_inn = ?, salon_city = ?, date = ?, "
+                "time_window = ?, usage_count = ? WHERE id = ?",
+                (clean, city, values["salon_name"], values["salon_code"],
+                 values["salon_inn"], values["salon_city"], values["date"],
+                 values["time_window"], values["usage_count"], target["id"]),
+            )
+            fts.replace_row(
+                conn, "fts_addresses", target["id"],
+                (clean, city), (old_address, old_city),
+            )
+            _detach(by_address, target)
+            target["address"] = clean
+            target["city"] = city
+            by_address.setdefault(clean, []).append(target)
+            repaired += 1
+
+        target.update(values)
+        target["city"] = city
+
+        for extra in extras:
+            old_address = _text(extra.get("address"))
+            old_city = _text(extra.get("city"))
+            fts.delete_row(
+                conn, "fts_addresses", extra["id"], (old_address, old_city)
+            )
+            cursor.execute("DELETE FROM address_book WHERE id = ?", (extra["id"],))
+            deleted.add(extra["id"])
+            _detach(by_address, extra)
+            merged += 1
+
+    return new_count, repaired, merged, removed
 
 
 def save_address(
@@ -322,7 +607,11 @@ def delete_address(addr_id: int) -> bool:
             conn.close()
 
 
-def import_addresses_from_list(point_type: str, addresses: List[Dict[str, str]]) -> int:
+def import_addresses_from_list(
+    point_type: str,
+    addresses: List[Dict[str, str]],
+    stats: Optional[Dict[str, int]] = None,
+) -> int:
     """
     Пакетный импорт адресов (Шаг 3 оптимизации).
 
@@ -336,42 +625,53 @@ def import_addresses_from_list(point_type: str, addresses: List[Dict[str, str]])
     salon_inn, salon_city) — они пишутся в свои колонки. Пустое значение
     НЕ затирает уже записанное: COALESCE(NULLIF(excluded.X, ''), X).
 
+    ФИКС ИМПОРТА САЛОНОВ: перед вставкой адрес чистится правилом
+    core.address_utils.split_salon_name (наименование из хвоста адреса
+    переезжает в salon_name), а уже существующие «грязные» записи этого
+    справочника починяются: адрес = наименование, адрес с наименованием
+    в хвосте, дубли — сливаются. Чужие записи не трогаются.
+
+    :param stats: необязательный словарь для интерфейса; заполняется
+        processed / added / repaired / merged / removed.
     :return: сколько НОВЫХ адресов добавлено
     """
     if not addresses:
+        if stats is not None:
+            stats.update(
+                processed=0, added=0, repaired=0, merged=0, removed=0
+            )
         return 0
 
-    # Готовим строки заранее: пустые адреса пропускаем, город считаем здесь,
-    # чтобы не делать это внутри цикла работы с БД.
-    rows = []
-    for item in addresses:
-        addr = (item.get("address") or "").strip()
-        if not addr:
-            continue
-        rows.append((
+    prepared = _prepare_import_rows(addresses)
+    if not prepared:
+        if stats is not None:
+            stats.update(
+                processed=0, added=0, repaired=0, merged=0, removed=0
+            )
+        return 0
+
+    rows = [
+        (
             point_type,
-            addr,
-            _extract_city(addr),
-            (item.get("date") or "").strip(),
-            (item.get("time_window") or "").strip(),
-            (item.get("salon_name") or "").strip(),
-            (item.get("salon_code") or "").strip(),
-            (item.get("salon_inn") or "").strip(),
-            (item.get("salon_city") or "").strip(),
-        ))
-
-    if not rows:
-        return 0
+            item["address"],
+            item["city"],
+            item["date"],
+            item["time_window"],
+            item["salon_name"],
+            item["salon_code"],
+            item["salon_inn"],
+            item["salon_city"],
+        )
+        for item in prepared
+    ]
 
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-        # Разница в количестве записей = число новых адресов.
-        # Считаем до и после в одной транзакции, поэтому значение точное.
-        before = cursor.execute(
-            "SELECT COUNT(*) FROM address_book WHERE point_type = ?", (point_type,)
-        ).fetchone()[0]
+        added, repaired, merged, removed = _repair_existing_rows(
+            conn, cursor, point_type, prepared
+        )
 
         cursor.executemany(
             "INSERT INTO address_book "
@@ -392,30 +692,35 @@ def import_addresses_from_list(point_type: str, addresses: List[Dict[str, str]])
             rows,
         )
 
-        # FTS5: индекс здесь НЕ трогаем — импорт не должен платить за него.
-        # Новые строки доливаются при первом поиске (database._ensure_fts_fresh
-        # видит расхождение last_id и добавляет ровно новые записи) либо
-        # вручную через rebuild_fts_index(). Так массовый импорт из Excel
-        # остаётся ровно таким же быстрым, как до внедрения FTS5.
+        # FTS5: новые строки здесь НЕ трогаем — импорт не должен платить за
+        # индекс. Они доливаются при первом поиске (ensure_fts_fresh видит
+        # расхождение last_id) либо вручную через rebuild_fts_index().
+        # Починенные старые строки обновляются точечно в _repair_existing_rows.
         conn.commit()
 
-        after = cursor.execute(
-            "SELECT COUNT(*) FROM address_book WHERE point_type = ?", (point_type,)
-        ).fetchone()[0]
-
-        added = after - before
         logger.info(
-            f"Импортировано в '{point_type}': обработано {len(rows)}, новых {added} "
-            f"(FTS-индекс догонится при первом поиске)"
+            f"Импортировано в '{point_type}': обработано {len(prepared)}, "
+            f"новых {added}, починено {repaired}, слито дублей {merged}"
+            f"{f', удалено артефактов {removed}' if removed else ''}"
+            " (FTS-индекс догонится при первом поиске)"
         )
         audit.log_event(
             "addresses_imported", point_type=point_type,
-            count=len(rows), added=added,
+            count=len(prepared), added=added,
         )
+        if stats is not None:
+            stats.update(
+                processed=len(prepared), added=added,
+                repaired=repaired, merged=merged, removed=removed,
+            )
         return added
     except Exception as e:
         logger.error(f"Ошибка импорта адресов: {e}")
         conn.rollback()
+        if stats is not None:
+            stats.update(
+                processed=0, added=0, repaired=0, merged=0, removed=0
+            )
         return 0
     finally:
         conn.close()

@@ -83,7 +83,10 @@ REQUIRED_GROUPS = {
 #: в источнике дата погрузки) и
 #: `tests/ui/tabs/test_ui_contract_tab_mirror_source.py` (живая вкладка
 #: Экспедиторства отдаёт дату договора и дату погрузки раздельно).
-EXPECTED_FILES = {"unit": 74, "integration": 25, "ui": 70}
+#: unit 74 → 75 в фиксе импорта салонов 05.11.2026 — добавлен
+#: `tests/unit/utils/test_address_utils.py` (правило split_salon_name:
+#: наименование в хвосте адреса, чистый адрес, идемпотентность).
+EXPECTED_FILES = {"unit": 75, "integration": 25, "ui": 70}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -230,9 +233,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 169 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 170 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 169, f"тестовых файлов {len(found)}, ожидается 169"
+    assert len(found) == 170, f"тестовых файлов {len(found)}, ожидается 170"
 
 
 def test_no_test_module_name_collision():
