@@ -2,6 +2,12 @@
 setlocal
 cd /d "%~dp0"
 
+rem Data root is the SAME as the installed program:
+rem base, settings, logs and contracts live in %APPDATA%\LogisticsContractor.
+rem Without this line a source run uses tests\_tmp\_appdata (core\data_paths.py)
+rem and shows an EMPTY database.
+set "LOGISTICS_DATA_ROOT=%APPDATA%\LogisticsContractor"
+
 if exist "%~dp0.venv\Scripts\pythonw.exe" (
     start "" /D "%~dp0" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0main.py"
     exit /b
