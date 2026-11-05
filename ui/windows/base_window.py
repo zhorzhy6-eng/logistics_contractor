@@ -71,6 +71,8 @@ SOURCE_WINDOW_TITLE = "Генератор договоров перевозки"
 MIRROR_FIELD_TITLES: Dict[str, str] = {
     "number": "Номер",
     "date": "Дата",
+    "loading_date": "Дата погрузки",
+    "loading_plan_date": "Плановая дата погрузки",
     "route": "Направление",
     "loading_address": "Адрес погрузки",
     "unloading_address": "Адрес выгрузки",

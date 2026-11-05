@@ -470,6 +470,39 @@ def _contract_field(source: Mapping[str, Any], key: str) -> str:
     return text(contract.get(key))
 
 
+def loading_plan_date(source: Mapping[str, Any]) -> str:
+    """
+    Плановая дата погрузки источника — та, которую ждёт целевое окно.
+
+    В «Экспедиторстве» дат две, и путать их нельзя:
+
+      * ``contract["date"]`` — дата САМОГО договора (шапка бланка). В цели она
+        уходит в поле даты заявки и к погрузке отношения не имеет;
+      * ``contract["loading_plan_date"]`` — «Плановая дата и время подачи
+        транспортного средства под погрузку». Именно её печатает бланк
+        Экспедиторства и именно её ждёт поле даты погрузки целей: у Формики
+        «Плановая дата погрузки», у Логистикса «Дата погрузки».
+
+    Дефект 05.11.2026: карты зеркала не переносили плановую дату вовсе, и в
+    цели оставалось ЗАВОДСКОЕ значение поля — сегодняшнее число, совпадавшее
+    с датой договора. Оператор видел «дата погрузки = дата договора».
+
+    Запасной источник — дата ПЕРВОЙ погрузки (``loadings[0]["date"]``): она
+    нужна старым записям, где плановая дата не заполнялась. Дата договора не
+    подставляется ни основным путём, ни запасным — иначе ошибка вернулась бы.
+
+    :param source: собранные данные источника (см. ``collect_source``).
+    :return: дата ISO, как её отдаёт вкладка, или "" — если дат нет вовсе.
+    """
+    if not isinstance(source, Mapping):
+        return ""
+
+    plan_date = _contract_field(source, "loading_plan_date")
+    if plan_date:
+        return plan_date
+    return text(_first_point(source, "loadings").get("date"))
+
+
 def _drop_empty(data: Mapping[str, Any]) -> Dict[str, Any]:
     """Поля плана без пустых значений: пустое место значения не несёт."""
     return {key: value for key, value in data.items() if not is_empty(value)}
@@ -791,6 +824,7 @@ __all__ = [
     "collect_source",
     "collect_conflicts",
     "current_target_data",
+    "loading_plan_date",
     "mirror_from_expedition",
     "source_has_data",
     "supported_targets",

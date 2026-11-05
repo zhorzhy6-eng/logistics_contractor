@@ -78,7 +78,12 @@ REQUIRED_GROUPS = {
 #: ui 67 → 69 в задаче «быстрые связанные договоры» 05.11.2026 — добавлены
 #: `test_contract_pair_dialog.py` (выбор режима и суммы) и
 #: `test_contract_pair_creation.py` (два файла, сумма, ветки «Да/Нет/Отмена»).
-EXPECTED_FILES = {"unit": 73, "integration": 25, "ui": 69}
+#: unit 73 → 74 и ui 69 → 70 в фиксе «дата погрузки в зеркале» 05.11.2026 —
+#: добавлены `tests/unit/core/test_mirror_loading_date.py` (правило ядра: где
+#: в источнике дата погрузки) и
+#: `tests/ui/tabs/test_ui_contract_tab_mirror_source.py` (живая вкладка
+#: Экспедиторства отдаёт дату договора и дату погрузки раздельно).
+EXPECTED_FILES = {"unit": 74, "integration": 25, "ui": 70}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -225,9 +230,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 167 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 169 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 167, f"тестовых файлов {len(found)}, ожидается 167"
+    assert len(found) == 169, f"тестовых файлов {len(found)}, ожидается 169"
 
 
 def test_no_test_module_name_collision():
