@@ -91,7 +91,11 @@ REQUIRED_GROUPS = {
 #: (починка атрибута, проба записи, тексты ошибок),
 #: `tests/ui/main_window/test_ui_db_readonly_save.py` (диалог сохранения) и
 #: `tests/ui/widgets/test_main_db_readonly_notice.py` (окно при старте).
-EXPECTED_FILES = {"unit": 75, "integration": 26, "ui": 72}
+#: ui 72 → 73 в задаче «форма и НДС связанного договора» 07.11.2026 —
+#: добавлен `tests/ui/main_window/test_contract_pair_price_terms.py`
+#: (значения по умолчанию из Экспедиторства, передача формы и НДС в цель,
+#: `apply_price_amount` с тремя полями).
+EXPECTED_FILES = {"unit": 75, "integration": 26, "ui": 73}
 
 #: Файлы, которым положено остаться в корне tests/.
 ROOT_KEEP = {"conftest.py", "test_tests_layout.py"}
@@ -238,9 +242,9 @@ def test_layer_file_count_matches_map(layer):
 
 
 def test_total_file_count():
-    """Всего тестовых файлов — 173 (без test_tests_layout.py)."""
+    """Всего тестовых файлов — 174 (без test_tests_layout.py)."""
     found = [p for p in all_test_files() if p.name != "test_tests_layout.py"]
-    assert len(found) == 173, f"тестовых файлов {len(found)}, ожидается 173"
+    assert len(found) == 174, f"тестовых файлов {len(found)}, ожидается 174"
 
 
 def test_no_test_module_name_collision():

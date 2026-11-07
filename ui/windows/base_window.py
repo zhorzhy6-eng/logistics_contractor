@@ -51,6 +51,7 @@ from core.mirror import (
     collect_source, is_empty, source_has_data, text,
 )
 from core.prompts import get_prompt
+from core.vat import normalize_entity_type, normalize_vat_rate
 from ui import theme
 from ui.controls.contract_type_selector import ContractTypeSelector
 from ui.diagnostics_menu import DiagnosticsMenuMixin
@@ -762,15 +763,25 @@ class BaseContractWindow(DiagnosticsMenuMixin, QMainWindow):
         """
         self._apply_mirror_plan(plan, overwrite_existing)
 
-    def apply_price_amount(self, amount: Any) -> bool:
+    def apply_price_amount(self, amount: Any, entity_type: Any = "",
+                           vat_rate: Any = "") -> bool:
         """
-        Принудительно ставит сумму в вкладку стоимости цели.
+        Принудительно ставит сумму, форму и НДС в вкладку стоимости цели.
 
-        Сумма идёт через общий `fill_data` вкладки — тот же путь, что у
-        распознавания и ручного ввода, поэтому «Сумма» и НДС пересчитаются
-        по правилам типа. Ключ `price_with_vat` — ИТОГ с НДС: именно его
-        вводит оператор в целевых окнах.
+        Всё идёт через общий `fill_data` вкладки — тот же путь, что у
+        распознавания и ручного ввода, поэтому база без НДС и налог
+        пересчитаются по правилам типа. Ключ `price_with_vat` — ИТОГ с НДС:
+        именно его вводит оператор в целевых окнах.
 
+        Форма (`entity_type`) и ставка (`vat_rate`) необязательны: пустое
+        значение ключа не кладёт, и вкладка остаётся со своими значениями
+        (так работал прежний вызов с одной суммой). Значения нормализуются
+        правилами ядра (`core/vat.py`): неизвестная форма или ставка в
+        вкладку не попадают — иначе в бланк ушёл бы мусор.
+
+        :param amount: итог с НДС — число или строка с разделителями.
+        :param entity_type: «ООО» / «ИП» (пусто — не менять).
+        :param vat_rate: «Без НДС» / «0%» / «10%» / «22%» (пусто — не менять).
         :return: True, если сумма подставлена.
         """
         try:
@@ -801,18 +812,40 @@ class BaseContractWindow(DiagnosticsMenuMixin, QMainWindow):
             )
             return False
 
+        payload: Dict[str, Any] = {"price_with_vat": value}
+
+        form = normalize_entity_type(entity_type)
+        if form:
+            payload["entity_type"] = form
+        elif text(entity_type):
+            logger.warning(
+                "Связанные договоры: форма %r не распознана (тип=%s)",
+                type(entity_type).__name__, self.CONTRACT_TYPE,
+            )
+
+        rate = normalize_vat_rate(vat_rate)
+        if rate:
+            payload["vat_rate"] = rate
+        elif text(vat_rate):
+            logger.warning(
+                "Связанные договоры: ставка НДС не распознана (тип=%s)",
+                self.CONTRACT_TYPE,
+            )
+
         try:
-            filler({"price_with_vat": value})
-        except Exception as e:  # noqa: BLE001 — сумма не должна ронять создание
+            filler(payload)
+        except Exception as e:  # noqa: BLE001 — цена не должна ронять создание
             logger.error(
-                "Связанные договоры: вкладка стоимости не приняла сумму (%s)",
+                "Связанные договоры: вкладка стоимости не приняла данные (%s)",
                 type(e).__name__,
             )
             return False
 
         logger.info(
-            "Связанные договоры: сумма %.2f подставлена (тип=%s)",
-            value, self.CONTRACT_TYPE,
+            "Связанные договоры: сумма %.2f, форма=%s, НДС=%s подставлены "
+            "(тип=%s)",
+            value, payload.get("entity_type", "—"),
+            payload.get("vat_rate", "—"), self.CONTRACT_TYPE,
         )
         return True
 

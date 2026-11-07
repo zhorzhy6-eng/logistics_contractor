@@ -14,6 +14,14 @@
 зеркала, сумму из диалога и генерирует свой документ само; оба файла ложатся
 в папку рейса.
 
+Задача 3 (07.11.2026): в диалоге появились форма (ООО / ИП) и ставка НДС
+связанного договора. Раньше окно цели оставалось с заводскими «ООО» и «22%»:
+оператор оформлял Экспедиторство как «ИП без НДС», а связанный документ
+печатался как ООО с налогом. Форма и НДС по умолчанию берутся из текущего
+окна Экспедиторства, а в цель уходят вместе с суммой — через
+`BaseContractWindow.apply_price_amount` и общий `fill_data` вкладки
+«Стоимость».
+
 Порядок работы кнопки (важен, менять нельзя):
   1. `_ask_linked_contract()` — только Экспедиторство или пара с типом;
   2. `_collect_data()` — данные со всех вкладок собираются ОДИН раз;
@@ -37,14 +45,18 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from PyQt5.QtWidgets import (
-    QButtonGroup, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
-    QLabel, QMessageBox, QRadioButton, QVBoxLayout,
+    QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+    QFormLayout, QLabel, QMessageBox, QRadioButton, QVBoxLayout,
 )
 
 from core import audit
 from core.contracts.perevozka.validator import PerevozkaValidator
 from core.contracts.picker_order import picker_title
 from core.mirror import mirror_from_expedition, supported_targets
+from core.vat import (
+    DEFAULT_ENTITY_TYPE, DEFAULT_VAT_RATE, ENTITY_TYPES, VAT_FREE, VAT_RATES,
+    normalize_entity_type, normalize_vat_rate,
+)
 from ui.windows.manager import current_window_manager
 
 # Имя логгера задано ЯВНО (а не __name__): после переезда в пакет
@@ -55,6 +67,33 @@ logger = logging.getLogger("ui.main_window")
 #: Подпись режима «без связанного договора» — одна на диалог и тесты.
 ONLY_EXPEDITION_LABEL = "Только Экспедиторство"
 
+#: Формы стороны связанного договора — те же пункты, что у вкладки «Договор»
+#: Экспедиторства (`core/vat.py::ENTITY_TYPES`).
+ENTITY_CHOICES: Tuple[str, ...] = tuple(ENTITY_TYPES)
+
+#: Ставки НДС, которые диалог предлагает для связанного договора. Источник —
+#: общий список ядра (`core/vat.py::VAT_RATES`), но в диалог идут четыре
+#: пункта из задания: «Без НДС», «0%», «10%», «22%». Ставки УСН 5% и 7%
+#: оператор выбирает в самом Экспедиторстве; если такая ставка пришла
+#: значением по умолчанию, она добавляется в список (см. `_vat_choices`),
+#: чтобы подсказка не подменяла выбор оператора.
+LINKED_VAT_CHOICES: Tuple[str, ...] = tuple(
+    rate for rate in VAT_RATES if rate in (VAT_FREE, "0%", "10%", "22%")
+)
+
+
+def _vat_choices(default: str) -> Tuple[str, ...]:
+    """
+    Пункты списка НДС диалога с гарантированным значением по умолчанию.
+
+    Обычно это ровно `LINKED_VAT_CHOICES`. Если в Экспедиторстве выбрана
+    ставка вне четвёрки (5% или 7% — УСН), она добавляется последней:
+    подставлять вместо неё 22% значило бы молча изменить договор.
+    """
+    if default and default not in LINKED_VAT_CHOICES:
+        return LINKED_VAT_CHOICES + (default,)
+    return LINKED_VAT_CHOICES
+
 
 @dataclass(frozen=True)
 class LinkedContractChoice:
@@ -63,10 +102,16 @@ class LinkedContractChoice:
 
     :param target_type: ключ типа-цели ("" — только Экспедиторство).
     :param amount: сумма для целевого документа, ИТОГ с НДС (0 — без цели).
+    :param entity_type: форма связанного договора — «ООО» или «ИП»
+        ("" — не выбрана, цель остаётся со своими значениями).
+    :param vat_rate: ставка НДС связанного договора — пункт списка ядра
+        («Без НДС», «22%», «10%», «0%»); "" — не выбрана.
     """
 
     target_type: str = ""
     amount: float = 0.0
+    entity_type: str = ""
+    vat_rate: str = ""
 
     def is_linked(self) -> bool:
         """Нужно ли создавать второй (связанный) договор."""
@@ -96,13 +141,27 @@ class LinkedContractDialog(QDialog):
     Выбор при «Создать договор»: только Экспедиторство или пара с типом.
 
     Радиокнопки строятся по списку типов-целей (те, у которых есть кнопка
-    «Отзеркалить»); поле суммы появляется только при выборе пары и говорит,
-    для какого типа сумма. «Создать» недоступно, пока сумма пары не
-    положительна: нулевая сумма в бланке бессмысленна.
+    «Отзеркалить»); поля формы, НДС и суммы появляются только при выборе
+    пары и говорят, к какому типу относятся. «Создать» недоступно, пока
+    сумма пары не положительна: нулевая сумма в бланке бессмысленна.
+
+    Форма и ставка НДС относятся к СВЯЗАННОМУ договору и по умолчанию
+    приходят из текущего окна Экспедиторства (см.
+    `ContractMixin._linked_price_defaults`): если Экспедиторство оформляется
+    как «ИП без НДС», связанный документ должен быть таким же, а не
+    заводским «ООО, 22%».
     """
 
     def __init__(self, target_titles: Sequence[Tuple[str, str]],
-                 parent=None):
+                 parent=None, entity_type: str = "", vat_rate: str = ""):
+        """
+        :param target_titles: [(ключ типа, подпись)] — цели зеркала.
+        :param parent: родительское окно.
+        :param entity_type: форма связанного договора по умолчанию
+            (пусто или неизвестно — «ООО», как у вкладки «Договор»).
+        :param vat_rate: ставка НДС по умолчанию (пусто или неизвестно —
+            «22%»).
+        """
         super().__init__(parent)
         self.setWindowTitle("Создание договора")
         self.setModal(True)
@@ -110,6 +169,13 @@ class LinkedContractDialog(QDialog):
         #: Ключ типа → радиокнопка ("" — только Экспедиторство).
         self.radios: Dict[str, QRadioButton] = {}
         self._titles: Dict[str, str] = dict(target_titles)
+
+        # Значения по умолчанию — из Экспедиторства, но только те, что
+        # понимает ядро: мусор в данных не должен попадать в бланк цели.
+        self._default_entity = (
+            normalize_entity_type(entity_type) or DEFAULT_ENTITY_TYPE
+        )
+        self._default_vat = normalize_vat_rate(vat_rate) or DEFAULT_VAT_RATE
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -135,6 +201,31 @@ class LinkedContractDialog(QDialog):
             layout.addWidget(radio)
 
         form = QFormLayout()
+
+        # ── Форма и ставка НДС связанного договора ──
+        # Подписи с двоеточием — как в задании; прячутся вместе с полями,
+        # когда выбран режим «только Экспедиторство».
+        self.entity_label = QLabel("Форма:")
+        self.entity_type = QComboBox()
+        self.entity_type.addItems(list(ENTITY_CHOICES))
+        self.entity_type.setCurrentText(self._default_entity)
+        self.entity_type.setToolTip(
+            "Форма стороны в связанном договоре: от неё зависит бланк "
+            "(например, у Логистикса отдельные бланки ООО и ИП)"
+        )
+        form.addRow(self.entity_label, self.entity_type)
+
+        self.vat_label = QLabel("НДС:")
+        self.vat_rate = QComboBox()
+        self.vat_rate.addItems(list(_vat_choices(self._default_vat)))
+        self.vat_rate.setCurrentText(self._default_vat)
+        self.vat_rate.setToolTip(
+            "Ставка НДС связанного договора. «Без НДС» — не плательщик "
+            "налога (УСН до 20 млн ₽), «0%» — ставка есть, налог нулевой"
+        )
+        form.addRow(self.vat_label, self.vat_rate)
+
+        # ── Сумма: ИТОГ, база без НДС и налог считаются из неё ──
         self.amount_label = QLabel("")
         self.amount = QDoubleSpinBox()
         self.amount.setDecimals(2)
@@ -176,11 +267,14 @@ class LinkedContractDialog(QDialog):
         if not target:
             return LinkedContractChoice()
         return LinkedContractChoice(
-            target_type=target, amount=float(self.amount.value())
+            target_type=target,
+            amount=float(self.amount.value()),
+            entity_type=self.entity_type.currentText(),
+            vat_rate=self.vat_rate.currentText(),
         )
 
     def _on_mode_changed(self, checked: bool = False) -> None:
-        """Переключение режима: показать/спрятать поле суммы."""
+        """Переключение режима: показать/спрятать поля пары."""
         self._refresh_amount_field()
 
     def _on_amount_changed(self, value: float = 0.0) -> None:
@@ -188,15 +282,19 @@ class LinkedContractDialog(QDialog):
         self._refresh_ok()
 
     def _refresh_amount_field(self) -> None:
-        """Поле суммы видно только для пары; подпись называет тип."""
+        """Поля пары видны только для неё; подпись суммы называет тип."""
         target = self.selected_target()
         linked = bool(target)
-        self.amount_label.setVisible(linked)
-        self.amount.setVisible(linked)
+        for widget in (
+            self.entity_label, self.entity_type,
+            self.vat_label, self.vat_rate,
+            self.amount_label, self.amount,
+        ):
+            widget.setVisible(linked)
         if linked:
             title = self._titles.get(target, target)
             self.amount_label.setText(
-                f"Сумма для «{title}» (итог с НДС), ₽:"
+                f"Сумма (Итог) для «{title}», ₽:"
             )
         self._refresh_ok()
 
@@ -346,6 +444,43 @@ class ContractMixin:
 
         return [(key, picker_title(key)) for key in available if key in targets]
 
+    def _linked_price_defaults(self) -> Tuple[str, str]:
+        """
+        Форма и ставка НДС связанного договора по умолчанию.
+
+        Берутся из текущего окна Экспедиторства (`contract_tab`): оператор
+        уже выбрал там форму и НДС, и связанный документ должен наследовать
+        их. Раньше цель оставалась с заводскими «ООО» и «22%» — договор
+        Экспедиторства «ИП без НДС» давал связанный документ ООО с налогом.
+
+        Вкладка может не отдать значения (заглушка в тесте, окно без
+        формы) — тогда возвращаются заводские значения ядра. Исключение
+        вкладки диалог не роняет: подсказка не важнее создания договора.
+
+        :return: (форма, ставка) — всегда значения из списков ядра.
+        """
+        tab = getattr(self, "contract_tab", None)
+        entity_value, rate_value = "", ""
+        try:
+            getter = getattr(tab, "current_entity_type", None)
+            if callable(getter):
+                entity_value = getter()
+            getter = getattr(tab, "current_vat_rate", None)
+            if callable(getter):
+                rate_value = getter()
+        except Exception as e:  # noqa: BLE001 — подсказка не должна ронять диалог
+            logger.warning(
+                "Связанные договоры: форма и НДС из окна не прочитаны (%s)",
+                type(e).__name__,
+            )
+
+        entity = normalize_entity_type(entity_value) or DEFAULT_ENTITY_TYPE
+        rate = normalize_vat_rate(rate_value) or DEFAULT_VAT_RATE
+        logger.info(
+            "Связанные договоры: форма по умолчанию=%s, НДС=%s", entity, rate
+        )
+        return entity, rate
+
     def _ask_linked_contract(self) -> Optional[LinkedContractChoice]:
         """
         Спрашивает режим создания: только Экспедиторство или пара.
@@ -358,7 +493,12 @@ class ContractMixin:
         if not titles:
             return LinkedContractChoice()
 
-        dialog = LinkedContractDialog(titles, self)
+        # Форма и НДС по умолчанию — из Экспедиторства: связанный документ
+        # должен повторять то, что оператор уже выбрал в текущем окне.
+        entity_type, vat_rate = self._linked_price_defaults()
+        dialog = LinkedContractDialog(
+            titles, self, entity_type=entity_type, vat_rate=vat_rate
+        )
         if dialog.exec_() != QDialog.Accepted:
             self._log_ui_action("диалог связанных договоров закрыт без создания")
             return None
@@ -367,10 +507,12 @@ class ContractMixin:
         self._log_ui_action(
             "диалог связанных договоров: режим",
             linked=choice.is_linked(),
+            entity=choice.entity_type or "—",
+            vat=choice.vat_rate or "—",
         )
         logger.info(
-            "Связанные договоры: режим выбран (связанный=%s)",
-            choice.is_linked(),
+            "Связанные договоры: режим выбран (связанный=%s, форма=%s, НДС=%s)",
+            choice.is_linked(), choice.entity_type or "—", choice.vat_rate or "—",
         )
         return choice
 
@@ -402,9 +544,9 @@ class ContractMixin:
     def _create_linked_contract(self, choice: LinkedContractChoice,
                                 source_window: Any = None) -> LinkedContractResult:
         """
-        Зеркало → сумма → документ цели. Диалог успеха НЕ показывает.
+        Зеркало → цена и НДС → документ цели. Диалог успеха НЕ показывает.
 
-        :param choice: выбранный тип и сумма (итог с НДС).
+        :param choice: выбранный тип, сумма (итог с НДС), форма и ставка НДС.
         :param source_window: источник данных; по умолчанию — это окно
             (Экспедиторство). Аргумент нужен тестам с подставным источником.
         :return: путь связанного документа или причина, почему его нет.
@@ -450,7 +592,14 @@ class ContractMixin:
         if plan is not None:
             window.apply_mirror_plan(plan, overwrite_existing=True)
 
-        if not window.apply_price_amount(choice.amount):
+        # Сумма, форма и ставка НДС уходят в цель ОДНИМ вызовом: вкладка
+        # стоимости пересчитает базу по своей ставке (ИП у Логистикса
+        # печатает одну сумму без НДС, Формика — сумму с НДС).
+        if not window.apply_price_amount(
+            choice.amount,
+            entity_type=choice.entity_type,
+            vat_rate=choice.vat_rate,
+        ):
             return LinkedContractResult(
                 reason="не удалось подставить сумму в окно цели"
             )

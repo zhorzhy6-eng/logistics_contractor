@@ -88,6 +88,9 @@ class StubTargetWindow:
         self.output_dir = Path(output_dir)
         self.calls = []
         self.amount = 0.0
+        #: Форма и НДС, переданные в окно вместе с суммой (задача 3).
+        self.entity_type = ""
+        self.vat_rate = ""
         #: None — обычная генерация; "" — оператор отменил; путь — готовый.
         self.generate_result = None
         self.generate_confirmed = None
@@ -99,9 +102,11 @@ class StubTargetWindow:
     def apply_mirror_plan(self, plan, overwrite_existing=True):
         self.calls.append(("mirror", bool(overwrite_existing)))
 
-    def apply_price_amount(self, amount):
-        self.calls.append(("amount", float(amount)))
+    def apply_price_amount(self, amount, entity_type="", vat_rate=""):
+        self.calls.append(("amount", float(amount), entity_type, vat_rate))
         self.amount = float(amount)
+        self.entity_type = entity_type
+        self.vat_rate = vat_rate
         return True
 
     def generate_document(self, confirm=True, output_dir=None):
@@ -473,6 +478,26 @@ def test_linked_target_titles_are_manager_and_mirror_intersection(
 
 def test_linked_target_titles_empty_without_manager(window):
     assert window._linked_target_titles() == []
+
+
+# ─────────────────────────────────────────────────────────────
+# Форма и НДС по умолчанию — из Экспедиторства (задача 3)
+# ─────────────────────────────────────────────────────────────
+
+def test_linked_defaults_come_from_real_expedition_tab(window):
+    """
+    Живая вкладка «Договор» Экспедиторства отдаёт форму и НДС.
+
+    Это те самые значения, которые диалог создания пары показывает по
+    умолчанию: «ИП без НДС» в Экспедиторстве не должен превращаться в
+    «ООО, 22%» в связанном договоре.
+    """
+    assert window._linked_price_defaults() == ("ООО", "22%")
+
+    window.contract_tab.entity_type.setCurrentText("ИП")
+    window.contract_tab.vat_rate.setCurrentText("Без НДС")
+
+    assert window._linked_price_defaults() == ("ИП", "Без НДС")
 
 
 # ─────────────────────────────────────────────────────────────

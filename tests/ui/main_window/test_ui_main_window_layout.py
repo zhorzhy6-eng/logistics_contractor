@@ -120,6 +120,9 @@ METHOD_HOMES = {
         "_linked_target_titles", "_ask_linked_contract",
         "_ask_overwrite_target", "_create_linked_contract",
         "_show_pair_created",
+        # Задача 3 (07.11.2026): форма и НДС связанного договора из
+        # текущего окна Экспедиторства.
+        "_linked_price_defaults",
     ),
     "ui.main_window.save": (
         "_sync_organization_with_db", "_safe_organization_record",
